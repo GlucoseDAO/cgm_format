@@ -1,0 +1,180 @@
+{
+  "fields": [
+    {
+      "name": "Device",
+      "type": "string",
+      "description": "Device model name (e.g., 'FreeStyle Libre 3')",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Serial Number",
+      "type": "string",
+      "description": "Device serial number/UUID",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Record Type",
+      "type": "integer",
+      "description": "Type of record (0=Historic, 1=Scan, 2=Strip, 4=Insulin, 5=Food, 6=Other)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "name": "Non-numeric Rapid-Acting Insulin",
+      "type": "string",
+      "description": "Non-numeric rapid-acting insulin notes",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Non-numeric Food",
+      "type": "string",
+      "description": "Non-numeric food notes",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Non-numeric Long-Acting Insulin",
+      "type": "string",
+      "description": "Non-numeric long-acting insulin notes",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Notes",
+      "type": "string",
+      "description": "User notes and comments",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Device Timestamp",
+      "type": "string",
+      "description": "Timestamp of the event in MM-DD-YYYY HH:MM format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Historic Glucose mg/dL",
+      "type": "number",
+      "description": "Automatic CGM reading (recorded every 15 minutes, last 8 hours only)",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Scan Glucose mg/dL",
+      "type": "number",
+      "description": "Manual scan glucose reading",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Strip Glucose mg/dL",
+      "type": "number",
+      "description": "Finger prick calibration glucose reading",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Rapid-Acting Insulin (units)",
+      "type": "number",
+      "description": "Rapid-acting (bolus) insulin dose",
+      "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Long-Acting Insulin Value (units)",
+      "type": "number",
+      "description": "Long-acting (basal) insulin dose",
+      "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Meal Insulin (units)",
+      "type": "number",
+      "description": "Meal-time insulin dose",
+      "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Correction Insulin (units)",
+      "type": "number",
+      "description": "Correction insulin dose",
+      "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "User Change Insulin (units)",
+      "type": "number",
+      "description": "User-defined insulin change",
+      "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Carbohydrates (grams)",
+      "type": "number",
+      "description": "Carbohydrate intake",
+      "unit": "grams",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Carbohydrates (servings)",
+      "type": "number",
+      "description": "Carbohydrate intake in servings",
+      "unit": "servings",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Ketone mmol/L",
+      "type": "number",
+      "description": "Ketone level measurement",
+      "unit": "mmol/L",
+      "constraints": {
+        "minimum": 0
+      }
+    }
+  ],
+  "primaryKey": [
+    "sequence_id",
+    "datetime"
+  ]
+}

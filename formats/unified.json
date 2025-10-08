@@ -1,0 +1,114 @@
+{
+  "fields": [
+    {
+      "name": "sequence_id",
+      "type": "integer",
+      "description": "Unique identifier for the data sequence",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "description": "Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          "EGV_READ",
+          "CALIBRAT",
+          "CARBS_IN",
+          "INS_FAST",
+          "INS_SLOW",
+          "XRCS_LTE",
+          "XRCS_MED",
+          "XRCS_HVY",
+          "ALRT_HIG",
+          "ALRT_LOG",
+          "ALRT_ULG",
+          "ALRT_ULS",
+          "ALRT_RIS",
+          "ALRT_FAL",
+          "ALRT_SIG",
+          "HLTH_ILL",
+          "HLTH_STR",
+          "HLTH_LSY",
+          "HLTH_CYC",
+          "HLTH_ALC",
+          "IMPUTATN",
+          "OTHEREVT"
+        ]
+      }
+    },
+    {
+      "name": "quality",
+      "type": "integer",
+      "description": "Data quality indicator (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "datetime",
+      "type": "datetime",
+      "description": "Timestamp of the event in ISO 8601 format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "glucose",
+      "type": "number",
+      "description": "Blood glucose reading from CGM sensor",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "carbs",
+      "type": "number",
+      "description": "Carbohydrate intake",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "insulin_slow",
+      "type": "number",
+      "description": "Long-acting (basal) insulin dose",
+      "unit": "u",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "insulin_fast",
+      "type": "number",
+      "description": "Short-acting (bolus) insulin dose",
+      "unit": "u",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "exercise",
+      "type": "integer",
+      "description": "Duration of exercise activity",
+      "unit": "seconds",
+      "constraints": {
+        "minimum": 0
+      }
+    }
+  ],
+  "primaryKey": [
+    "sequence_id",
+    "datetime"
+  ]
+}

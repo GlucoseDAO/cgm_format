@@ -1,0 +1,134 @@
+{
+  "fields": [
+    {
+      "name": "Index",
+      "type": "integer",
+      "description": "Sequential index of the record in the export",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Event Type",
+      "type": "string",
+      "description": "Type of recorded event",
+      "constraints": {
+        "required": true,
+        "enum": [
+          "Alert",
+          "Calibration",
+          "Carbs",
+          "EGV",
+          "Exercise",
+          "Health",
+          "Insulin"
+        ]
+      }
+    },
+    {
+      "name": "Event Subtype",
+      "type": "string",
+      "description": "Subtype of recorded event (may be empty)",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Patient Info",
+      "type": "string",
+      "description": "Patient information field",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Device Info",
+      "type": "string",
+      "description": "Device information (e.g., 'android G6', 'iOS G7')",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Source Device ID",
+      "type": "string",
+      "description": "Source device identifier",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Transmitter Time (Long Integer)",
+      "type": "integer",
+      "description": "Transmitter time as long integer (epoch-like timestamp)",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Transmitter ID",
+      "type": "string",
+      "description": "Transmitter identifier (e.g., '8AM1EY')",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Timestamp (YYYY-MM-DDThh:mm:ss)",
+      "type": "string",
+      "description": "Timestamp of the event in YYYY-MM-DD HH:MM:SS format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Glucose Value (mg/dL)",
+      "type": "number",
+      "description": "Blood glucose reading from CGM sensor",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Insulin Value (u)",
+      "type": "number",
+      "description": "Insulin dose (type determined by Event Subtype)",
+      "unit": "u",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Carb Value (grams)",
+      "type": "number",
+      "description": "Carbohydrate intake",
+      "unit": "grams",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Duration (hh:mm:ss)",
+      "type": "string",
+      "description": "Duration of exercise activity in HH:MM:SS format",
+      "unit": "hh:mm:ss",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Glucose Rate of Change (mg/dL/min)",
+      "type": "number",
+      "description": "Rate of change of glucose levels",
+      "unit": "mg/dL/min",
+      "constraints": {
+        "required": false
+      }
+    }
+  ],
+  "primaryKey": [
+    "sequence_id",
+    "datetime"
+  ]
+}

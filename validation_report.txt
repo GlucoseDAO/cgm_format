@@ -1,0 +1,412 @@
+================================================================================
+CGM FORMAT DETECTION AND VALIDATION REPORT
+================================================================================
+Generated: 2025-10-08 04:01:44
+Data directory: /data/sources/cgm_format/data
+Total files scanned: 74
+Frictionless validation: Enabled
+
+================================================================================
+FORMAT DETECTION SUMMARY
+================================================================================
+Successfully detected: 74/74
+Failed detection: 0/74
+
+Format breakdown:
+  unified         :  37 files
+  dexcom          :  36 files
+  libre           :   1 files
+
+================================================================================
+FRICTIONLESS SCHEMA VALIDATION RESULTS
+================================================================================
+Valid files: 74/74
+Invalid files: 0/74
+
+NOTE: Known vendor format issues are automatically suppressed:
+  - Dexcom: Missing Transmitter ID/Time cells in non-EGV rows
+            (Dexcom exports have variable-length rows)
+  - Dexcom: 'Low' and 'High' text in Glucose Value field
+            (Out-of-range markers: <50 and >400 mg/dL)
+  - Dexcom: UTF-8 BOM marker in CSV header
+            (Some exports include byte order mark)
+
+
+unified Format (37 files):
+--------------------------------------------------------------------------------
+
+000-14 oct-28 oct 2019_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3993 rows)
+
+001-28 oct-10 nov 2019_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3932 rows)
+
+002-11 nov-24 nov 2019_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3866 rows)
+
+003-25 nov-8 dec 2019_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3826 rows)
+
+004-9 dec-22 dec 2019_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3962 rows)
+
+005-23 dec- 5 ian 2019-2020_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3908 rows)
+
+006-6 ian-19 ian 2020_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3937 rows)
+
+007-9 ian-22 ian 2020_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3887 rows)
+
+008-23 ian-21 apr 2020_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25679 rows)
+
+009-22 apr-20 iulie 2020_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (24147 rows)
+
+010-20 iulie 2020-23 sept 2020 Clarity_Export__Patient_2022-06-01_202107_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (18853 rows)
+
+011-22 sept 2020- 20 dec 2020 Clarity_Export__Patient_2022-06-01_201733_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (24514 rows)
+
+012-19 dec 2020-18 mar 2021 Clarity_Export__Patient_2022-06-01_200952_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (24793 rows)
+
+013-17 mar 2021-14 iunie 2021 Clarity_Export__Patient_2022-06-01_200650_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (5679 rows)
+
+014-13 iunie 2021- 10 sept 2021 Clarity_Export__Patient_2022-06-01_200304_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (13607 rows)
+
+015-09 sept 2021- 07 dec 2021 Clarity_Export__Patient_2022-06-01_195709_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25919 rows)
+
+016-06 dec 2021-05 martie 2022 Clarity_Export__Patient_2022-06-01_195041_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (22897 rows)
+
+017-04 martie 2022-01 iunie 2022 Clarity_Export__Patient_2022-06-01_194434_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25899 rows)
+
+018-2 iunie 2022-30 august 2022 Clarity_Export__Patient_2024-08-03_192732_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25929 rows)
+
+019-31 august 2022-28 noimbrie 2022 Clarity_Export__Patient_2024-08-03_193438_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25543 rows)
+
+020-29 noiembrie 2022-26 februarie 2023 Clarity_Export__Patient_2024-08-03_194054_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25803 rows)
+
+021-27 februarie 2023-26 mai Clarity_Export__Patient_2024-08-03_194205_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25373 rows)
+
+022-27 mai 2023-14 iunie 2023 Clarity_Export__Patient_2024-08-03_194302_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (5191 rows)
+
+023- 14 iunie 2023- 11 septembrie 2023 Clarity_Export__Patient_2023-09-11_190848_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25379 rows)
+
+024-14 septembrie 2023- 12 decembrie 2023_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25944 rows)
+
+025-15 decembrie 2023-13 marite 2024 Clarity_Export__Patient_2024-03-13_062312_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25772 rows)
+
+026-16 martie 2024-13 iunie 2024 Clarity_Export__Patient_2024-06-13_045715_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25717 rows)
+
+027- 12 iunie 2024-1 iulie 2024-Clarity_Export__Patient_2025-09-17_134012_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (5761 rows)
+
+028- 30 iunie 2024-21 septembrie 2024-Clarity_Export__Patient_2025-09-17_133836_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (24170 rows)
+
+029- 20 septembrie 2024-18 decembrie 2024-Clarity_Export__Patient_2025-09-17_133540_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25890 rows)
+
+030-17 decembrie 2024- 16 martie 2025-Clarity_Export__Patient_2025-03-16_160243_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25844 rows)
+
+031-1 martie 2025- 31 martie 2025-Clarity_Export__Patient_2025-09-17_133311_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (8886 rows)
+
+032-19 martie- 16 iunie 2025-Clarity_Export__Patient_2025-06-16_045429_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25698 rows)
+
+033-2 mai- 30 iulie 2025-Clarity_Export__Patient_2025-09-17_135002_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25831 rows)
+
+034-15 iulie- 12 septembrie 2025-Clarity_Export__Patient_2025-09-12_084731_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (25615 rows)
+
+Clarity_Export__Patient_2025-05-14_154517_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (3969 rows)
+
+FreeStyle_Libre_3__11-12-2024_unified.csv
+  Status: ✓ VALID
+  ✓ Valid (4305 rows)
+
+dexcom Format (36 files):
+--------------------------------------------------------------------------------
+
+000-14 oct-28 oct 2019.csv
+  Status: ✓ VALID
+  ✓ Valid (4002 rows, 95 known issues suppressed)
+
+001-28 oct-10 nov 2019.csv
+  Status: ✓ VALID
+  ✓ Valid (3943 rows, 119 known issues suppressed)
+
+002-11 nov-24 nov 2019.csv
+  Status: ✓ VALID
+  ✓ Valid (3875 rows, 126 known issues suppressed)
+
+003-25 nov-8 dec 2019.csv
+  Status: ✓ VALID
+  ✓ Valid (3846 rows, 120 known issues suppressed)
+
+004-9 dec-22 dec 2019.csv
+  Status: ✓ VALID
+  ✓ Valid (3975 rows, 143 known issues suppressed)
+
+005-23 dec- 5 ian 2019-2020.csv
+  Status: ✓ VALID
+  ✓ Valid (3929 rows, 169 known issues suppressed)
+
+006-6 ian-19 ian 2020.csv
+  Status: ✓ VALID
+  ✓ Valid (3940 rows, 128 known issues suppressed)
+
+007-9 ian-22 ian 2020.csv
+  Status: ✓ VALID
+  ✓ Valid (3892 rows, 122 known issues suppressed)
+
+008-23 ian-21 apr 2020.csv
+  Status: ✓ VALID
+  ✓ Valid (25718 rows, 815 known issues suppressed)
+
+009-22 apr-20 iulie 2020.csv
+  Status: ✓ VALID
+  ✓ Valid (24195 rows, 833 known issues suppressed)
+
+010-20 iulie 2020-23 sept 2020 Clarity_Export__Patient_2022-06-01_202107.csv
+  Status: ✓ VALID
+  ✓ Valid (18873 rows, 528 known issues suppressed)
+
+011-22 sept 2020- 20 dec 2020 Clarity_Export__Patient_2022-06-01_201733.csv
+  Status: ✓ VALID
+  ✓ Valid (24570 rows, 707 known issues suppressed)
+
+012-19 dec 2020-18 mar 2021 Clarity_Export__Patient_2022-06-01_200952.csv
+  Status: ✓ VALID
+  ✓ Valid (24832 rows, 657 known issues suppressed)
+
+013-17 mar 2021-14 iunie 2021 Clarity_Export__Patient_2022-06-01_200650.csv
+  Status: ✓ VALID
+  ✓ Valid (5686 rows, 201 known issues suppressed)
+
+014-13 iunie 2021- 10 sept 2021 Clarity_Export__Patient_2022-06-01_200304.csv
+  Status: ✓ VALID
+  ✓ Valid (13619 rows, 392 known issues suppressed)
+
+015-09 sept 2021- 07 dec 2021 Clarity_Export__Patient_2022-06-01_195709.csv
+  Status: ✓ VALID
+  ✓ Valid (25945 rows, 650 known issues suppressed)
+
+016-06 dec 2021-05 martie 2022 Clarity_Export__Patient_2022-06-01_195041.csv
+  Status: ✓ VALID
+  ✓ Valid (22930 rows, 774 known issues suppressed)
+
+017-04 martie 2022-01 iunie 2022 Clarity_Export__Patient_2022-06-01_194434.csv
+  Status: ✓ VALID
+  ✓ Valid (25937 rows, 675 known issues suppressed)
+
+018-2 iunie 2022-30 august 2022 Clarity_Export__Patient_2024-08-03_192732.csv
+  Status: ✓ VALID
+  ✓ Valid (25992 rows, 722 known issues suppressed)
+
+019-31 august 2022-28 noimbrie 2022 Clarity_Export__Patient_2024-08-03_193438.csv
+  Status: ✓ VALID
+  ✓ Valid (25570 rows, 503 known issues suppressed)
+
+020-29 noiembrie 2022-26 februarie 2023 Clarity_Export__Patient_2024-08-03_194054.csv
+  Status: ✓ VALID
+  ✓ Valid (25843 rows, 437 known issues suppressed)
+
+021-27 februarie 2023-26 mai Clarity_Export__Patient_2024-08-03_194205.csv
+  Status: ✓ VALID
+  ✓ Valid (25420 rows, 442 known issues suppressed)
+
+022-27 mai 2023-14 iunie 2023 Clarity_Export__Patient_2024-08-03_194302.csv
+  Status: ✓ VALID
+  ✓ Valid (5197 rows, 79 known issues suppressed)
+
+023- 14 iunie 2023- 11 septembrie 2023 Clarity_Export__Patient_2023-09-11_190848.csv
+  Status: ✓ VALID
+  ✓ Valid (25427 rows, 547 known issues suppressed)
+
+024-14 septembrie 2023- 12 decembrie 2023.csv
+  Status: ✓ VALID
+  ✓ Valid (25984 rows, 550 known issues suppressed)
+
+025-15 decembrie 2023-13 marite 2024 Clarity_Export__Patient_2024-03-13_062312.csv
+  Status: ✓ VALID
+  ✓ Valid (25801 rows, 511 known issues suppressed)
+
+026-16 martie 2024-13 iunie 2024 Clarity_Export__Patient_2024-06-13_045715.csv
+  Status: ✓ VALID
+  ✓ Valid (25740 rows, 545 known issues suppressed)
+
+027- 12 iunie 2024-1 iulie 2024-Clarity_Export__Patient_2025-09-17_134012.csv
+  Status: ✓ VALID
+  ✓ Valid (5775 rows, 103 known issues suppressed)
+
+028- 30 iunie 2024-21 septembrie 2024-Clarity_Export__Patient_2025-09-17_133836.csv
+  Status: ✓ VALID
+  ✓ Valid (24205 rows, 499 known issues suppressed)
+
+029- 20 septembrie 2024-18 decembrie 2024-Clarity_Export__Patient_2025-09-17_133540.csv
+  Status: ✓ VALID
+  ✓ Valid (25912 rows, 450 known issues suppressed)
+
+030-17 decembrie 2024- 16 martie 2025-Clarity_Export__Patient_2025-03-16_160243.csv
+  Status: ✓ VALID
+  ✓ Valid (25887 rows, 475 known issues suppressed)
+
+031-1 martie 2025- 31 martie 2025-Clarity_Export__Patient_2025-09-17_133311.csv
+  Status: ✓ VALID
+  ✓ Valid (8899 rows, 146 known issues suppressed)
+
+032-19 martie- 16 iunie 2025-Clarity_Export__Patient_2025-06-16_045429.csv
+  Status: ✓ VALID
+  ✓ Valid (25721 rows, 390 known issues suppressed)
+
+033-2 mai- 30 iulie 2025-Clarity_Export__Patient_2025-09-17_135002.csv
+  Status: ✓ VALID
+  ✓ Valid (25869 rows, 440 known issues suppressed)
+
+034-15 iulie- 12 septembrie 2025-Clarity_Export__Patient_2025-09-12_084731.csv
+  Status: ✓ VALID
+  ✓ Valid (25651 rows, 462 known issues suppressed)
+
+Clarity_Export__Patient_2025-05-14_154517.csv
+  Status: ✓ VALID
+  ✓ Valid (3969 rows, 6 known issues suppressed)
+
+libre Format (1 files):
+--------------------------------------------------------------------------------
+
+FreeStyle_Libre_3__11-12-2024.csv
+  Status: ✓ VALID
+  ✓ Valid (5557 rows)
+
+================================================================================
+SCHEMA DEFINITIONS
+================================================================================
+
+unified Schema:
+--------------------------------------------------------------------------------
+Service columns: 3
+Data columns: 6
+Total columns: 9
+
+Columns:
+  - sequence_id
+  - event_type
+  - quality
+  - datetime
+  - glucose [mg/dL]
+  - carbs [g]
+  - insulin_slow [u]
+  - insulin_fast [u]
+  - exercise [seconds]
+
+dexcom Schema:
+--------------------------------------------------------------------------------
+Service columns: 7
+Data columns: 7
+Total columns: 14
+
+Columns:
+  - Index
+  - Timestamp (YYYY-MM-DDThh:mm:ss)
+  - Event Type
+  - Event Subtype
+  - Patient Info
+  - Device Info
+  - Source Device ID
+  - Glucose Value (mg/dL) [mg/dL]
+  - Insulin Value (u) [u]
+  - Carb Value (grams) [grams]
+  - Duration (hh:mm:ss) [hh:mm:ss]
+  - Glucose Rate of Change (mg/dL/min) [mg/dL/min]
+  - Transmitter Time (Long Integer)
+  - Transmitter ID
+
+libre Schema:
+--------------------------------------------------------------------------------
+Service columns: 4
+Data columns: 15
+Total columns: 19
+
+Columns:
+  - Device
+  - Serial Number
+  - Device Timestamp
+  - Record Type
+  - Historic Glucose mg/dL [mg/dL]
+  - Scan Glucose mg/dL [mg/dL]
+  - Non-numeric Rapid-Acting Insulin
+  - Rapid-Acting Insulin (units) [units]
+  - Non-numeric Food
+  - Carbohydrates (grams) [grams]
+  - Carbohydrates (servings) [servings]
+  - Non-numeric Long-Acting Insulin
+  - Long-Acting Insulin Value (units) [units]
+  - Notes
+  - Strip Glucose mg/dL [mg/dL]
+  - Ketone mmol/L [mmol/L]
+  - Meal Insulin (units) [units]
+  - Correction Insulin (units) [units]
+  - User Change Insulin (units) [units]
+
+================================================================================
+END OF REPORT
+================================================================================
