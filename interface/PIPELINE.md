@@ -75,11 +75,26 @@ After Stage 3, all vendor-specific processing is complete. The following operati
 
 **Method:** `CGMProcessor.synchronize_timestamps(dataframe: UnifiedFormat) -> UnifiedFormat`
 
-Aligns timestamps to minute boundaries for consistent time-series analysis.
+Aligns timestamps to minute boundaries and creates fixed-frequency data with consistent intervals.
 
-**Input:** DataFrame in unified format
+This method should be called after `interpolate_gaps()` when sequences are already created and small gaps are filled.
 
-**Output:** DataFrame with synchronized timestamps
+**Operations:**
+
+1. Rounds timestamps to nearest minute (removes seconds, sets to 00)
+2. Creates fixed-frequency timestamps with `expected_interval_minutes` spacing
+3. Linearly interpolates glucose values between data points
+4. Shifts discrete events (carbs, insulin, exercise) to nearest timestamps
+
+**Input:** DataFrame with sequence IDs (preprocessed by `interpolate_gaps()`)
+
+**Output:** DataFrame with synchronized timestamps at fixed intervals
+
+**Errors:**
+
+- `ZeroValidInputError` - DataFrame is empty or has no data
+- `ValueError` - Data has gaps larger than `small_gap_max_minutes` (not preprocessed)
+- `ValueError` - Data missing `sequence_id` column (run `interpolate_gaps()` first)
 
 #### Gap Interpolation
 
@@ -90,6 +105,7 @@ Fills gaps in continuous glucose data with imputed values.
 - Adds rows with `event_type='IMPUTATN'` for missing data points
 - Sets appropriate quality flags on imputed values
 - Updates `ProcessingWarning.IMPUTATION` flag if gaps were filled
+- In case of larg gaps, more than
 
 **Input:** DataFrame with potential gaps
 
@@ -103,18 +119,29 @@ Prepares processed data for machine learning inference.
 
 #### Input Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `dataframe` | `UnifiedFormat` | - | Fully processed DataFrame in unified format |
-| `minimum_duration_minutes` | `int` | 60 | Minimum required sequence duration |
-| `maximum_wanted_duration` | `int` | 480 | Maximum desired sequence duration |
+| Parameter                  | Type            | Default | Description                                 |
+| -------------------------- | --------------- | ------- | ------------------------------------------- |
+| `dataframe`                | `UnifiedFormat` | -       | Fully processed DataFrame in unified format |
+| `minimum_duration_minutes` | `int`           | 60      | Minimum required sequence duration          |
+| `maximum_wanted_duration`  | `int`           | 480     | Maximum desired sequence duration           |
 
 #### Operations
 
-- Truncate to data columns only (excludes service columns: `sequence_id`, `event_type`, `quality`)
-- Truncate sequences exceeding `maximum_wanted_duration`
-- Raise global warning flags based on individual row quality
-- Validate minimum duration requirements
+1. Check for zero valid data points (raises `ZeroValidInputError`)
+2. Keep only the last (latest) sequence based on most recent timestamps
+   - If multiple sequences exist, identifies the sequence with the maximum (most recent) timestamp
+   - Keeps only that sequence and discards all others
+   - Single sequence data is unaffected
+3. Collect warnings based on data quality:
+   - `TOO_SHORT`: sequence duration < minimum_duration_minutes
+   - `CALIBRATION`: contains calibration events
+   - `QUALITY`: contains ILL or SENSOR_CALIBRATION quality flags
+   - `IMPUTATION`: contains imputed events
+4. Truncate sequences exceeding `maximum_wanted_duration`
+   - **Truncates from the beginning**, keeping the **latest (most recent)** data
+   - Preserves the most recent `maximum_wanted_duration` minutes of data
+   - Example: For 60 minutes of data with max duration of 30 minutes, keeps the last 30 minutes
+5. Extract data columns only (excludes service columns: `sequence_id`, `event_type`, `quality`)
 
 #### Output
 
@@ -144,11 +171,13 @@ warnings = ProcessingWarning.TOO_SHORT | ProcessingWarning.QUALITY
 
 ## Constants
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `CALIBRATION_GAP_THRESHOLD` | 9900 seconds (2:45:00) | Minimum gap duration to trigger sensor calibration quality flag |
-| `MINIMUM_DURATION_MINUTES` | 60 | Default minimum sequence duration for inference |
-| `MAXIMUM_WANTED_DURATION_MINUTES` | 480 | Default maximum sequence duration for inference |
+| Constant                          | Value                  | Description                                                     | Stage               |
+| --------------------------------- | ---------------------- | --------------------------------------------------------------- | ------------------- |
+| `CALIBRATION_GAP_THRESHOLD`       | 9900 seconds (2:45:00) | Minimum gap duration to trigger sensor calibration quality flag | Stage 3 (Parser)    |
+| `MINIMUM_DURATION_MINUTES`        | 60                     | Default minimum sequence duration for inference                 | Stage 5 (Processor) |
+| `MAXIMUM_WANTED_DURATION_MINUTES` | 480                    | Default maximum sequence duration for inference                 | Stage 5 (Processor) |
+
+**Note:** `CALIBRATION_GAP_THRESHOLD` is used during parsing (Stage 3) to mark data quality, not in the processor (Stages 4-5).
 
 ## Serialization
 
@@ -177,11 +206,11 @@ Optional pandas support (requires `pandas` and `pyarrow` packages):
 
 The pipeline defines the following error types:
 
-| Error | Base Class | Description |
-|-------|------------|-------------|
-| `MalformedDataError` | `ValueError` | Data cannot be parsed or converted properly |
-| `UnknownFormatError` | `ValueError` | Format cannot be determined |
-| `ZeroValidInputError` | `ValueError` | No valid data points in the sequence |
+| Error                 | Base Class   | Description                                 |
+| --------------------- | ------------ | ------------------------------------------- |
+| `MalformedDataError`  | `ValueError` | Data cannot be parsed or converted properly |
+| `UnknownFormatError`  | `ValueError` | Format cannot be determined                 |
+| `ZeroValidInputError` | `ValueError` | No valid data points in the sequence        |
 
 ## Type Aliases
 
