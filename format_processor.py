@@ -15,6 +15,7 @@ from interface.cgm_interface import (
     ZeroValidInputError,
     MINIMUM_DURATION_MINUTES,
     MAXIMUM_WANTED_DURATION_MINUTES,
+    CALIBRATION_GAP_THRESHOLD,
 )
 from formats.unified import UnifiedEventType, Quality
 
@@ -339,6 +340,9 @@ class FormatProcessor(CGMProcessor):
         # Combine all sequences
         result_df = pl.concat(processed_sequences).sort(['sequence_id', 'datetime'])
         
+        # Step 3: Mark calibration periods (24 hours after gaps >= CALIBRATION_GAP_THRESHOLD)
+        result_df = self._mark_calibration_periods(result_df)
+        
         # Check if any imputation was done
         imputed_count = result_df.filter(
             pl.col('event_type') == UnifiedEventType.IMPUTATION.value
@@ -561,6 +565,91 @@ class FormatProcessor(CGMProcessor):
             seq_data = pl.concat([seq_data, interpolated_df]).sort('datetime')
         
         return seq_data
+    
+    def _mark_calibration_periods(self, dataframe: pl.DataFrame) -> pl.DataFrame:
+        """Mark 24-hour periods after calibration gaps as SENSOR_CALIBRATION quality.
+        
+        According to PIPELINE.md: "In case of large gap more than 2 hours 45 minutes
+        mark next 24 hours as ill quality."
+        
+        This method detects gaps >= CALIBRATION_GAP_THRESHOLD (2:45:00) and marks
+        all data points within 24 hours after the gap end as Quality.SENSOR_CALIBRATION.
+        
+        Args:
+            dataframe: DataFrame with sequences and interpolated gaps
+            
+        Returns:
+            DataFrame with quality flags updated for calibration periods
+        """
+        if len(dataframe) == 0:
+            return dataframe
+        
+        # Sort by datetime to process chronologically
+        df = dataframe.sort('datetime')
+        
+        # Calculate time differences between consecutive rows
+        df = df.with_columns([
+            pl.col('datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
+        ])
+        
+        # Identify calibration gaps (>= CALIBRATION_GAP_THRESHOLD)
+        df = df.with_columns([
+            pl.when(pl.col('time_diff_seconds').is_null())
+            .then(pl.lit(False))
+            .otherwise(pl.col('time_diff_seconds') >= CALIBRATION_GAP_THRESHOLD)
+            .alias('is_calibration_gap'),
+        ])
+        
+        # Extract datetime values and gap flags before modifying DataFrame
+        datetime_values = df['datetime'].to_list()
+        calibration_gap_mask = df['is_calibration_gap'].to_list()
+        
+        # Collect calibration period start times (rows after calibration gaps)
+        calibration_period_starts = []
+        for i in range(len(calibration_gap_mask)):
+            if calibration_gap_mask[i]:  # This row is after a calibration gap
+                gap_end_time = datetime_values[i]
+                calibration_period_starts.append(gap_end_time)
+        
+        # Create a column to mark rows that should be SENSOR_CALIBRATION
+        df = df.with_columns([
+            pl.lit(False).alias('in_calibration_period')
+        ])
+        
+        # Mark all rows within 24 hours after each calibration gap
+        if calibration_period_starts:
+            # Create conditions for each calibration period
+            conditions = []
+            for gap_end_time in calibration_period_starts:
+                calibration_period_end = gap_end_time + timedelta(hours=24)
+                # Mark all points from gap_end_time (inclusive) for 24 hours
+                conditions.append(
+                    (pl.col('datetime') >= gap_end_time) &
+                    (pl.col('datetime') <= calibration_period_end)
+                )
+            
+            # Combine all conditions with OR
+            combined_condition = conditions[0]
+            for condition in conditions[1:]:
+                combined_condition = combined_condition | condition
+            
+            # Mark rows in calibration periods
+            df = df.with_columns([
+                combined_condition.alias('in_calibration_period')
+            ])
+        
+        # Update quality column for rows in calibration periods
+        df = df.with_columns([
+            pl.when(pl.col('in_calibration_period'))
+            .then(pl.lit(Quality.SENSOR_CALIBRATION.value))
+            .otherwise(pl.col('quality'))
+            .alias('quality')
+        ])
+        
+        # Remove temporary columns
+        df = df.drop(['time_diff_seconds', 'is_calibration_gap', 'in_calibration_period'])
+        
+        return df
     
     def prepare_for_inference(
         self,

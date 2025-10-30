@@ -105,7 +105,8 @@ Fills gaps in continuous glucose data with imputed values.
 - Adds rows with `event_type='IMPUTATN'` for missing data points
 - Sets appropriate quality flags on imputed values
 - Updates `ProcessingWarning.IMPUTATION` flag if gaps were filled
-- In case of larg gaps, more than
+- In case of larg gaps, split in to different sequnces with unique id's.
+- In case of large gap more than 2 hours 45 minutes mark next 24 hours as 'Quality.SENSOR_CALIBRATION' quality.
 
 **Input:** DataFrame with potential gaps
 

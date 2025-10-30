@@ -1247,6 +1247,239 @@ def test_small_vs_large_gap_handling():
     assert ProcessingWarning.IMPUTATION in processor.get_warnings()
 
 
+def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
+    """Test that gaps >= CALIBRATION_GAP_THRESHOLD (2:45:00) mark next 24 hours as SENSOR_CALIBRATION quality.
+    
+    According to PIPELINE.md: "In case of large gap more than 2 hours 45 minutes 
+    mark next 24 hours as ill quality."
+    """
+    processor = FormatProcessor(
+        expected_interval_minutes=5,
+        small_gap_max_minutes=15,
+    )
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # First segment: 3 points before the gap
+    for i in range(3):
+        data.append({
+            'sequence_id': 0,
+            'event_type': UnifiedEventType.GLUCOSE.value,
+            'quality': Quality.GOOD.value,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 2,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    # Large gap >= CALIBRATION_GAP_THRESHOLD (2:45:00 = 165 minutes)
+    # Gap of 3 hours (180 minutes) to ensure it exceeds threshold
+    gap_start_time = base_time + timedelta(minutes=10)
+    gap_end_time = gap_start_time + timedelta(hours=3)
+    
+    # After gap: create data points for next 25 hours (to test 24-hour window)
+    # Points every 5 minutes for 25 hours = 300 points
+    for i in range(300):  # 25 hours * 12 points/hour = 300 points
+        point_time = gap_end_time + timedelta(minutes=5 * i)
+        data.append({
+            'sequence_id': 0,
+            'event_type': UnifiedEventType.GLUCOSE.value,
+            'quality': Quality.GOOD.value,  # Will be changed by interpolate_gaps
+            'datetime': point_time,
+            'glucose': 110.0 + i * 0.1,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    df = pl.DataFrame(data)
+    
+    # Process with interpolate_gaps
+    result = processor.interpolate_gaps(df)
+    
+    # Find the gap position (between last point before gap and first point after gap)
+    # The gap is between index 2 (10 minutes) and index 3 (3 hours later)
+    
+    # Get all timestamps after the gap
+    gap_start_idx = 2  # Last point before gap
+    gap_start_datetime = result['datetime'][gap_start_idx]
+    
+    # All points after gap_end_time should be marked as SENSOR_CALIBRATION for 24 hours
+    # Calculate 24 hours after gap_end_time
+    gap_end_datetime = gap_start_datetime + timedelta(hours=3)  # 3 hour gap
+    calibration_period_end = gap_end_datetime + timedelta(hours=24)
+    
+    # Check points within 24 hours after gap (including first point after gap)
+    points_in_calibration_period = result.filter(
+        (pl.col('datetime') >= gap_end_datetime) &
+        (pl.col('datetime') <= calibration_period_end)
+    )
+    
+    assert len(points_in_calibration_period) > 0, \
+        "Should have points in the 24-hour calibration period"
+    
+    # All points in the 24-hour period should be marked as SENSOR_CALIBRATION
+    sensor_calibration_count = points_in_calibration_period.filter(
+        pl.col('quality') == Quality.SENSOR_CALIBRATION.value
+    ).height
+    
+    assert sensor_calibration_count == len(points_in_calibration_period), \
+        f"All {len(points_in_calibration_period)} points in 24-hour period should be SENSOR_CALIBRATION, " \
+        f"but only {sensor_calibration_count} are marked"
+    
+    # Points after 24 hours should be GOOD quality
+    points_after_calibration_period = result.filter(
+        pl.col('datetime') > calibration_period_end
+    )
+    
+    if len(points_after_calibration_period) > 0:
+        good_quality_count = points_after_calibration_period.filter(
+            pl.col('quality') == Quality.GOOD.value
+        ).height
+        
+        assert good_quality_count == len(points_after_calibration_period), \
+            f"Points after 24-hour period should be GOOD quality, " \
+            f"but {len(points_after_calibration_period) - good_quality_count} are not"
+
+
+def test_calibration_gap_exactly_at_threshold():
+    """Test that gap exactly at CALIBRATION_GAP_THRESHOLD (2:45:00) triggers calibration marking."""
+    processor = FormatProcessor(
+        expected_interval_minutes=5,
+        small_gap_max_minutes=15,
+    )
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # First point
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': base_time,
+        'glucose': 100.0,
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    # Gap exactly at CALIBRATION_GAP_THRESHOLD (2:45:00 = 165 minutes)
+    gap_start = base_time
+    gap_end = gap_start + timedelta(seconds=CALIBRATION_GAP_THRESHOLD)
+    
+    # Point immediately after gap
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': gap_end,
+        'glucose': 110.0,
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    # A few more points within 24 hours
+    for i in range(1, 5):
+        data.append({
+            'sequence_id': 0,
+            'event_type': UnifiedEventType.GLUCOSE.value,
+            'quality': Quality.GOOD.value,
+            'datetime': gap_end + timedelta(minutes=5 * i),
+            'glucose': 110.0 + i * 0.1,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    df = pl.DataFrame(data)
+    
+    # Process
+    result = processor.interpolate_gaps(df)
+    
+    # Points after gap (within 24 hours) should be SENSOR_CALIBRATION
+    calibration_period_end = gap_end + timedelta(hours=24)
+    points_after_gap = result.filter(
+        (pl.col('datetime') >= gap_end) &
+        (pl.col('datetime') <= calibration_period_end)
+    )
+    
+    if len(points_after_gap) > 0:
+        sensor_calibration_count = points_after_gap.filter(
+            pl.col('quality') == Quality.SENSOR_CALIBRATION.value
+        ).height
+        
+        assert sensor_calibration_count == len(points_after_gap), \
+            f"All points after gap (within 24h) should be SENSOR_CALIBRATION, " \
+            f"but only {sensor_calibration_count}/{len(points_after_gap)} are marked"
+
+
+def test_calibration_gap_below_threshold_no_marking():
+    """Test that gaps below CALIBRATION_GAP_THRESHOLD do not trigger calibration marking."""
+    processor = FormatProcessor(
+        expected_interval_minutes=5,
+        small_gap_max_minutes=15,
+    )
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # First point
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': base_time,
+        'glucose': 100.0,
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    # Gap just below threshold (2:44:59 = 9899 seconds, threshold is 9900)
+    gap_below_threshold = timedelta(seconds=CALIBRATION_GAP_THRESHOLD - 1)
+    gap_end = base_time + gap_below_threshold
+    
+    # Point after gap
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': gap_end,
+        'glucose': 110.0,
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    df = pl.DataFrame(data)
+    
+    # Process
+    result = processor.interpolate_gaps(df)
+    
+    # Point after gap should remain GOOD quality (not marked as SENSOR_CALIBRATION)
+    point_after_gap = result.filter(pl.col('datetime') > base_time)
+    
+    if len(point_after_gap) > 0:
+        good_quality_count = point_after_gap.filter(
+            pl.col('quality') == Quality.GOOD.value
+        ).height
+        
+        assert good_quality_count == len(point_after_gap), \
+            f"Points after gap below threshold should remain GOOD quality, " \
+            f"but {len(point_after_gap) - good_quality_count} are marked differently"
+
+
 def test_full_pipeline(sample_data_with_gaps):
     """Test full processing pipeline."""
     processor = FormatProcessor(
