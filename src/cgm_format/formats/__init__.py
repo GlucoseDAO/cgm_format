@@ -6,7 +6,7 @@ vendor-specific format schemas (Dexcom, Libre).
 """
 
 # Unified format
-from formats.unified import (
+from cgm_format.formats.unified import (
     CGM_SCHEMA,
     UnifiedEventType,
     Quality,
@@ -18,7 +18,7 @@ from formats.unified import (
 )
 
 # Dexcom format
-from formats.dexcom import (
+from cgm_format.formats.dexcom import (
     DEXCOM_SCHEMA,
     DexcomEventType,
     DexcomEventSubtype,
@@ -32,7 +32,7 @@ from formats.dexcom import (
 )
 
 # Libre format
-from formats.libre import (
+from cgm_format.formats.libre import (
     LIBRE_SCHEMA,
     LibreRecordType,
     LibreColumn,

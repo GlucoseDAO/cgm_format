@@ -21,7 +21,7 @@ Example data row:
 from typing import List, Dict, Tuple
 from enum import Enum
 import polars as pl
-from interface.schema import (
+from cgm_format.interface.schema import (
     ColumnSchema,
     CGMSchemaDefinition,
     EnumLiteral,

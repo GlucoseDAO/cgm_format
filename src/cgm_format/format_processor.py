@@ -7,7 +7,7 @@ Adapted from glucose_ml_preprocessor.py for single-user unified format processin
 import polars as pl
 from typing import Dict, Any, List
 from datetime import timedelta
-from interface.cgm_interface import (
+from cgm_format.interface.cgm_interface import (
     CGMProcessor,
     UnifiedFormat,
     InferenceResult,
@@ -17,7 +17,7 @@ from interface.cgm_interface import (
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
 )
-from formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality
 
 
 class FormatProcessor(CGMProcessor):

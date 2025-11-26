@@ -27,7 +27,7 @@ Note: Uses semicolon (;) as delimiter instead of comma.
 from typing import List
 from enum import Enum
 import polars as pl
-from interface.schema import (
+from cgm_format.interface.schema import (
     ColumnSchema,
     CGMSchemaDefinition,
     EnumLiteral,

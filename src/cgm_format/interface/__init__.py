@@ -3,12 +3,12 @@
 This package provides base interfaces and utilities for CGM data processing.
 """
 
-from interface.schema import (
+from cgm_format.interface.schema import (
     EnumLiteral,
     ColumnSchema,
     CGMSchemaDefinition,
 )
-from interface.cgm_interface import (
+from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     ProcessingWarning,
     CGMParser,

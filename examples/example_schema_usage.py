@@ -5,11 +5,11 @@ from collections import Counter
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
-from format_converter import FormatParser
-from interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
-from formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
-from formats.dexcom import DEXCOM_SCHEMA
-from formats.libre import LIBRE_SCHEMA
+from cgm_format import FormatParser
+from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
+from cgm_format.formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
+from cgm_format.formats.dexcom import DEXCOM_SCHEMA
+from cgm_format.formats.libre import LIBRE_SCHEMA
 
 # Optional: Use frictionless library if available
 try:

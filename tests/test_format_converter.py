@@ -11,13 +11,13 @@ from pathlib import Path
 from collections import Counter
 import polars as pl
 
-from format_converter import FormatParser
-from interface.cgm_interface import (
+from cgm_format import FormatParser
+from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     UnknownFormatError,
     MalformedDataError,
 )
-from formats.unified import UNIFIED_TIMESTAMP_FORMATS
+from cgm_format.formats.unified import UNIFIED_TIMESTAMP_FORMATS
 
 
 # Constants - relative to project root

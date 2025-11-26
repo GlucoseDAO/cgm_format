@@ -17,8 +17,8 @@ Vendor CSV → Parse → Unified Format → Interpolate → Synchronize → Infe
 ## Quick Start: End-to-End Inference Pipeline
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
 unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
@@ -59,7 +59,7 @@ The `FormatParser` handles all vendor-specific quirks and converts to unified fo
 #### Parse from File (Automatic Detection)
 
 ```python
-from format_converter import FormatParser
+from cgm_format import FormatParser
 
 # Automatically detects Dexcom, Libre, or Unified format
 unified_df = FormatParser.parse_from_file("path/to/cgm_export.csv")
@@ -71,8 +71,8 @@ print(unified_df.head())
 #### Parse with Manual Stages (Advanced)
 
 ```python
-from format_converter import FormatParser
-from interface.cgm_interface import SupportedCGMFormat
+from cgm_format import FormatParser
+from cgm_format.interface.cgm_interface import SupportedCGMFormat
 
 # Read raw file
 with open("data.csv", 'rb') as f:
@@ -92,7 +92,7 @@ unified_df = FormatParser.parse_to_unified(text_data, format_type)
 #### Handle Dexcom High/Low Values
 
 ```python
-from format_converter import FormatParser
+from cgm_format import FormatParser
 
 # Dexcom marks out-of-range readings as "High" or "Low"
 # These are replaced with numeric placeholders (default: 401, 39 mg/dL)
@@ -101,7 +101,7 @@ from format_converter import FormatParser
 unified_df = FormatParser.parse_from_file("dexcom_export.csv")
 
 # Check for out-of-range readings
-from formats.unified import Quality
+from cgm_format.formats.unified import Quality
 
 out_of_range_count = unified_df.filter(
     pl.col('quality') == Quality.ILL.value
@@ -118,7 +118,7 @@ The `interpolate_gaps()` method performs two critical operations:
 2. **Gap Filling**: Interpolates small gaps with imputed glucose values
 
 ```python
-from format_processor import FormatProcessor
+from cgm_format import FormatProcessor
 
 processor = FormatProcessor(
     expected_interval_minutes=5,    # Normal CGM interval
@@ -134,7 +134,7 @@ print(f"Created {sequence_count} sequences")
 
 # Check if imputation occurred
 if processor.has_warnings():
-    from interface.cgm_interface import ProcessingWarning
+    from cgm_format.interface.cgm_interface import ProcessingWarning
     if ProcessingWarning.IMPUTATION in processor.get_warnings():
         print("Data contains interpolated values")
 ```
@@ -164,8 +164,8 @@ for row in sequence_info.iter_rows(named=True):
 After large gaps (≥2h 45min), the next 24 hours are marked as `Quality.SENSOR_CALIBRATION`:
 
 ```python
-from formats.unified import Quality
-from interface.cgm_interface import CALIBRATION_GAP_THRESHOLD
+from cgm_format.formats.unified import Quality
+from cgm_format.interface.cgm_interface import CALIBRATION_GAP_THRESHOLD
 
 calibration_points = processed_df.filter(
     pl.col('quality') == Quality.SENSOR_CALIBRATION.value
@@ -211,7 +211,7 @@ inference_df, warnings = processor.prepare_for_inference(
 )
 
 # warnings is a ProcessingWarning flags enum
-from interface.cgm_interface import ProcessingWarning
+from cgm_format.interface.cgm_interface import ProcessingWarning
 
 if warnings & ProcessingWarning.TOO_SHORT:
     print("Warning: Sequence shorter than minimum duration")
@@ -259,8 +259,8 @@ print(inference_df.columns)
 For most ML use cases, use the complete pipeline:
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 
 # Parse
 unified_df = FormatParser.parse_from_file("cgm_data.csv")
@@ -283,8 +283,8 @@ predictions = model.predict(inference_df)
 
 ```python
 from pathlib import Path
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 import polars as pl
 
 data_dir = Path("data/exports")
@@ -318,8 +318,8 @@ all_data = pl.concat(results)
 ### Workflow 3: Custom Preprocessing for Research
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 import polars as pl
 
 # Parse
@@ -357,8 +357,8 @@ if warnings:
 ### Workflow 4: Real-Time Inference (Streaming)
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 
 class CGMInferenceService:
     def __init__(self):
@@ -402,7 +402,7 @@ if 'error' not in result:
 ### Common Exceptions
 
 ```python
-from interface.cgm_interface import (
+from cgm_format.interface.cgm_interface import (
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError
@@ -480,7 +480,7 @@ inference_df, warnings = processor.prepare_for_inference(
 
 ```python
 import polars as pl
-from formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality
 
 unified_df = FormatParser.parse_from_file("data.csv")
 
@@ -537,8 +537,8 @@ print(f"Final inference records: {len(inference_df)}")
 ### scikit-learn Compatible
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser
+from cgm_format import FormatProcessor
 import polars as pl
 
 # Prepare data
@@ -656,4 +656,5 @@ metadata = {
 - [interface/PIPELINE.md](interface/PIPELINE.md) - Complete pipeline documentation
 - [formats/UNIFIED_FORMAT.md](formats/UNIFIED_FORMAT.md) - Unified schema specification
 - [example_schema_usage.py](example_schema_usage.py) - Schema validation examples
+
 

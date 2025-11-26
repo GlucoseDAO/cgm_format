@@ -30,7 +30,7 @@ uv pip install -e ".[dev]"    # pytest
 ### Basic Parsing
 
 ```python
-from format_converter import FormatParser
+from cgm_format import FormatParser
 import polars as pl
 
 # Parse any supported CGM file (Dexcom, Libre, or Unified)
@@ -46,8 +46,7 @@ FormatParser.to_csv_file(unified_df, "output.csv")
 ### Complete Inference Pipeline
 
 ```python
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
 unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
@@ -72,7 +71,7 @@ inference_df, warnings = processor.prepare_for_inference(
 predictions = your_model.predict(inference_df)
 ```
 
-**See [USAGE.md](USAGE.md) for complete inference workflows and [usage_example.py](usage_example.py) for runnable examples.**
+**See [USAGE.md](USAGE.md) for complete inference workflows and [examples/usage_example.py](examples/usage_example.py) for runnable examples.**
 
 ## Unified Format Schema
 
@@ -116,7 +115,7 @@ text_data = FormatParser.decode_raw_data(raw_bytes)
 Automatically detect vendor format from CSV headers.
 
 ```python
-from interface.cgm_interface import SupportedCGMFormat
+from cgm_format.interface.cgm_interface import SupportedCGMFormat
 
 format_type = FormatParser.detect_format(text_data)
 # Returns: SupportedCGMFormat.DEXCOM, .LIBRE, or .UNIFIED_CGM
@@ -153,7 +152,7 @@ See [`interface/PIPELINE.md`](interface/PIPELINE.md) for complete pipeline docum
 The `FormatProcessor.interpolate_gaps()` method handles data continuity:
 
 ```python
-from format_processor import FormatProcessor
+from cgm_format import FormatProcessor
 
 processor = FormatProcessor(
     expected_interval_minutes=5,    # Normal CGM reading interval
@@ -227,7 +226,7 @@ inference_df, warnings = processor.prepare_for_inference(
 )
 
 # Check for quality issues
-from interface.cgm_interface import ProcessingWarning
+from cgm_format.interface.cgm_interface import ProcessingWarning
 
 if warnings & ProcessingWarning.TOO_SHORT:
     print("Warning: Sequence shorter than minimum duration")
@@ -259,8 +258,8 @@ predictions = your_model.predict(inference_df)
 ### Complete Processor Configuration
 
 ```python
-from format_processor import FormatProcessor
-from interface.cgm_interface import MINIMUM_DURATION_MINUTES, MAXIMUM_WANTED_DURATION_MINUTES
+from cgm_format import FormatProcessor
+from cgm_format.interface.cgm_interface import MINIMUM_DURATION_MINUTES, MAXIMUM_WANTED_DURATION_MINUTES
 
 # Initialize processor with custom intervals
 processor = FormatProcessor(
@@ -292,7 +291,7 @@ if processor.has_warnings():
 ### Working with Schemas
 
 ```python
-from formats.unified import CGM_SCHEMA, UnifiedEventType, Quality
+from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType, Quality
 
 # Get Polars schema
 polars_schema = CGM_SCHEMA.get_polars_schema()
@@ -315,8 +314,7 @@ quality = Quality.GOOD            # 0
 
 ```python
 from pathlib import Path
-from format_converter import FormatParser
-from format_processor import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
 import polars as pl
 
 data_dir = Path("data")
@@ -363,7 +361,7 @@ if results:
 ### Format Detection and Validation
 
 ```python
-from example_schema_usage import run_format_detection_and_validation
+from examples.example_schema_usage import run_format_detection_and_validation
 from pathlib import Path
 
 # Validate all files in data directory
@@ -408,28 +406,35 @@ This generates a detailed report with:
 
 ```text
 cgm_format/
-├── interface/                   # Abstract interfaces and schema infrastructure
-│   ├── cgm_interface.py         # CGMParser and CGMProcessor interfaces
-│   ├── schema.py                # Base schema definition system
-│   └── PIPELINE.md              # Pipeline documentation
-├── formats/                     # Format-specific schemas and definitions
-│   ├── unified.py               # Unified format schema and enums
-│   ├── unified.json             # Frictionless schema export
-│   ├── dexcom.py                # Dexcom format schema and constants
-│   ├── dexcom.json              # Frictionless schema for Dexcom
-│   ├── libre.py                 # Libre format schema and constants
-│   ├── libre.json               # Frictionless schema for Libre
-│   └── UNIFIED_FORMAT.md        # Unified format specification
-├── format_converter.py          # FormatParser implementation (Stages 1-3)
-├── format_processor.py          # FormatProcessor implementation (Stages 4-5)
-├── USAGE.md                     # Complete usage guide for inference
-├── usage_example.py             # Runnable usage examples
-├── example_schema_usage.py      # Format detection & validation examples
+├── src/
+│   └── cgm_format/              # Main package
+│       ├── __init__.py          # Package exports (FormatParser, FormatProcessor)
+│       ├── format_converter.py  # FormatParser implementation (Stages 1-3)
+│       ├── format_processor.py  # FormatProcessor implementation (Stages 4-6)
+│       ├── interface/           # Abstract interfaces and schema infrastructure
+│       │   ├── cgm_interface.py # CGMParser and CGMProcessor interfaces
+│       │   ├── schema.py        # Base schema definition system
+│       │   └── PIPELINE.md      # Pipeline documentation
+│       └── formats/             # Format-specific schemas and definitions
+│           ├── unified.py       # Unified format schema and enums
+│           ├── unified.json     # Frictionless schema export
+│           ├── dexcom.py        # Dexcom format schema and constants
+│           ├── dexcom.json      # Frictionless schema for Dexcom
+│           ├── libre.py         # Libre format schema and constants
+│           ├── libre.json       # Frictionless schema for Libre
+│           └── UNIFIED_FORMAT.md # Unified format specification
+├── examples/                    # Example scripts
+│   ├── usage_example.py         # Runnable usage examples
+│   └── example_schema_usage.py  # Format detection & validation examples
 ├── tests/                       # Pytest test suite
 │   ├── test_format_converter.py # Parsing and conversion tests
+│   ├── test_format_processor.py # Processing tests
 │   └── test_schema.py           # Schema validation tests
-└── data/                        # Test data and parsed outputs
-    └── parsed/                  # Converted unified format files
+├── data/                        # Test data and parsed outputs
+│   └── parsed/                  # Converted unified format files
+├── pyproject.toml               # Package configuration (hatchling)
+├── USAGE.md                     # Complete usage guide for inference
+└── README.md                    # This file
 ```
 
 ## Architecture
@@ -520,7 +525,7 @@ processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=3
 **Constants from interface:**
 
 ```python
-from interface.cgm_interface import (
+from cgm_format.interface.cgm_interface import (
     MINIMUM_DURATION_MINUTES,           # 180 (3 hours)
     MAXIMUM_WANTED_DURATION_MINUTES,    # 1440 (24 hours)
     CALIBRATION_GAP_THRESHOLD,          # 9900 seconds (2h45m)
@@ -587,10 +592,10 @@ pytest tests/
 pytest tests/test_format_converter.py -v
 
 # Generate validation report
-python3 example_schema_usage.py
+uv run python examples/example_schema_usage.py
 
 # Run usage examples with real data
-uv run python usage_example.py
+uv run python examples/usage_example.py
 ```
 
 ## Development
@@ -601,20 +606,20 @@ After modifying schema definitions:
 
 ```bash
 # Regenerate unified.json
-python3 -c "from formats.unified import regenerate_schema_json; regenerate_schema_json()"
+python3 -c "from cgm_format.formats.unified import regenerate_schema_json; regenerate_schema_json()"
 
 # Regenerate dexcom.json
-python3 -c "from formats.dexcom import regenerate_schema_json; regenerate_schema_json()"
+python3 -c "from cgm_format.formats.dexcom import regenerate_schema_json; regenerate_schema_json()"
 
 # Regenerate libre.json
-python3 -c "from formats.libre import regenerate_schema_json; regenerate_schema_json()"
+python3 -c "from cgm_format.formats.libre import regenerate_schema_json; regenerate_schema_json()"
 ```
 
 ### Adding New Vendor Formats
 
-1. Create schema in `formats/your_vendor.py` using `CGMSchemaDefinition`
-2. Add format to `SupportedCGMFormat` enum in `interface/cgm_interface.py`
-3. Add detection patterns and implement parsing in `format_converter.py`
+1. Create schema in `src/cgm_format/formats/your_vendor.py` using `CGMSchemaDefinition`
+2. Add format to `SupportedCGMFormat` enum in `src/cgm_format/interface/cgm_interface.py`
+3. Add detection patterns and implement parsing in `src/cgm_format/format_converter.py`
 4. Add tests in `tests/test_format_converter.py`
 
 ## Requirements
@@ -632,10 +637,10 @@ Optional:
 ## Documentation
 
 - **[USAGE.md](USAGE.md)** - Complete usage guide for inference workflows
-- **[usage_example.py](usage_example.py)** - Runnable examples with real data
-- **[interface/PIPELINE.md](interface/PIPELINE.md)** - Detailed pipeline architecture
-- **[formats/UNIFIED_FORMAT.md](formats/UNIFIED_FORMAT.md)** - Unified schema specification
-- **[example_schema_usage.py](example_schema_usage.py)** - Schema validation examples
+- **[examples/usage_example.py](examples/usage_example.py)** - Runnable examples with real data
+- **[src/cgm_format/interface/PIPELINE.md](src/cgm_format/interface/PIPELINE.md)** - Detailed pipeline architecture
+- **[src/cgm_format/formats/UNIFIED_FORMAT.md](src/cgm_format/formats/UNIFIED_FORMAT.md)** - Unified schema specification
+- **[examples/example_schema_usage.py](examples/example_schema_usage.py)** - Schema validation examples
 
 ## License
 

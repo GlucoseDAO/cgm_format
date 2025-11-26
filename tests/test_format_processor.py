@@ -3,15 +3,15 @@
 import pytest
 import polars as pl
 from datetime import datetime, timedelta
-from format_processor import FormatProcessor
-from interface.cgm_interface import (
+from cgm_format import FormatProcessor
+from cgm_format.interface.cgm_interface import (
     ProcessingWarning,
     ZeroValidInputError,
     MINIMUM_DURATION_MINUTES,
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
 )
-from formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality
 
 
 @pytest.fixture

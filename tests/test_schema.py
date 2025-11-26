@@ -11,10 +11,10 @@ import pytest
 from pathlib import Path
 import json
 
-from interface.schema import EnumLiteral, CGMSchemaDefinition
-from formats.dexcom import DEXCOM_SCHEMA, DexcomColumn, DexcomEventType
-from formats.libre import LIBRE_SCHEMA, LibreColumn
-from formats.unified import CGM_SCHEMA, UnifiedEventType
+from cgm_format.interface.schema import EnumLiteral, CGMSchemaDefinition
+from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DexcomColumn, DexcomEventType
+from cgm_format.formats.libre import LIBRE_SCHEMA, LibreColumn
+from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType
 
 
 class TestEnumLiteral:

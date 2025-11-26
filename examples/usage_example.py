@@ -11,15 +11,14 @@ from pathlib import Path
 from typing import Optional
 import polars as pl
 
-from format_converter import FormatParser
-from format_processor import FormatProcessor
-from interface.cgm_interface import (
+from cgm_format import FormatParser, FormatProcessor
+from cgm_format.interface.cgm_interface import (
     ProcessingWarning,
     ZeroValidInputError,
     UnknownFormatError,
     MalformedDataError,
 )
-from formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality
 
 
 def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
@@ -496,4 +495,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

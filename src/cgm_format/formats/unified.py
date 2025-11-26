@@ -6,7 +6,7 @@ using the base schema infrastructure from interface.schema.
 
 from enum import Enum
 import polars as pl
-from interface.schema import (
+from cgm_format.interface.schema import (
     ColumnSchema,
     CGMSchemaDefinition,
     EnumLiteral,

@@ -6,7 +6,7 @@ from typing import Union
 import polars as pl
 
 
-from interface.cgm_interface import (
+from cgm_format.interface.cgm_interface import (
     CGMParser,
     SupportedCGMFormat,
     UnifiedFormat,
@@ -15,8 +15,8 @@ from interface.cgm_interface import (
 )
 
 # Import detection patterns from format modules
-from formats.unified import UNIFIED_DETECTION_PATTERNS, UnifiedEventType, Quality
-from formats.dexcom import (
+from cgm_format.formats.unified import UNIFIED_DETECTION_PATTERNS, UnifiedEventType, Quality
+from cgm_format.formats.dexcom import (
     DEXCOM_DETECTION_PATTERNS, 
     DexcomColumn, 
     DEXCOM_HEADER_LINE,
@@ -26,7 +26,7 @@ from formats.dexcom import (
     DEXCOM_HIGH_GLUCOSE_DEFAULT,
     DEXCOM_LOW_GLUCOSE_DEFAULT,
 )
-from formats.libre import (
+from cgm_format.formats.libre import (
     LIBRE_DETECTION_PATTERNS,
     LibreColumn, 
     LibreRecordType, 
