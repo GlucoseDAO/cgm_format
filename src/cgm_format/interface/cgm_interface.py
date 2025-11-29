@@ -258,3 +258,5 @@ def to_polars(df: "pd.DataFrame") -> pl.DataFrame:
             "pandas and pyarrow are required for this function. "
         )
     return pl.from_pandas(df)
+
+    

@@ -10,18 +10,44 @@ from cgm_format.interface.schema import (
 )
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
-    ProcessingWarning,
     CGMParser,
     CGMProcessor,
+    UnknownFormatError,
+    MalformedDataError,
+    ZeroValidInputError,
+    ProcessingWarning,
+    InferenceResult,
+    ValidationResult,
+    MINIMUM_DURATION_MINUTES,
+    MAXIMUM_WANTED_DURATION_MINUTES,
+    CALIBRATION_GAP_THRESHOLD,
+    to_pandas,
+    to_polars,
 )
 
 __all__ = [
+    # Schema definitions
     "EnumLiteral",
-    "SupportedCGMFormat",
-    "ProcessingWarning",
-    "CGMParser",
-    "CGMProcessor",
     "ColumnSchema",
     "CGMSchemaDefinition",
+    # Core interfaces
+    "SupportedCGMFormat",
+    "CGMParser",
+    "CGMProcessor",
+    # Exceptions
+    "UnknownFormatError",
+    "MalformedDataError",
+    "ZeroValidInputError",
+    # Warnings and result types
+    "ProcessingWarning",
+    "InferenceResult",
+    "ValidationResult",
+    # Constants
+    "MINIMUM_DURATION_MINUTES",
+    "MAXIMUM_WANTED_DURATION_MINUTES",
+    "CALIBRATION_GAP_THRESHOLD",
+    # Conversion utilities
+    "to_pandas",
+    "to_polars",
 ]
 
