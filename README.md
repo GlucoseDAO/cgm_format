@@ -63,12 +63,15 @@ processor = FormatProcessor(
 # Fill gaps and create sequences
 processed_df = processor.interpolate_gaps(unified_df)
 
-# Prepare final inference data
-inference_df, warnings = processor.prepare_for_inference(
+# Prepare final inference data (returns full UnifiedFormat)
+unified_df, warnings = processor.prepare_for_inference(
     processed_df,
     minimum_duration_minutes=180,
     maximum_wanted_duration=1440
 )
+
+# Strip service columns for ML model
+inference_df = FormatProcessor.to_data_only_df(unified_df)
 
 # Feed to ML model
 predictions = your_model.predict(inference_df)
@@ -88,7 +91,10 @@ glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
 # Process glucose data separately
 processor = FormatProcessor()
 glucose_df = processor.interpolate_gaps(glucose_df)
-inference_df, warnings = processor.prepare_for_inference(glucose_df)
+unified_df, warnings = processor.prepare_for_inference(glucose_df)
+
+# Strip service columns if needed for ML
+inference_df = FormatProcessor.to_data_only_df(unified_df)
 
 # Analyze events separately
 insulin_events = events_df.filter(pl.col('event_type').str.contains('INSULIN'))
@@ -241,15 +247,18 @@ synchronized_df = processor.synchronize_timestamps(processed_df)
 
 ### Stage 6: Inference Preparation
 
-The `prepare_for_inference()` method performs final quality assurance and data extraction:
+The `prepare_for_inference()` method performs final quality assurance and returns full UnifiedFormat:
 
 ```python
-# Prepare final inference-ready data
-inference_df, warnings = processor.prepare_for_inference(
+# Prepare final inference-ready data (returns full UnifiedFormat)
+unified_df, warnings = processor.prepare_for_inference(
     processed_df,
     minimum_duration_minutes=180,      # Require 3 hours minimum
     maximum_wanted_duration=1440       # Truncate to last 24 hours if longer
 )
+
+# Optionally strip service columns for ML models
+inference_df = FormatProcessor.to_data_only_df(unified_df)
 
 # Check for quality issues
 from cgm_format.interface.cgm_interface import ProcessingWarning
@@ -299,12 +308,15 @@ processed_df = processor.interpolate_gaps(unified_df)
 # Stage 5 (Optional): Synchronize to fixed intervals
 # synchronized_df = processor.synchronize_timestamps(processed_df)
 
-# Stage 6: Prepare for inference
-inference_df, warnings = processor.prepare_for_inference(
+# Stage 6: Prepare for inference (returns full UnifiedFormat)
+unified_df, warnings = processor.prepare_for_inference(
     processed_df,  # or synchronized_df if using Stage 5
     minimum_duration_minutes=MINIMUM_DURATION_MINUTES,        # Default: 180 (3 hours)
     maximum_wanted_duration=MAXIMUM_WANTED_DURATION_MINUTES   # Default: 1440 (24 hours)
 )
+
+# Optional: Strip service columns for ML models
+inference_df = FormatProcessor.to_data_only_df(unified_df)
 
 # Check warnings
 if processor.has_warnings():
@@ -357,7 +369,8 @@ for csv_file in data_dir.glob("*.csv"):
         
         # Process for inference
         processed_df = processor.interpolate_gaps(unified_df)
-        inference_df, warnings = processor.prepare_for_inference(processed_df)
+        unified_df, warnings = processor.prepare_for_inference(processed_df)
+        inference_df = FormatProcessor.to_data_only_df(unified_df)
         
         # Add patient identifier
         patient_id = csv_file.stem

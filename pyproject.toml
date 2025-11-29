@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cgm-format"
-version = "0.3.6"
+version = "0.3.7"
 description = "Unified CGM data format converter for ML training and inference"
 readme = "README.md"
 requires-python = ">=3.12"

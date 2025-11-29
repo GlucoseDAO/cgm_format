@@ -49,7 +49,7 @@ class ProcessingWarning(Flag):
 
 # Simple tuple return types
 ValidationResult = Tuple[pl.DataFrame, int, int]  # (dataframe, bad_rows, valid_rows)
-InferenceResult = Tuple[pl.DataFrame, ProcessingWarning]  # (dataframe, warnings)
+InferenceResult = Tuple[UnifiedFormat, ProcessingWarning]  # (dataframe, warnings)
 
 
 
@@ -207,14 +207,17 @@ class CGMProcessor(ABC):
         glucose_only: bool = False,
         drop_duplicates: bool = False
     ) -> InferenceResult:
-        """Prepare data for inference with data-only DF and warning flags.
+        """Prepare data for inference with full UnifiedFormat and warning flags.
         
+        Operations performed:
         - Filter to glucose-only events if requested (drops non-EGV events)
         - Truncate sequences exceeding maximum_wanted_duration
         - Drop duplicate timestamps if requested
-        - Truncate to data columns only (exclude service columns)
         - Raise global output warning flags based on individual row quality
         - Check minimum duration requirements
+        
+        Returns full UnifiedFormat with all columns (sequence_id, event_type, quality, etc).
+        Use to_data_only_df() to strip service columns if needed for ML models.
         
         Args:
             dataframe: Fully processed DataFrame in unified format
@@ -224,7 +227,7 @@ class CGMProcessor(ABC):
             drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             
         Returns:
-            Tuple of (data_only_dataframe, warnings)
+            Tuple of (unified_format_dataframe, warnings)
             
         Raises:
             ZeroValidInputError: If there are no valid data points
@@ -259,4 +262,3 @@ def to_polars(df: "pd.DataFrame") -> pl.DataFrame:
         )
     return pl.from_pandas(df)
 
-    

@@ -17,7 +17,7 @@ from cgm_format.interface.cgm_interface import (
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
 )
-from cgm_format.formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality, CGM_SCHEMA
 
 
 class FormatProcessor(CGMProcessor):
@@ -659,7 +659,7 @@ class FormatProcessor(CGMProcessor):
         glucose_only: bool = False,
         drop_duplicates: bool = False
     ) -> InferenceResult:
-        """Prepare data for inference with data-only DF and warning flags.
+        """Prepare data for inference with full UnifiedFormat and warning flags.
         
         Operations performed:
         1. Check for zero valid data points (raises ZeroValidInputError)
@@ -673,7 +673,9 @@ class FormatProcessor(CGMProcessor):
            - QUALITY: contains ILL or SENSOR_CALIBRATION quality flags
            - IMPUTATION: contains imputed events (already tracked in interpolate_gaps)
            - TIME_DUPLICATES: contains non-unique time entries
-        7. Extract data columns only (exclude service columns)
+        
+        Returns full UnifiedFormat with all columns (sequence_id, event_type, quality, etc).
+        Use to_data_only_df() to strip service columns if needed for ML models.
         
         Args:
             dataframe: Fully processed DataFrame in unified format
@@ -683,7 +685,7 @@ class FormatProcessor(CGMProcessor):
             drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             
         Returns:
-            Tuple of (data_only_dataframe, warnings)
+            Tuple of (unified_format_dataframe, warnings)
             
         Raises:
             ZeroValidInputError: If there are no valid data points
@@ -771,16 +773,13 @@ class FormatProcessor(CGMProcessor):
             if unique_time_count < total_count:
                 self._add_warning(ProcessingWarning.TIME_DUPLICATES)
         
-        # Extract data columns only (exclude service columns)
-        data_columns = ['datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
-        data_only_df = df_truncated.select(data_columns)
-        
+        # Return full UnifiedFormat (keep all columns including service columns)
         # Combine warnings into flags for return value (for interface compatibility)
         combined_warnings = ProcessingWarning(0)
         for warning in self._warnings:
             combined_warnings |= warning
         
-        return data_only_df, combined_warnings
+        return df_truncated, combined_warnings
     
     def _calculate_duration_minutes(self, dataframe: pl.DataFrame) -> float:
         """Calculate duration of sequence in minutes.
@@ -834,6 +833,43 @@ class FormatProcessor(CGMProcessor):
         truncated_df = dataframe.filter(pl.col('datetime') >= cutoff_time)
         
         return truncated_df
+    
+    @staticmethod
+    def to_data_only_df(unified_df: UnifiedFormat) -> pl.DataFrame:
+        """Strip service columns from UnifiedFormat, keeping only data columns for ML models.
+        
+        This is a small optional pipeline-terminating function that removes metadata columns
+        (sequence_id, event_type, quality) and keeps only the data columns needed for inference.
+        
+        Data columns are computed from the unified format schema definition.
+        Currently includes:
+        - datetime: Timestamp of the reading
+        - glucose: Blood glucose value (mg/dL)
+        - carbs: Carbohydrate intake (grams)
+        - insulin_slow: Slow-acting insulin dose (units)
+        - insulin_fast: Fast-acting insulin dose (units)
+        - exercise: Exercise indicator/intensity
+        
+        Args:
+            unified_df: DataFrame in UnifiedFormat with all columns
+            
+        Returns:
+            DataFrame with only data columns (no service/metadata columns)
+            
+        Examples:
+            >>> # After processing, strip service columns for ML model
+            >>> unified_df, warnings = processor.prepare_for_inference(processed_df)
+            >>> data_only_df = FormatProcessor.to_data_only_df(unified_df)
+            >>> model.predict(data_only_df)
+            >>> 
+            >>> # Or keep full format for further analysis
+            >>> unified_df, warnings = processor.prepare_for_inference(processed_df)
+            >>> # Analyze quality flags, event types, etc.
+            >>> quality_issues = unified_df.filter(pl.col('quality') == 'ILL')
+        """
+        # Extract data column names from schema definition
+        data_columns = [col['name'] for col in CGM_SCHEMA.data_columns]
+        return unified_df.select(data_columns)
     
     @staticmethod
     def split_glucose_events(unified_df: UnifiedFormat) -> tuple[UnifiedFormat, UnifiedFormat]:

@@ -510,17 +510,17 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
     df = pl.DataFrame(data)
     
     # Prepare for inference
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
     
     # Should have only the latest sequence (5 points from sequence_id=2)
-    assert len(data_df) == 5, f"Expected 5 points from latest sequence, got {len(data_df)}"
+    assert len(unified_df) == 5, f"Expected 5 points from latest sequence, got {len(unified_df)}"
     
     # Check that glucose values are from the latest sequence (120.0 range)
-    glucose_values = data_df['glucose'].to_list()
+    glucose_values = unified_df['glucose'].to_list()
     assert all(g >= 120.0 for g in glucose_values if g is not None), \
         "Should only have glucose values from latest sequence (>= 120.0)"
 
@@ -549,14 +549,14 @@ def test_prepare_for_inference_single_sequence_unchanged():
     df = pl.DataFrame(data)
     
     # Prepare for inference
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
     
     # Should have all 5 points
-    assert len(data_df) == 5, f"Expected 5 points, got {len(data_df)}"
+    assert len(unified_df) == 5, f"Expected 5 points, got {len(unified_df)}"
 
 
 def test_prepare_for_inference_latest_sequence_identification():
@@ -621,7 +621,7 @@ def test_prepare_for_inference_latest_sequence_identification():
     df = pl.DataFrame(data)
     
     # Prepare for inference
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=300,
@@ -629,10 +629,10 @@ def test_prepare_for_inference_latest_sequence_identification():
     
     # Should keep sequence 2 (has the most recent timestamp at 14:00)
     # After truncation to 300 minutes, should have 2 points
-    assert len(data_df) == 2, f"Expected 2 points from sequence 2, got {len(data_df)}"
+    assert len(unified_df) == 2, f"Expected 2 points from sequence 2, got {len(unified_df)}"
     
     # Check glucose values are from sequence 2
-    glucose_values = data_df['glucose'].to_list()
+    glucose_values = unified_df['glucose'].to_list()
     assert 120.0 in glucose_values or 125.0 in glucose_values, \
         "Should have glucose values from sequence 2"
 
@@ -641,28 +641,34 @@ def test_prepare_for_inference_success(sample_unified_data):
     """Test successful inference preparation."""
     processor = FormatProcessor()
     
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         sample_unified_data,
         minimum_duration_minutes=30,
         maximum_wanted_duration=120,
     )
     
-    # Should return data columns only
-    expected_columns = ['datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
-    assert data_df.columns == expected_columns
+    # Should return full UnifiedFormat with all columns
+    expected_columns = ['sequence_id', 'event_type', 'quality', 'datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
+    assert all(col in unified_df.columns for col in expected_columns), \
+        f"Missing columns. Expected all of {expected_columns}, got {unified_df.columns}"
     
     # Should have same number of records
-    assert len(data_df) == len(sample_unified_data)
+    assert len(unified_df) == len(sample_unified_data)
     
     # Should NOT have TOO_SHORT warning (45 minutes of data >= 30 minute minimum)
     assert ProcessingWarning.TOO_SHORT not in warnings
+    
+    # Test that to_data_only_df() works correctly
+    data_only_df = FormatProcessor.to_data_only_df(unified_df)
+    expected_data_columns = ['datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
+    assert data_only_df.columns == expected_data_columns
 
 
 def test_prepare_for_inference_with_quality_issues(sample_data_with_quality_issues):
     """Test inference preparation with quality issues."""
     processor = FormatProcessor()
     
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         sample_data_with_quality_issues,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -719,18 +725,18 @@ def test_prepare_for_inference_truncation(sample_unified_data):
     
     # sample_unified_data has 10 records from 12:00 to 12:45 (5-minute intervals)
     # Set maximum duration to 20 minutes - should keep LATEST 20 minutes
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         sample_unified_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=20,
     )
     
     # Should have fewer records due to truncation
-    assert len(data_df) <= 5, f"Expected at most 5 records, got {len(data_df)}"
+    assert len(unified_df) <= 5, f"Expected at most 5 records, got {len(unified_df)}"
     
     # Verify that LATEST data is preserved (not oldest)
     # The latest timestamps should be present
-    timestamps = sorted(data_df['datetime'].to_list())
+    timestamps = sorted(unified_df['datetime'].to_list())
     if len(timestamps) > 0:
         # Latest timestamp should be close to 12:45 (the end of the data)
         latest = timestamps[-1]
@@ -762,18 +768,18 @@ def test_prepare_for_inference_truncation_keeps_latest():
     df = pl.DataFrame(data)
     
     # Truncate to 30 minutes - should keep LATEST 30 minutes (30-60 min range)
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=30,
     )
     
     # Should have approximately 7 records (30, 35, 40, 45, 50, 55, 60 minutes)
-    assert len(data_df) >= 6 and len(data_df) <= 8, \
-        f"Expected 6-8 records for 30-minute window, got {len(data_df)}"
+    assert len(unified_df) >= 6 and len(unified_df) <= 8, \
+        f"Expected 6-8 records for 30-minute window, got {len(unified_df)}"
     
     # Verify glucose values are from the LATEST part (should be 160-220, not 100-160)
-    glucose_values = sorted([g for g in data_df['glucose'].to_list() if g is not None])
+    glucose_values = sorted([g for g in unified_df['glucose'].to_list() if g is not None])
     min_glucose = min(glucose_values) if glucose_values else 0
     max_glucose = max(glucose_values) if glucose_values else 0
     
@@ -784,7 +790,7 @@ def test_prepare_for_inference_truncation_keeps_latest():
         f"Expected latest data to include highest values, but got max glucose {max_glucose}"
     
     # Verify timestamps are from the latest 30 minutes
-    timestamps = sorted(data_df['datetime'].to_list())
+    timestamps = sorted(unified_df['datetime'].to_list())
     earliest = timestamps[0]
     latest = timestamps[-1]
     
@@ -820,7 +826,7 @@ def test_prepare_for_inference_with_calibration_events():
     
     calibration_data = pl.DataFrame(data)
     
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         calibration_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -854,7 +860,7 @@ def test_prepare_for_inference_with_sensor_calibration_quality():
     
     sensor_calibration_data = pl.DataFrame(data)
     
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         sensor_calibration_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1492,11 +1498,14 @@ def test_full_pipeline(sample_data_with_gaps):
     assert len(interpolated) > len(sample_data_with_gaps)
     
     # Step 2: Prepare for inference
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         interpolated,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
+    
+    # Convert to data-only format
+    data_df = FormatProcessor.to_data_only_df(unified_df)
     
     # Check results
     assert len(data_df) > 0
@@ -1530,11 +1539,14 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
             assert abs(diff - 5.0) < 0.1, f"Time interval {diff} should be ~5 minutes"
     
     # Step 3: Prepare for inference
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         synchronized,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
+    
+    # Convert to data-only format
+    data_df = FormatProcessor.to_data_only_df(unified_df)
     
     # Check results
     assert len(data_df) > 0
@@ -1573,7 +1585,7 @@ def test_prepare_for_inference_glucose_only():
     df = pl.DataFrame(data)
     
     # Test without glucose_only (should keep all events)
-    data_df_all, warnings_all = processor.prepare_for_inference(
+    unified_df_all, warnings_all = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1581,12 +1593,12 @@ def test_prepare_for_inference_glucose_only():
     )
     
     # Should have 10 records
-    assert len(data_df_all) == 10
+    assert len(unified_df_all) == 10
     
     # Test with glucose_only (should drop CALIBRATION but keep IMPUTATION)
     # Create a new processor to reset warnings
     processor2 = FormatProcessor()
-    data_df_glucose, warnings_glucose = processor2.prepare_for_inference(
+    unified_df_glucose, warnings_glucose = processor2.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1594,7 +1606,7 @@ def test_prepare_for_inference_glucose_only():
     )
     
     # Should have 9 records (10 - 1 CALIBRATION)
-    assert len(data_df_glucose) == 9, f"Expected 9 records, got {len(data_df_glucose)}"
+    assert len(unified_df_glucose) == 9, f"Expected 9 records, got {len(unified_df_glucose)}"
     
     # No CALIBRATION warning should be present (it was filtered out)
     assert ProcessingWarning.CALIBRATION not in processor2.get_warnings()
@@ -1649,7 +1661,7 @@ def test_prepare_for_inference_drop_duplicates():
     df = pl.DataFrame(data)
     
     # Test without drop_duplicates (should keep duplicates)
-    data_df_with_dups, warnings_with_dups = processor.prepare_for_inference(
+    unified_df_with_dups, warnings_with_dups = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1657,13 +1669,13 @@ def test_prepare_for_inference_drop_duplicates():
     )
     
     # Should have 10 records (with duplicates)
-    assert len(data_df_with_dups) == 10
+    assert len(unified_df_with_dups) == 10
     # Should have TIME_DUPLICATES warning
     assert ProcessingWarning.TIME_DUPLICATES in processor.get_warnings()
     
     # Test with drop_duplicates (should remove duplicates)
     processor2 = FormatProcessor()
-    data_df_no_dups, warnings_no_dups = processor2.prepare_for_inference(
+    unified_df_no_dups, warnings_no_dups = processor2.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1671,7 +1683,7 @@ def test_prepare_for_inference_drop_duplicates():
     )
     
     # Should have 8 records (duplicates removed)
-    assert len(data_df_no_dups) == 8, f"Expected 8 records after dropping duplicates, got {len(data_df_no_dups)}"
+    assert len(unified_df_no_dups) == 8, f"Expected 8 records after dropping duplicates, got {len(unified_df_no_dups)}"
     # Should NOT have TIME_DUPLICATES warning (duplicates were removed)
     assert ProcessingWarning.TIME_DUPLICATES not in processor2.get_warnings()
 
@@ -1712,7 +1724,7 @@ def test_prepare_for_inference_time_duplicates_warning():
     
     df = pl.DataFrame(data)
     
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1756,14 +1768,14 @@ def test_prepare_for_inference_warnings_after_truncation():
     df = pl.DataFrame(data)
     
     # Truncate to last 20 minutes - should remove the calibration and quality issue
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=20,  # Keep only last 20 minutes
     )
     
     # Should have truncated to ~20 minutes (5 points)
-    assert len(data_df) <= 5, f"Expected ~5 records for 20 minutes, got {len(data_df)}"
+    assert len(unified_df) <= 5, f"Expected ~5 records for 20 minutes, got {len(unified_df)}"
     
     # Should NOT have CALIBRATION warning (it was truncated away)
     assert ProcessingWarning.CALIBRATION not in processor.get_warnings(), \
@@ -1804,7 +1816,7 @@ def test_prepare_for_inference_glucose_only_with_truncation():
     df = pl.DataFrame(data)
     
     # First filter to glucose_only, then truncate to last 30 minutes
-    data_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=30,
