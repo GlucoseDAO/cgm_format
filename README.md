@@ -34,7 +34,10 @@ from cgm_format import FormatParser
 import polars as pl
 
 # Parse any supported CGM file (Dexcom, Libre, or Unified)
-unified_df = FormatParser.parse_from_file("data/example.csv")
+unified_df = FormatParser.parse_file("data/example.csv")
+
+# Or parse from base64 (useful for web APIs)
+unified_df = FormatParser.parse_base64(base64_encoded_csv)
 
 # Access the data
 print(unified_df.head())
@@ -49,7 +52,7 @@ FormatParser.to_csv_file(unified_df, "output.csv")
 from cgm_format import FormatParser, FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
-unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 
 # Stage 4-5: Process for inference
 processor = FormatProcessor(
@@ -69,6 +72,26 @@ inference_df, warnings = processor.prepare_for_inference(
 
 # Feed to ML model
 predictions = your_model.predict(inference_df)
+```
+
+### Split Glucose and Events
+
+```python
+from cgm_format import FormatParser, FormatProcessor
+
+# Parse mixed data
+unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
+
+# Split into glucose readings and other events (insulin, carbs, etc.)
+glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
+
+# Process glucose data separately
+processor = FormatProcessor()
+glucose_df = processor.interpolate_gaps(glucose_df)
+inference_df, warnings = processor.prepare_for_inference(glucose_df)
+
+# Analyze events separately
+insulin_events = events_df.filter(pl.col('event_type').str.contains('INSULIN'))
 ```
 
 **See [USAGE.md](USAGE.md) for complete inference workflows and [examples/usage_example.py](examples/usage_example.py) for runnable examples.**
@@ -135,13 +158,16 @@ unified_df = FormatParser.parse_to_unified(text_data, format_type)
 All stages can be chained with convenience methods:
 
 ```python
-# Parse from file
-unified_df = FormatParser.parse_from_file("data.csv")
+# Parse from file path (recommended)
+unified_df = FormatParser.parse_file("data.csv")
 
-# Parse from bytes
+# Parse from base64 string (web APIs)
+unified_df = FormatParser.parse_base64(base64_encoded_csv)
+
+# Parse from bytes (lower-level)
 unified_df = FormatParser.parse_from_bytes(raw_data)
 
-# Parse from string
+# Parse from string (manual control)
 unified_df = FormatParser.parse_from_string(text_data)
 ```
 
@@ -409,7 +435,7 @@ cgm_format/
 ├── src/
 │   └── cgm_format/              # Main package
 │       ├── __init__.py          # Package exports (FormatParser, FormatProcessor)
-│       ├── format_converter.py  # FormatParser implementation (Stages 1-3)
+│       ├── format_parser.py  # FormatParser implementation (Stages 1-3)
 │       ├── format_processor.py  # FormatProcessor implementation (Stages 4-6)
 │       ├── interface/           # Abstract interfaces and schema infrastructure
 │       │   ├── cgm_interface.py # CGMParser and CGMProcessor interfaces
@@ -427,7 +453,7 @@ cgm_format/
 │   ├── usage_example.py         # Runnable usage examples
 │   └── example_schema_usage.py  # Format detection & validation examples
 ├── tests/                       # Pytest test suite
-│   ├── test_format_converter.py # Parsing and conversion tests
+│   ├── test_format_parser.py # Parsing and conversion tests
 │   ├── test_format_processor.py # Processing tests
 │   └── test_schema.py           # Schema validation tests
 ├── data/                        # Test data and parsed outputs
@@ -589,7 +615,7 @@ if processor.has_warnings():
 pytest tests/
 
 # Run specific test
-pytest tests/test_format_converter.py -v
+pytest tests/test_format_parser.py -v
 
 # Generate validation report
 uv run python examples/example_schema_usage.py
@@ -619,8 +645,8 @@ python3 -c "from cgm_format.formats.libre import regenerate_schema_json; regener
 
 1. Create schema in `src/cgm_format/formats/your_vendor.py` using `CGMSchemaDefinition`
 2. Add format to `SupportedCGMFormat` enum in `src/cgm_format/interface/cgm_interface.py`
-3. Add detection patterns and implement parsing in `src/cgm_format/format_converter.py`
-4. Add tests in `tests/test_format_converter.py`
+3. Add detection patterns and implement parsing in `src/cgm_format/format_parser.py`
+4. Add tests in `tests/test_format_parser.py`
 
 ## Requirements
 

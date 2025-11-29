@@ -14,20 +14,20 @@ uv run pytest tests/
 uv run pytest tests/ -v
 
 # Run specific test file
-uv run pytest tests/test_format_converter.py
+uv run pytest tests/test_format_parser.py
 
 # Run specific test class
-uv run pytest tests/test_format_converter.py::TestFormatDetection
+uv run pytest tests/test_format_parser.py::TestFormatDetection
 
 # Run specific test
-uv run pytest tests/test_format_converter.py::TestFormatDetection::test_all_files_detected
+uv run pytest tests/test_format_parser.py::TestFormatDetection::test_all_files_detected
 ```
 
 ## Test Coverage
 
-### test_format_converter.py
+### test_format_parser.py
 
-Comprehensive tests for the format_converter module:
+Comprehensive tests for the format_parser module:
 
 1. **TestFormatDetection** - Tests format detection for all 37 data files
 2. **TestUnifiedParsing** - Tests parsing to unified format with schema validation

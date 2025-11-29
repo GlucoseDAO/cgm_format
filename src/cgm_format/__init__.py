@@ -19,10 +19,8 @@ Quick Start:
     >>> inference_df, warnings = processor.prepare_for_inference(processed_df)
 """
 
-from cgm_format.format_converter import FormatParser
+from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
-
-__version__ = "0.2.2"
 
 __all__ = [
     "FormatParser",

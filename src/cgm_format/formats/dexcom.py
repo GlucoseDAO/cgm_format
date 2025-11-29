@@ -298,7 +298,7 @@ def regenerate_schema_json() -> None:
     Run this after modifying enums or schema to keep dexcom.json in sync:
         python3 -c "from formats.dexcom import regenerate_schema_json; regenerate_schema_json()"
     """
-    from interface.schema import regenerate_schema_json as _regenerate
+    from cgm_format.interface.schema import regenerate_schema_json as _regenerate
     _regenerate(DEXCOM_SCHEMA, __file__)
     
     

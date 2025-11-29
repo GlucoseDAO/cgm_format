@@ -17,11 +17,10 @@ Vendor CSV → Parse → Unified Format → Interpolate → Synchronize → Infe
 ## Quick Start: End-to-End Inference Pipeline
 
 ```python
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
-unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 
 # Stage 4-5: Process for inference
 processor = FormatProcessor(
@@ -56,16 +55,32 @@ model_predictions = your_model.predict(inference_df)
 
 The `FormatParser` handles all vendor-specific quirks and converts to unified format.
 
-#### Parse from File (Automatic Detection)
+#### Parse from File (Recommended)
 
 ```python
 from cgm_format import FormatParser
 
 # Automatically detects Dexcom, Libre, or Unified format
-unified_df = FormatParser.parse_from_file("path/to/cgm_export.csv")
+unified_df = FormatParser.parse_file("path/to/cgm_export.csv")
 
 print(f"Parsed {len(unified_df)} data points")
 print(unified_df.head())
+```
+
+#### Parse from Base64 (Web APIs)
+
+```python
+from cgm_format import FormatParser
+
+# Useful for web applications that receive base64-encoded CSV uploads
+base64_data = request.form['cgm_file']  # Base64 string from web form
+unified_df = FormatParser.parse_base64(base64_data)
+
+# Or handle data URIs
+data_uri = "data:text/csv;base64,Q29udGVudCxIZXJl..."
+if data_uri.startswith("data:"):
+    base64_part = data_uri.split(",")[1]
+    unified_df = FormatParser.parse_base64(base64_part)
 ```
 
 #### Parse with Manual Stages (Advanced)
@@ -109,6 +124,43 @@ out_of_range_count = unified_df.filter(
 
 print(f"Found {out_of_range_count} out-of-range readings")
 ```
+
+### Splitting Glucose and Events
+
+For workflows that need to process glucose readings separately from other events (insulin, carbs, exercise):
+
+```python
+from cgm_format import FormatParser, FormatProcessor
+
+# Parse data with multiple event types
+unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
+
+# Split into glucose readings and other events
+glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
+
+# glucose_df contains: EGV_READ and IMPUTATION events
+# events_df contains: INSULIN_FAST, INSULIN_SLOW, CARBS, EXERCISE, CALIBRATION, etc.
+
+# Process glucose data for inference
+processor = FormatProcessor()
+glucose_df = processor.interpolate_gaps(glucose_df)
+inference_df, warnings = processor.prepare_for_inference(glucose_df)
+
+# Analyze events separately
+import polars as pl
+insulin_doses = events_df.filter(
+    pl.col('event_type').str.contains('INSULIN')
+).select(['datetime', 'insulin_fast', 'insulin_slow'])
+
+carb_intake = events_df.filter(
+    pl.col('event_type') == 'CARBS'
+).select(['datetime', 'carbs'])
+```
+
+**When to use:**
+- Separate analysis of glucose trends vs. event correlations
+- Models that process glucose and events in different pathways
+- Research workflows requiring independent glucose/event statistics
 
 ### Stage 4: Gap Interpolation and Sequence Creation
 
@@ -295,7 +347,7 @@ results = []
 for csv_file in data_dir.glob("*.csv"):
     try:
         # Parse and process
-        unified_df = FormatParser.parse_from_file(csv_file)
+        unified_df = FormatParser.parse_file(csv_file)
         processed_df = processor.interpolate_gaps(unified_df)
         inference_df, warnings = processor.prepare_for_inference(processed_df)
         
@@ -323,7 +375,7 @@ from cgm_format import FormatProcessor
 import polars as pl
 
 # Parse
-unified_df = FormatParser.parse_from_file("research_data.csv")
+unified_df = FormatParser.parse_file("research_data.csv")
 
 # Custom gap handling: stricter interpolation
 processor = FormatProcessor(
@@ -357,8 +409,7 @@ if warnings:
 ### Workflow 4: Real-Time Inference (Streaming)
 
 ```python
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
 
 class CGMInferenceService:
     def __init__(self):
@@ -367,7 +418,7 @@ class CGMInferenceService:
     def process_new_data(self, csv_bytes: bytes):
         """Process incoming CGM export for immediate inference."""
         try:
-            # Parse
+            # Parse from bytes
             unified_df = FormatParser.parse_from_bytes(csv_bytes)
             
             # Process
@@ -388,10 +439,37 @@ class CGMInferenceService:
             
         except Exception as e:
             return {'error': str(e)}
+    
+    def process_base64_data(self, base64_data: str):
+        """Process base64-encoded CGM data (web upload)."""
+        try:
+            # Parse from base64
+            unified_df = FormatParser.parse_base64(base64_data)
+            
+            # Process
+            processed_df = self.processor.interpolate_gaps(unified_df)
+            inference_df, warnings = self.processor.prepare_for_inference(
+                processed_df,
+                minimum_duration_minutes=60,
+                maximum_wanted_duration=180
+            )
+            
+            return {
+                'data': inference_df,
+                'warnings': warnings,
+                'num_points': len(inference_df),
+                'has_quality_issues': bool(warnings)
+            }
+            
+        except Exception as e:
+            return {'error': str(e)}
 
-# Usage
+# Usage with file bytes
 service = CGMInferenceService()
 result = service.process_new_data(uploaded_file_bytes)
+
+# Usage with base64
+result = service.process_base64_data(base64_encoded_csv)
 
 if 'error' not in result:
     predictions = model.predict(result['data'])
@@ -409,7 +487,7 @@ from cgm_format.interface.cgm_interface import (
 )
 
 try:
-    unified_df = FormatParser.parse_from_file("data.csv")
+    unified_df = FormatParser.parse_file("data.csv")
     
 except UnknownFormatError as e:
     print(f"Could not detect format: {e}")
@@ -482,7 +560,7 @@ inference_df, warnings = processor.prepare_for_inference(
 import polars as pl
 from cgm_format.formats.unified import UnifiedEventType, Quality
 
-unified_df = FormatParser.parse_from_file("data.csv")
+unified_df = FormatParser.parse_file("data.csv")
 
 # Basic statistics
 print(f"Total records: {len(unified_df)}")
@@ -621,7 +699,7 @@ for seq_id in unique_sequences:
 
 ```python
 # Keep original unified format for auditing
-unified_df = FormatParser.parse_from_file("patient_123.csv")
+unified_df = FormatParser.parse_file("patient_123.csv")
 FormatParser.to_csv_file(unified_df, "archive/patient_123_unified.csv")
 
 # Then process for inference

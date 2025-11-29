@@ -655,25 +655,32 @@ class FormatProcessor(CGMProcessor):
         self,
         dataframe: UnifiedFormat,
         minimum_duration_minutes: int = MINIMUM_DURATION_MINUTES,
-        maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES
+        maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES,
+        glucose_only: bool = False,
+        drop_duplicates: bool = False
     ) -> InferenceResult:
         """Prepare data for inference with data-only DF and warning flags.
         
         Operations performed:
         1. Check for zero valid data points (raises ZeroValidInputError)
         2. Keep only the last (latest) sequence based on most recent timestamps
-        3. Collect warnings based on data quality:
+        3. Filter to glucose-only events if requested (drops non-EGV events before truncation)
+        4. Truncate sequences exceeding maximum_wanted_duration
+        5. Drop duplicate timestamps if requested
+        6. Collect warnings based on truncated data quality:
            - TOO_SHORT: sequence duration < minimum_duration_minutes
            - CALIBRATION: contains calibration events
            - QUALITY: contains ILL or SENSOR_CALIBRATION quality flags
            - IMPUTATION: contains imputed events (already tracked in interpolate_gaps)
-        4. Truncate sequences exceeding maximum_wanted_duration
-        5. Extract data columns only (exclude service columns)
+           - TIME_DUPLICATES: contains non-unique time entries
+        7. Extract data columns only (exclude service columns)
         
         Args:
             dataframe: Fully processed DataFrame in unified format
             minimum_duration_minutes: Minimum required sequence duration
             maximum_wanted_duration: Maximum desired sequence duration (truncates if exceeded)
+            glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE and IMPUTATION)
+            drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             
         Returns:
             Tuple of (data_only_dataframe, warnings)
@@ -705,21 +712,45 @@ class FormatProcessor(CGMProcessor):
                 latest_sequence_id = seq_max_times['sequence_id'][0]
                 dataframe = dataframe.filter(pl.col('sequence_id') == latest_sequence_id)
         
+        # Filter to glucose-only events if requested (before truncation)
+        if glucose_only:
+            dataframe = dataframe.filter(
+                (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) |
+                (pl.col('event_type') == UnifiedEventType.IMPUTATION.value)
+            )
+            
+            # Check if we still have data after filtering
+            if len(dataframe) == 0:
+                raise ZeroValidInputError("No glucose data points after filtering to glucose-only events")
+        
+        # Truncate if exceeding maximum duration (before warning calculations)
+        df_truncated = self._truncate_by_duration(
+            dataframe, 
+            maximum_wanted_duration
+        )
+        
+        # Drop duplicate timestamps if requested
+        if drop_duplicates:
+            df_truncated = df_truncated.unique(subset=['datetime'], keep='first')
+        
+        # NOW calculate warnings on the truncated data
+        
         # Check duration
-        if len(dataframe) > 0:
-            duration_minutes = self._calculate_duration_minutes(dataframe)
+        if len(df_truncated) > 0:
+            duration_minutes = self._calculate_duration_minutes(df_truncated)
             if duration_minutes < minimum_duration_minutes:
                 self._add_warning(ProcessingWarning.TOO_SHORT)
-        
+        else:
+            raise ZeroValidInputError("No data points in the sequence after truncation")
         # Check for calibration events
-        calibration_count = dataframe.filter(
+        calibration_count = df_truncated.filter(
             pl.col('event_type') == UnifiedEventType.CALIBRATION.value
         ).height
         if calibration_count > 0:
             self._add_warning(ProcessingWarning.CALIBRATION)
         
         # Check for quality issues (ILL or SENSOR_CALIBRATION)
-        quality_issues = dataframe.filter(
+        quality_issues = df_truncated.filter(
             (pl.col('quality') == Quality.ILL.value) |
             (pl.col('quality') == Quality.SENSOR_CALIBRATION.value)
         ).height
@@ -727,17 +758,18 @@ class FormatProcessor(CGMProcessor):
             self._add_warning(ProcessingWarning.QUALITY)
         
         # Check for imputed events (may have already been added in interpolate_gaps)
-        imputed_count = dataframe.filter(
+        imputed_count = df_truncated.filter(
             pl.col('event_type') == UnifiedEventType.IMPUTATION.value
         ).height
         if imputed_count > 0 and ProcessingWarning.IMPUTATION not in self._warnings:
             self._add_warning(ProcessingWarning.IMPUTATION)
         
-        # Truncate if exceeding maximum duration
-        df_truncated = self._truncate_by_duration(
-            dataframe, 
-            maximum_wanted_duration
-        )
+        # Check for time duplicates in the final sequence
+        if len(df_truncated) > 0:
+            unique_time_count = df_truncated['datetime'].n_unique()
+            total_count = len(df_truncated)
+            if unique_time_count < total_count:
+                self._add_warning(ProcessingWarning.TIME_DUPLICATES)
         
         # Extract data columns only (exclude service columns)
         data_columns = ['datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
@@ -802,4 +834,46 @@ class FormatProcessor(CGMProcessor):
         truncated_df = dataframe.filter(pl.col('datetime') >= cutoff_time)
         
         return truncated_df
+    
+    @staticmethod
+    def split_glucose_events(unified_df: UnifiedFormat) -> tuple[UnifiedFormat, UnifiedFormat]:
+        """Split UnifiedFormat DataFrame into glucose readings and other events.
+        
+        Divides a single UnifiedFormat DataFrame into two separate UnifiedFormat DataFrames:
+        - Glucose DataFrame: Contains only EGV_READ and IMPUTATION events (glucose readings)
+        - Events DataFrame: Contains all other event types (insulin, carbs, exercise, calibration, etc.)
+        
+        Both output DataFrames maintain the full UnifiedFormat schema with all columns.
+        This is a non-destructive split operation - no data transformation or column coalescing.
+        
+        Args:
+            unified_df: DataFrame in UnifiedFormat with mixed event types
+            
+        Returns:
+            Tuple of (glucose_df, events_df) where:
+            - glucose_df: UnifiedFormat DataFrame with EGV_READ and IMPUTATION events
+            - events_df: UnifiedFormat DataFrame with all other events
+            
+        Examples:
+            >>> # Split mixed data into glucose and events
+            >>> glucose, events = FormatProcessor.split_glucose_events(unified_df)
+            >>> 
+            >>> # Can be chained with other operations
+            >>> unified_df = FormatParser.parse_file("data.csv")
+            >>> glucose, events = FormatProcessor.split_glucose_events(unified_df)
+            >>> glucose = processor.interpolate_gaps(glucose)
+        """
+        # Filter for glucose events (EGV_READ and IMPUTATION)
+        glucose_df = unified_df.filter(
+            (pl.col("event_type") == "EGV_READ") |
+            (pl.col("event_type") == "IMPUTATION")
+        )
+        
+        # Filter for all other events
+        events_df = unified_df.filter(
+            (pl.col("event_type") != "EGV_READ") &
+            (pl.col("event_type") != "IMPUTATION")
+        )
+        
+        return glucose_df, events_df
 

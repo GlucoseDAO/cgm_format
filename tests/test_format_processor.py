@@ -1542,6 +1542,281 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
     assert ProcessingWarning.IMPUTATION in warnings
 
 
+def test_prepare_for_inference_glucose_only():
+    """Test glucose_only flag drops non-EGV events before truncation."""
+    processor = FormatProcessor()
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # Create mixed events: GLUCOSE, CALIBRATION, IMPUTATION
+    for i in range(10):
+        if i == 2:
+            event_type = UnifiedEventType.CALIBRATION.value
+        elif i == 5:
+            event_type = UnifiedEventType.IMPUTATION.value
+        else:
+            event_type = UnifiedEventType.GLUCOSE.value
+            
+        data.append({
+            'sequence_id': 0,
+            'event_type': event_type,
+            'quality': Quality.GOOD.value,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 2,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    df = pl.DataFrame(data)
+    
+    # Test without glucose_only (should keep all events)
+    data_df_all, warnings_all = processor.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=120,
+        glucose_only=False,
+    )
+    
+    # Should have 10 records
+    assert len(data_df_all) == 10
+    
+    # Test with glucose_only (should drop CALIBRATION but keep IMPUTATION)
+    # Create a new processor to reset warnings
+    processor2 = FormatProcessor()
+    data_df_glucose, warnings_glucose = processor2.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=120,
+        glucose_only=True,
+    )
+    
+    # Should have 9 records (10 - 1 CALIBRATION)
+    assert len(data_df_glucose) == 9, f"Expected 9 records, got {len(data_df_glucose)}"
+    
+    # No CALIBRATION warning should be present (it was filtered out)
+    assert ProcessingWarning.CALIBRATION not in processor2.get_warnings()
+
+
+def test_prepare_for_inference_drop_duplicates():
+    """Test drop_duplicates flag removes duplicate timestamps."""
+    processor = FormatProcessor()
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # Create data with duplicate timestamps
+    for i in range(8):
+        data.append({
+            'sequence_id': 0,
+            'event_type': UnifiedEventType.GLUCOSE.value,
+            'quality': Quality.GOOD.value,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 2,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    # Add duplicates at index 3 and 5
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': base_time + timedelta(minutes=15),  # Same as index 3
+        'glucose': 999.0,  # Different value
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': base_time + timedelta(minutes=25),  # Same as index 5
+        'glucose': 888.0,  # Different value
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    df = pl.DataFrame(data)
+    
+    # Test without drop_duplicates (should keep duplicates)
+    data_df_with_dups, warnings_with_dups = processor.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=120,
+        drop_duplicates=False,
+    )
+    
+    # Should have 10 records (with duplicates)
+    assert len(data_df_with_dups) == 10
+    # Should have TIME_DUPLICATES warning
+    assert ProcessingWarning.TIME_DUPLICATES in processor.get_warnings()
+    
+    # Test with drop_duplicates (should remove duplicates)
+    processor2 = FormatProcessor()
+    data_df_no_dups, warnings_no_dups = processor2.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=120,
+        drop_duplicates=True,
+    )
+    
+    # Should have 8 records (duplicates removed)
+    assert len(data_df_no_dups) == 8, f"Expected 8 records after dropping duplicates, got {len(data_df_no_dups)}"
+    # Should NOT have TIME_DUPLICATES warning (duplicates were removed)
+    assert ProcessingWarning.TIME_DUPLICATES not in processor2.get_warnings()
+
+
+def test_prepare_for_inference_time_duplicates_warning():
+    """Test that TIME_DUPLICATES warning is raised for non-unique timestamps."""
+    processor = FormatProcessor()
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # Create data with duplicate timestamps
+    for i in range(5):
+        data.append({
+            'sequence_id': 0,
+            'event_type': UnifiedEventType.GLUCOSE.value,
+            'quality': Quality.GOOD.value,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 2,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    # Add a duplicate timestamp
+    data.append({
+        'sequence_id': 0,
+        'event_type': UnifiedEventType.GLUCOSE.value,
+        'quality': Quality.GOOD.value,
+        'datetime': base_time + timedelta(minutes=10),  # Same as index 2
+        'glucose': 999.0,
+        'carbs': None,
+        'insulin_slow': None,
+        'insulin_fast': None,
+        'exercise': None,
+    })
+    
+    df = pl.DataFrame(data)
+    
+    data_df, warnings = processor.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=120,
+    )
+    
+    # Should have TIME_DUPLICATES warning
+    assert ProcessingWarning.TIME_DUPLICATES in processor.get_warnings()
+    assert (warnings & ProcessingWarning.TIME_DUPLICATES) == ProcessingWarning.TIME_DUPLICATES
+
+
+def test_prepare_for_inference_warnings_after_truncation():
+    """Test that warnings are calculated on truncated data, not before truncation.
+    
+    This is the key bug fix: warnings should only reflect the data that is actually
+    output, not data that was truncated away.
+    """
+    processor = FormatProcessor()
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # Create 60 minutes of data (13 points at 5-minute intervals)
+    for i in range(13):
+        # Add calibration event at the beginning (will be truncated)
+        event_type = UnifiedEventType.CALIBRATION.value if i == 0 else UnifiedEventType.GLUCOSE.value
+        # Add quality issue at the beginning (will be truncated)
+        quality = Quality.ILL.value if i == 1 else Quality.GOOD.value
+        
+        data.append({
+            'sequence_id': 0,
+            'event_type': event_type,
+            'quality': quality,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 10,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    df = pl.DataFrame(data)
+    
+    # Truncate to last 20 minutes - should remove the calibration and quality issue
+    data_df, warnings = processor.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=20,  # Keep only last 20 minutes
+    )
+    
+    # Should have truncated to ~20 minutes (5 points)
+    assert len(data_df) <= 5, f"Expected ~5 records for 20 minutes, got {len(data_df)}"
+    
+    # Should NOT have CALIBRATION warning (it was truncated away)
+    assert ProcessingWarning.CALIBRATION not in processor.get_warnings(), \
+        "CALIBRATION warning should not be present after truncation"
+    
+    # Should NOT have QUALITY warning (it was truncated away)
+    assert ProcessingWarning.QUALITY not in processor.get_warnings(), \
+        "QUALITY warning should not be present after truncation"
+
+
+def test_prepare_for_inference_glucose_only_with_truncation():
+    """Test that glucose_only filtering happens before truncation."""
+    processor = FormatProcessor()
+    
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    data = []
+    
+    # Create 60 minutes of data
+    for i in range(13):
+        # Add calibration events in the middle and at the end
+        if i in [5, 6, 12]:
+            event_type = UnifiedEventType.CALIBRATION.value
+        else:
+            event_type = UnifiedEventType.GLUCOSE.value
+            
+        data.append({
+            'sequence_id': 0,
+            'event_type': event_type,
+            'quality': Quality.GOOD.value,
+            'datetime': base_time + timedelta(minutes=5 * i),
+            'glucose': 100.0 + i * 10,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        })
+    
+    df = pl.DataFrame(data)
+    
+    # First filter to glucose_only, then truncate to last 30 minutes
+    data_df, warnings = processor.prepare_for_inference(
+        df,
+        minimum_duration_minutes=10,
+        maximum_wanted_duration=30,
+        glucose_only=True,
+    )
+    
+    # After filtering out 3 calibration events and truncating to 30 minutes,
+    # we should have no calibration warning
+    assert ProcessingWarning.CALIBRATION not in processor.get_warnings(), \
+        "No CALIBRATION warning should be present with glucose_only=True"
+
+
 if __name__ == "__main__":
     # Allow running as script for quick testing
     pytest.main([__file__, "-v", "-s"])

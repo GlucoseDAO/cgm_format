@@ -268,7 +268,7 @@ def regenerate_schema_json() -> None:
     Run this after modifying enums or schema to keep libre.json in sync:
         python3 -c "from formats.libre import regenerate_schema_json; regenerate_schema_json()"
     """
-    from interface.schema import regenerate_schema_json as _regenerate
+    from cgm_format.interface.schema import regenerate_schema_json as _regenerate
     _regenerate(LIBRE_SCHEMA, __file__)
 
 

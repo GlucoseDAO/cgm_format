@@ -1,4 +1,4 @@
-"""Pytest tests for format_converter module.
+"""Pytest tests for format_parser module.
 
 Tests cover:
 1. Format detection for all files in data/
@@ -34,6 +34,24 @@ def setup_parsed_directory():
     # Cleanup is optional - we keep the parsed files for inspection
 
 
+def is_medtronic_file(file_path: Path) -> bool:
+    """Check if a file is a Medtronic Guardian Connect file.
+    
+    Args:
+        file_path: Path to the CSV file
+        
+    Returns:
+        True if file is Medtronic format, False otherwise
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            # Check first few lines for Guardian Connect marker
+            header = f.read(500).decode('utf-8', errors='ignore')
+            return "Guardian Connect" in header
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="session")
 def all_data_files():
     """Get all CSV files from the data directory."""
@@ -42,15 +60,24 @@ def all_data_files():
     return csv_files
 
 
+@pytest.fixture(scope="session")
+def supported_data_files(all_data_files):
+    """Get CSV files excluding unsupported formats (Medtronic for now)."""
+    supported_files = [f for f in all_data_files if not is_medtronic_file(f)]
+    assert len(supported_files) > 0, f"No supported CSV files found"
+    return supported_files
+
+
 class TestFormatDetection:
     """Test format detection for all data files."""
     
-    def test_all_files_detected(self, all_data_files):
-        """Test that all files can be decoded and format detected."""
+    def test_all_files_detected(self, all_data_files, supported_data_files):
+        """Test that all supported files can be decoded and format detected."""
         failed_files = []
         format_counts = Counter()
+        skipped_files = [f for f in all_data_files if f not in supported_data_files]
         
-        for csv_file in all_data_files:
+        for csv_file in supported_data_files:
             try:
                 # Read raw bytes
                 with open(csv_file, 'rb') as f:
@@ -72,27 +99,34 @@ class TestFormatDetection:
         
         # Report results
         print(f"\n\n=== Format Detection Summary ===")
-        print(f"Total files processed: {len(all_data_files)}")
+        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Skipped (unsupported): {len(skipped_files)}")
+        print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully detected: {sum(format_counts.values())}")
         print(f"Failed: {len(failed_files)}")
         print(f"\nFormat breakdown:")
         for format_type, count in format_counts.most_common():
             print(f"  {format_type.value}: {count} files")
         
+        if skipped_files:
+            print(f"\nSkipped files (unsupported formats):")
+            for f in skipped_files:
+                print(f"  {f.name} (Medtronic Guardian Connect)")
+        
         if failed_files:
             print(f"\nFailed files:")
             for filename, error in failed_files:
                 print(f"  {filename}: {error}")
         
-        # Assert all files were successfully detected
+        # Assert all supported files were successfully detected
         assert len(failed_files) == 0, f"Failed to detect format for {len(failed_files)} files"
-        assert sum(format_counts.values()) == len(all_data_files), "Not all files were detected"
+        assert sum(format_counts.values()) == len(supported_data_files), "Not all supported files were detected"
     
-    def test_format_counts_reasonable(self, all_data_files):
+    def test_format_counts_reasonable(self, supported_data_files):
         """Test that detected formats are reasonable (at least one Dexcom or Libre)."""
         format_counts = Counter()
         
-        for csv_file in all_data_files:
+        for csv_file in supported_data_files:
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
             text_data = FormatParser.decode_raw_data(raw_data)
@@ -110,12 +144,13 @@ class TestFormatDetection:
 class TestUnifiedParsing:
     """Test parsing all files to unified format."""
     
-    def test_parse_all_to_unified(self, all_data_files):
-        """Test that all files can be parsed to unified format."""
+    def test_parse_all_to_unified(self, all_data_files, supported_data_files):
+        """Test that all supported files can be parsed to unified format."""
         failed_files = []
         successful_parses = []
+        skipped_files = [f for f in all_data_files if f not in supported_data_files]
         
-        for csv_file in all_data_files:
+        for csv_file in supported_data_files:
             try:
                 # Read and decode
                 with open(csv_file, 'rb') as f:
@@ -144,28 +179,35 @@ class TestUnifiedParsing:
         
         # Report results
         print(f"\n\n=== Unified Parsing Summary ===")
-        print(f"Total files processed: {len(all_data_files)}")
+        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Skipped (unsupported): {len(skipped_files)}")
+        print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully parsed: {len(successful_parses)}")
         print(f"Failed: {len(failed_files)}")
         print(f"\nSuccessful parses:")
         for csv_file, detected_format, row_count in successful_parses:
             print(f"  {csv_file.name}: {detected_format.value} ({row_count} rows)")
         
+        if skipped_files:
+            print(f"\nSkipped files (unsupported formats):")
+            for f in skipped_files:
+                print(f"  {f.name} (Medtronic Guardian Connect)")
+        
         if failed_files:
             print(f"\nFailed files:")
             for filename, error in failed_files:
                 print(f"  {filename}: {error}")
         
-        # Assert all files were successfully parsed
+        # Assert all supported files were successfully parsed
         assert len(failed_files) == 0, f"Failed to parse {len(failed_files)} files"
-        assert len(successful_parses) == len(all_data_files), "Not all files were parsed"
+        assert len(successful_parses) == len(supported_data_files), "Not all supported files were parsed"
     
-    def test_unified_format_schema(self, all_data_files):
+    def test_unified_format_schema(self, supported_data_files):
         """Test that parsed data has correct schema."""
         expected_columns = ['sequence_id', 'event_type', 'quality', 'datetime', 'glucose', 
                            'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
         
-        for csv_file in all_data_files[:3]:  # Test first 3 files for schema
+        for csv_file in supported_data_files[:3]:  # Test first 3 supported files for schema
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
             text_data = FormatParser.decode_raw_data(raw_data)
@@ -176,9 +218,9 @@ class TestUnifiedParsing:
             assert set(expected_columns) == set(unified_df.columns), \
                 f"Column mismatch in {csv_file.name}: expected {expected_columns}, got {unified_df.columns}"
     
-    def test_datetime_column_type(self, all_data_files):
+    def test_datetime_column_type(self, supported_data_files):
         """Test that datetime column has correct type."""
-        for csv_file in all_data_files[:3]:  # Test first 3 files
+        for csv_file in supported_data_files[:3]:  # Test first 3 supported files
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
             text_data = FormatParser.decode_raw_data(raw_data)
@@ -189,9 +231,9 @@ class TestUnifiedParsing:
             assert unified_df['datetime'].dtype == pl.Datetime, \
                 f"datetime column should be Datetime type in {csv_file.name}, got {unified_df['datetime'].dtype}"
     
-    def test_glucose_values_reasonable(self, all_data_files):
+    def test_glucose_values_reasonable(self, supported_data_files):
         """Test that glucose values are in reasonable range."""
-        for csv_file in all_data_files[:5]:  # Test first 5 files
+        for csv_file in supported_data_files[:5]:  # Test first 5 supported files
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
             text_data = FormatParser.decode_raw_data(raw_data)
@@ -212,12 +254,13 @@ class TestUnifiedParsing:
 class TestSaveToDirectory:
     """Test saving all parsed files to data/parsed/."""
     
-    def test_save_all_parsed_files(self, all_data_files):
-        """Parse all files and save them to data/parsed/."""
+    def test_save_all_parsed_files(self, all_data_files, supported_data_files):
+        """Parse all supported files and save them to data/parsed/."""
         saved_files = []
         failed_files = []
+        skipped_files = [f for f in all_data_files if f not in supported_data_files]
         
-        for csv_file in all_data_files:
+        for csv_file in supported_data_files:
             try:
                 # Parse to unified
                 unified_df = FormatParser.parse_from_file(str(csv_file))
@@ -240,27 +283,34 @@ class TestSaveToDirectory:
         
         # Report results
         print(f"\n\n=== Save to Parsed Directory Summary ===")
-        print(f"Total files processed: {len(all_data_files)}")
+        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Skipped (unsupported): {len(skipped_files)}")
+        print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully saved: {len(saved_files)}")
         print(f"Failed: {len(failed_files)}")
         print(f"\nSaved files:")
         for input_name, output_path, row_count in saved_files:
             print(f"  {input_name} -> {output_path.name} ({row_count} rows)")
         
+        if skipped_files:
+            print(f"\nSkipped files (unsupported formats):")
+            for f in skipped_files:
+                print(f"  {f.name} (Medtronic Guardian Connect)")
+        
         if failed_files:
             print(f"\nFailed files:")
             for filename, error in failed_files:
                 print(f"  {filename}: {error}")
         
-        # Assert all files were successfully saved
+        # Assert all supported files were successfully saved
         assert len(failed_files) == 0, f"Failed to save {len(failed_files)} files"
-        assert len(saved_files) == len(all_data_files), "Not all files were saved"
+        assert len(saved_files) == len(supported_data_files), "Not all supported files were saved"
     
-    def test_parsed_files_can_be_read_back(self, all_data_files):
+    def test_parsed_files_can_be_read_back(self, supported_data_files):
         """Test that saved parsed files can be read back as unified format and match original."""
         failed_comparisons = []
         
-        for csv_file in all_data_files[:5]:  # Test first 5 files for performance
+        for csv_file in supported_data_files[:5]:  # Test first 5 supported files for performance
             try:
                 # Parse and save file
                 original_df = FormatParser.parse_from_file(str(csv_file))
@@ -320,9 +370,9 @@ class TestSaveToDirectory:
 class TestConvenienceMethods:
     """Test convenience parsing methods."""
     
-    def test_parse_from_file(self, all_data_files):
+    def test_parse_from_file(self, supported_data_files):
         """Test parse_from_file convenience method."""
-        csv_file = all_data_files[0]
+        csv_file = supported_data_files[0]
         
         # Test convenience method
         unified_df = FormatParser.parse_from_file(str(csv_file))
@@ -332,9 +382,9 @@ class TestConvenienceMethods:
         assert 'datetime' in unified_df.columns
         assert 'glucose' in unified_df.columns
     
-    def test_parse_from_bytes(self, all_data_files):
+    def test_parse_from_bytes(self, supported_data_files):
         """Test parse_from_bytes convenience method."""
-        csv_file = all_data_files[0]
+        csv_file = supported_data_files[0]
         
         with open(csv_file, 'rb') as f:
             raw_data = f.read()
@@ -347,9 +397,9 @@ class TestConvenienceMethods:
         assert 'datetime' in unified_df.columns
         assert 'glucose' in unified_df.columns
     
-    def test_parse_from_string(self, all_data_files):
+    def test_parse_from_string(self, supported_data_files):
         """Test parse_from_string convenience method."""
-        csv_file = all_data_files[0]
+        csv_file = supported_data_files[0]
         
         with open(csv_file, 'rb') as f:
             raw_data = f.read()
@@ -394,9 +444,9 @@ class TestErrorHandling:
 class TestEndToEndPipeline:
     """Test complete end-to-end parsing pipeline."""
     
-    def test_full_pipeline_integration(self, all_data_files):
+    def test_full_pipeline_integration(self, supported_data_files):
         """Test complete pipeline: read -> decode -> detect -> parse -> save."""
-        csv_file = all_data_files[0]
+        csv_file = supported_data_files[0]
         
         # Stage 1: Read raw bytes
         with open(csv_file, 'rb') as f:
@@ -436,6 +486,106 @@ class TestEndToEndPipeline:
         
         # Cleanup test file
         output_path.unlink()
+
+
+class TestInputHelpers:
+    """Test convenience methods for parsing from different input sources."""
+    
+    def test_parse_file(self, supported_data_files):
+        """Test parse_file() convenience method."""
+        csv_file = supported_data_files[0]
+        
+        # Parse directly from file path
+        unified_df = FormatParser.parse_file(csv_file)
+        
+        # Verify result
+        assert isinstance(unified_df, pl.DataFrame)
+        assert len(unified_df) > 0
+        assert 'datetime' in unified_df.columns
+        assert 'glucose' in unified_df.columns
+        assert 'event_type' in unified_df.columns
+    
+    def test_parse_file_with_string_path(self, supported_data_files):
+        """Test parse_file() works with string path."""
+        csv_file = supported_data_files[0]
+        
+        # Convert to string path
+        unified_df = FormatParser.parse_file(str(csv_file))
+        
+        # Verify result
+        assert isinstance(unified_df, pl.DataFrame)
+        assert len(unified_df) > 0
+    
+    def test_parse_file_not_found(self):
+        """Test parse_file() raises FileNotFoundError for non-existent file."""
+        with pytest.raises(FileNotFoundError):
+            FormatParser.parse_file("nonexistent_file.csv")
+    
+    def test_parse_base64(self, supported_data_files):
+        """Test parse_base64() convenience method."""
+        import base64
+        
+        csv_file = supported_data_files[0]
+        
+        # Read file and encode to base64
+        with open(csv_file, 'rb') as f:
+            raw_data = f.read()
+        base64_data = base64.b64encode(raw_data).decode('ascii')
+        
+        # Parse from base64
+        unified_df = FormatParser.parse_base64(base64_data)
+        
+        # Verify result
+        assert isinstance(unified_df, pl.DataFrame)
+        assert len(unified_df) > 0
+        assert 'datetime' in unified_df.columns
+        assert 'glucose' in unified_df.columns
+        assert 'event_type' in unified_df.columns
+    
+    def test_parse_base64_invalid(self):
+        """Test parse_base64() raises ValueError for invalid base64."""
+        with pytest.raises(ValueError, match="Failed to decode base64"):
+            FormatParser.parse_base64("not valid base64!@#$%")
+    
+    def test_parse_file_matches_parse_from_bytes(self, supported_data_files):
+        """Test that parse_file() produces same result as parse_from_bytes()."""
+        csv_file = supported_data_files[0]
+        
+        # Parse using parse_file()
+        df1 = FormatParser.parse_file(csv_file)
+        
+        # Parse using parse_from_bytes()
+        with open(csv_file, 'rb') as f:
+            raw_data = f.read()
+        df2 = FormatParser.parse_from_bytes(raw_data)
+        
+        # Compare results
+        assert len(df1) == len(df2)
+        assert df1.columns == df2.columns
+        # Compare actual data (allowing for minor differences in parsing)
+        assert df1.select('datetime', 'glucose').equals(df2.select('datetime', 'glucose'))
+    
+    def test_parse_base64_matches_parse_from_bytes(self, supported_data_files):
+        """Test that parse_base64() produces same result as parse_from_bytes()."""
+        import base64
+        
+        csv_file = supported_data_files[0]
+        
+        # Read file
+        with open(csv_file, 'rb') as f:
+            raw_data = f.read()
+        
+        # Parse using parse_base64()
+        base64_data = base64.b64encode(raw_data).decode('ascii')
+        df1 = FormatParser.parse_base64(base64_data)
+        
+        # Parse using parse_from_bytes()
+        df2 = FormatParser.parse_from_bytes(raw_data)
+        
+        # Compare results
+        assert len(df1) == len(df2)
+        assert df1.columns == df2.columns
+        assert df1.select('datetime', 'glucose').equals(df2.select('datetime', 'glucose'))
 
 
 if __name__ == "__main__":

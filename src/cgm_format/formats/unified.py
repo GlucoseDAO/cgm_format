@@ -12,6 +12,8 @@ from cgm_format.interface.schema import (
     EnumLiteral,
 )
 
+# TODO: support truncated form of UnifiedFormat without service columns
+
 # =============================================================================
 # File Format Constants
 # =============================================================================
@@ -180,6 +182,6 @@ def regenerate_schema_json() -> None:
     Run this after modifying enums or schema to keep unified.json in sync:
         python3 -c "from formats.unified import regenerate_schema_json; regenerate_schema_json()"
     """
-    from interface.schema import regenerate_schema_json as _regenerate
+    from cgm_format.interface.schema import regenerate_schema_json as _regenerate
     _regenerate(CGM_SCHEMA, __file__)
 

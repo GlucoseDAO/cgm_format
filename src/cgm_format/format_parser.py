@@ -4,6 +4,8 @@ from typing import Dict, List, Union
 from io import StringIO
 from typing import Union
 import polars as pl
+from pathlib import Path
+from base64 import b64decode   
 
 
 from cgm_format.interface.cgm_interface import (
@@ -645,4 +647,54 @@ class FormatParser(CGMParser):
         parser = cls()
         format_type = parser.detect_format(text_data)
         return parser.parse_to_unified(text_data, format_type)
+    
+    @classmethod
+    def parse_file(cls, file_path: Union[str, Path]) -> UnifiedFormat:
+        """Parse CGM data from file path.
+        
+        Convenience method that reads file and parses to unified format.
+        Automatically detects format and handles encoding.
+        
+        Args:
+            file_path: Path to CGM data file (CSV format)
+            
+        Returns:
+            DataFrame in unified format
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        
+        file_path = Path(file_path)
+        with open(file_path, 'rb') as f:
+            raw_data = f.read()
+        
+        return cls.parse_from_bytes(raw_data)
+    
+    @classmethod
+    def parse_base64(cls, base64_data: str) -> UnifiedFormat:
+        """Parse CGM data from base64 encoded string.
+        
+        Useful for web API endpoints that receive base64 encoded CSV data.
+        Automatically decodes base64, detects format, and parses to unified format.
+        
+        Args:
+            base64_data: Base64 encoded CSV data string
+            
+        Returns:
+            DataFrame in unified format
+            
+        Raises:
+            ValueError: If base64 decoding fails
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """        
+        try:
+            raw_data = b64decode(base64_data)
+        except Exception as e:
+            raise ValueError(f"Failed to decode base64 data: {e}")
+        
+        return cls.parse_from_bytes(raw_data)
 

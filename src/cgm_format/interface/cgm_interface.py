@@ -45,6 +45,7 @@ class ProcessingWarning(Flag):
     CALIBRATION = auto()  # Output sequence contains calibration events
     QUALITY = auto()  # Contains ill or sensor calibration events
     IMPUTATION = auto()  # Contains imputed gaps
+    TIME_DUPLICATES = auto()  # Sequence contains non-unique time entries
 
 # Simple tuple return types
 ValidationResult = Tuple[pl.DataFrame, int, int]  # (dataframe, bad_rows, valid_rows)
@@ -202,12 +203,16 @@ class CGMProcessor(ABC):
         self,
         dataframe: UnifiedFormat,
         minimum_duration_minutes: int = MINIMUM_DURATION_MINUTES,
-        maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES
+        maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES,
+        glucose_only: bool = False,
+        drop_duplicates: bool = False
     ) -> InferenceResult:
         """Prepare data for inference with data-only DF and warning flags.
         
-        - Truncate to data columns only (exclude service columns)
+        - Filter to glucose-only events if requested (drops non-EGV events)
         - Truncate sequences exceeding maximum_wanted_duration
+        - Drop duplicate timestamps if requested
+        - Truncate to data columns only (exclude service columns)
         - Raise global output warning flags based on individual row quality
         - Check minimum duration requirements
         
@@ -215,6 +220,8 @@ class CGMProcessor(ABC):
             dataframe: Fully processed DataFrame in unified format
             minimum_duration_minutes: Minimum required sequence duration
             maximum_wanted_duration: Maximum desired sequence duration (truncates if exceeded)
+            glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE and IMPUTATION)
+            drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             
         Returns:
             Tuple of (data_only_dataframe, warnings)

@@ -193,15 +193,12 @@ class TestLibreColumnOrder:
         schema_dict = LIBRE_SCHEMA.to_frictionless_schema()
         field_names = [f["name"] for f in schema_dict["fields"]]
         
-        # Verify key columns are in correct positions
+        # Verify key columns are in correct positions (matching actual CSV file)
+        # Actual Libre CSV header: Device, Serial Number, Device Timestamp, Record Type, ...
         assert field_names[0] == "Device"
         assert field_names[1] == "Serial Number"
-        assert field_names[2] == "Record Type"
-        
-        # Device Timestamp should come after service columns
-        assert "Device Timestamp" in field_names
-        device_timestamp_idx = field_names.index("Device Timestamp")
-        assert device_timestamp_idx > 2  # After Device, Serial Number, Record Type
+        assert field_names[2] == "Device Timestamp"
+        assert field_names[3] == "Record Type"
 
 
 class TestSchemaValidation:

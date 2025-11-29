@@ -221,10 +221,11 @@ class CGMSchemaDefinition:
         if effective_primary_key:
             schema["primaryKey"] = effective_primary_key
         
-        # Use provided dialect, or fall back to auto-generated dialect
-        effective_dialect = dialect if dialect is not None else self._dialect
-        if effective_dialect:
-            schema["dialect"] = effective_dialect
+        # Only include dialect if explicitly provided by caller
+        # The auto-generated _dialect is available via get_dialect() but not included by default
+        # to keep schema output clean when dialect is not needed
+        if dialect is not None:
+            schema["dialect"] = dialect
         
         return schema
     
