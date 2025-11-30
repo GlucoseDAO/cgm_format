@@ -871,7 +871,12 @@ class FormatProcessor(CGMProcessor):
         return truncated_df
     
     @staticmethod
-    def to_data_only_df(unified_df: UnifiedFormat, drop_duplicates: bool = False, glucose_only: bool = False) -> pl.DataFrame:
+    def to_data_only_df(
+            unified_df: UnifiedFormat,
+            drop_service_columns: bool = True,
+            drop_duplicates: bool = False, 
+            glucose_only: bool = False
+        ) -> pl.DataFrame:
         """Strip service columns from UnifiedFormat, keeping only data columns for ML models.
         
         This is a small optional pipeline-terminating function that removes metadata columns
@@ -888,22 +893,13 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             unified_df: DataFrame in UnifiedFormat with all columns
+            drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
             drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
 
         Returns:
             DataFrame with only data columns (no service/metadata columns)
             
-        Examples:
-            >>> # After processing, strip service columns for ML model
-            >>> unified_df, warnings = processor.prepare_for_inference(processed_df)
-            >>> data_only_df = FormatProcessor.to_data_only_df(unified_df)
-            >>> model.predict(data_only_df)
-            >>> 
-            >>> # Or keep full format for further analysis
-            >>> unified_df, warnings = processor.prepare_for_inference(processed_df)
-            >>> # Analyze quality flags, event types, etc.
-            >>> quality_issues = unified_df.filter(pl.col('quality') == 'ILL')
         """
         # Extract data column names from schema definition
 
@@ -915,8 +911,11 @@ class FormatProcessor(CGMProcessor):
         if drop_duplicates:
             unified_df = unified_df.unique(subset=['datetime'], keep='first')
 
-        data_columns = [col['name'] for col in CGM_SCHEMA.data_columns]
-        return unified_df.select(data_columns)
+        if drop_service_columns:
+            data_columns = [col['name'] for col in CGM_SCHEMA.data_columns]
+            unified_df = unified_df.select(data_columns)
+
+        return unified_df
     
     @staticmethod
     def split_glucose_events(unified_df: UnifiedFormat) -> Tuple[UnifiedFormat, UnifiedFormat]:
