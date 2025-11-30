@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cgm-format"
-version = "0.3.7"
+version = "0.4.0"
 description = "Unified CGM data format converter for ML training and inference"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = {file = "LICENSE"}
 dependencies = [
     "polars>=1.34.0",

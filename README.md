@@ -112,7 +112,7 @@ The library converts all vendor formats to a standardized schema with two types 
 |--------|------|-------------|
 | `sequence_id` | `Int64` | Unique sequence identifier |
 | `event_type` | `Utf8` | Event type (8-char code: EGV_READ, INS_FAST, CARBS_IN, etc.) |
-| `quality` | `Int64` | Data quality (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION) |
+| `quality` | `Int64` | Data quality flags (bitwise): 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE |
 
 ### Data Columns
 
@@ -200,7 +200,7 @@ processed_df = processor.interpolate_gaps(unified_df)
 1. **Gap Detection**: Identifies gaps in continuous glucose monitoring data
 2. **Sequence Creation**: Splits data at large gaps (>15 min default) into separate sequences
 3. **Small Gap Interpolation**: Fills small gaps (≤15 min) with linearly interpolated glucose values
-4. **Calibration Marking**: Marks 24-hour periods after gaps ≥2h45m as `Quality.SENSOR_CALIBRATION`
+4. **Calibration Marking**: Marks 24-hour periods after gaps ≥2h45m with `SENSOR_CALIBRATION` quality flag
 5. **Warning Collection**: Tracks imputation events via `ProcessingWarning.IMPUTATION`
 
 **Example - Analyze sequences created:**
@@ -266,7 +266,7 @@ from cgm_format.interface.cgm_interface import ProcessingWarning
 if warnings & ProcessingWarning.TOO_SHORT:
     print("Warning: Sequence shorter than minimum duration")
 if warnings & ProcessingWarning.QUALITY:
-    print("Warning: Data contains quality issues (ILL or SENSOR_CALIBRATION)")
+    print("Warning: Data contains quality issues (OUT_OF_RANGE or SENSOR_CALIBRATION)")
 if warnings & ProcessingWarning.IMPUTATION:
     print("Warning: Data contains interpolated values")
 ```
@@ -345,7 +345,7 @@ df = df.with_columns(cast_exprs)
 
 # Use enums
 event = UnifiedEventType.GLUCOSE  # "EGV_READ"
-quality = Quality.GOOD            # 0
+quality = 0                       # GOOD_QUALITY (no flags)
 ```
 
 ### Batch Processing with Inference Preparation
@@ -509,8 +509,8 @@ The current implementation:
 - Time difference calculation between consecutive readings
 - Sequence boundary detection (gaps > `small_gap_max_minutes`)
 - Linear interpolation for small gaps (≤ `small_gap_max_minutes`)
-- Imputation event creation with `event_type='IMPUTATN'`
-- Calibration period marking (24h after gaps ≥ 2h45m)
+- Imputation row creation with `Quality.IMPUTATION` flag
+- Calibration period marking (24h after gaps ≥ 2h45m) with `Quality.SENSOR_CALIBRATION` flag
 - Warning collection for imputed data
 
 **Stage 5 (FormatProcessor.synchronize_timestamps):**
@@ -524,7 +524,7 @@ The current implementation:
 - Zero-data validation (raises `ZeroValidInputError`)
 - Latest sequence selection (max timestamp)
 - Duration verification with `TOO_SHORT` warning
-- Quality flag detection (`ILL`, `SENSOR_CALIBRATION`)
+- Quality flag detection (`OUT_OF_RANGE`, `SENSOR_CALIBRATION`)
 - Sequence truncation from beginning (preserves most recent data)
 - Service column removal (data columns only)
 - Warning flag aggregation and return
@@ -597,9 +597,11 @@ The `FormatProcessor` collects quality warnings during processing:
 | Warning Flag | Description | Triggered By |
 |--------------|-------------|--------------|
 | `ProcessingWarning.TOO_SHORT` | Sequence duration < minimum_duration_minutes | `prepare_for_inference()` |
-| `ProcessingWarning.QUALITY` | Data contains ILL or SENSOR_CALIBRATION quality flags | `prepare_for_inference()` |
-| `ProcessingWarning.IMPUTATION` | Data contains interpolated values | `interpolate_gaps()` |
-| `ProcessingWarning.CALIBRATION` | Data contains calibration events | `prepare_for_inference()` |
+| `ProcessingWarning.QUALITY` | Data contains OUT_OF_RANGE or SENSOR_CALIBRATION quality flags | `prepare_for_inference()` |
+| `ProcessingWarning.OUT_OF_RANGE` | Data contains OUT_OF_RANGE quality flag | `prepare_for_inference()` |
+| `ProcessingWarning.IMPUTATION` | Data contains IMPUTATION quality flag | `interpolate_gaps()` |
+| `ProcessingWarning.CALIBRATION` | Data contains SENSOR_CALIBRATION quality flag | `prepare_for_inference()` |
+| `ProcessingWarning.TIME_DUPLICATES` | Data contains TIME_DUPLICATE quality flag | `prepare_for_inference()` |
 
 **Usage:**
 

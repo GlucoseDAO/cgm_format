@@ -111,18 +111,17 @@ unified_df = FormatParser.parse_to_unified(text_data, format_type)
 
 ```python
 from cgm_format import FormatParser
+from cgm_format.formats.unified import Quality
 
 # Dexcom marks out-of-range readings as "High" or "Low"
 # These are replaced with numeric placeholders (default: 401, 39 mg/dL)
-# and marked as Quality.ILL to indicate sensor error
+# and marked with the OUT_OF_RANGE quality flag
 
 unified_df = FormatParser.parse_from_file("dexcom_export.csv")
 
 # Check for out-of-range readings
-from cgm_format.formats.unified import Quality
-
 out_of_range_count = unified_df.filter(
-    pl.col('quality') == Quality.ILL.value
+    (pl.col('quality') & Quality.OUT_OF_RANGE.value) != 0
 ).height
 
 print(f"Found {out_of_range_count} out-of-range readings")
@@ -219,14 +218,14 @@ for row in sequence_info.iter_rows(named=True):
 
 #### Calibration Period Marking
 
-After large gaps (≥2h 45min), the next 24 hours are marked as `Quality.SENSOR_CALIBRATION`:
+After large gaps (≥2h 45min), the next 24 hours are marked with the `SENSOR_CALIBRATION` quality flag:
 
 ```python
 from cgm_format.formats.unified import Quality
 from cgm_format.interface.cgm_interface import CALIBRATION_GAP_THRESHOLD
 
 calibration_points = processed_df.filter(
-    pl.col('quality') == Quality.SENSOR_CALIBRATION.value
+    (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) != 0
 ).height
 
 print(f"Calibration period points: {calibration_points}")

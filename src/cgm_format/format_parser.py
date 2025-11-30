@@ -163,13 +163,12 @@ class FormatParser(CGMParser):
             MalformedDataError: If CSV is unparseable, zero valid rows, or conversion fails
         """
 
-        parser = cls()
         if format_type == SupportedCGMFormat.UNIFIED_CGM:
-            return parser._process_unified(text_data)
+            return cls._process_unified(text_data)
         elif format_type == SupportedCGMFormat.DEXCOM:
-            return parser._process_dexcom(text_data)
+            return cls._process_dexcom(text_data)
         elif format_type == SupportedCGMFormat.LIBRE:
-            return parser._process_libre(text_data)
+            return cls._process_libre(text_data)
         
         raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
     
@@ -205,7 +204,39 @@ class FormatParser(CGMParser):
         
         raise MalformedDataError(f"Could not parse timestamps with any known format: {formats}")
     
-    def _process_unified(self, text_data: str) -> UnifiedFormat:
+    @staticmethod
+    def _mark_time_duplicates(df: pl.DataFrame) -> pl.DataFrame:
+        """Mark events with duplicate timestamps (keeping first occurrence).
+        
+        Uses keepfirst logic: the first event at a timestamp is kept clean,
+        subsequent events with the same timestamp are marked with TIME_DUPLICATE flag.
+        
+        Args:
+            df: DataFrame in unified format (must have 'datetime' and 'quality' columns)
+            
+        Returns:
+            DataFrame with TIME_DUPLICATE flag added to quality column for duplicate timestamps
+        """
+        if len(df) == 0:
+            return df
+        
+        # For each datetime, mark which rows are duplicates (all but the first)
+        # is_duplicated() returns True for ALL occurrences including the first
+        # We use is_first_distinct() to find the first occurrence
+        df_marked = df.with_columns([
+            pl.when(
+                pl.col("datetime").is_duplicated() & 
+                ~pl.col("datetime").is_first_distinct()
+            )
+            .then(pl.col("quality") | Quality.TIME_DUPLICATE.value)
+            .otherwise(pl.col("quality"))
+            .alias("quality")
+        ])
+        
+        return df_marked
+    
+    @staticmethod
+    def _process_unified(text_data: str) -> UnifiedFormat:
         """Process data already in unified format (validation only).
         
         Args:
@@ -238,13 +269,16 @@ class FormatParser(CGMParser):
             if len(df) == 0:
                 raise MalformedDataError("No valid data rows found")
             
+            # Mark duplicate timestamps
+            df = FormatParser._mark_time_duplicates(df)
+            
             return df
             
         except pl.exceptions.PolarsError as e:
             raise MalformedDataError(f"Failed to parse unified format CSV: {e}")
     
+    @staticmethod
     def _process_dexcom(
-        self, 
         text_data: str, 
         high_glucose_value: int = DEXCOM_HIGH_GLUCOSE_DEFAULT, 
         low_glucose_value: int = DEXCOM_LOW_GLUCOSE_DEFAULT
@@ -279,7 +313,7 @@ class FormatParser(CGMParser):
             df = df.rename({col: col.strip().replace('"', '').replace('"', '') for col in df.columns})
             
             # Probe timestamp format once for this file
-            timestamp_format = self._probe_timestamp_format(df, DexcomColumn.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
+            timestamp_format = FormatParser._probe_timestamp_format(df, DexcomColumn.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
             
             # Process EGV (glucose) rows
             egv_data = (df
@@ -307,11 +341,11 @@ class FormatParser(CGMParser):
                     .str.replace("Low", str(low_glucose_value))
                     .cast(pl.Float64, strict=False)
                     .alias("glucose"),
-                    # Mark out-of-range readings as ILL quality (sensor error, not real data)
+                    # Mark out-of-range readings with OUT_OF_RANGE flag (sensor error, not real data)
                     # Values of 50 or 400 mg/dL would indicate severe hypo/hyperglycemia
                     pl.when(pl.col("is_out_of_range"))
-                    .then(pl.lit(Quality.ILL.value))
-                    .otherwise(pl.lit(Quality.GOOD.value))
+                    .then(pl.lit(Quality.OUT_OF_RANGE.value))
+                    .otherwise(pl.lit(0))  # 0 = GOOD (no flags)
                     .alias("quality"),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
                 ])
@@ -337,7 +371,7 @@ class FormatParser(CGMParser):
                     .then(pl.lit(UnifiedEventType.INSULIN_SLOW.value))
                     .otherwise(pl.lit(UnifiedEventType.INSULIN_FAST.value))
                     .alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
                 .with_columns([
                     pl.when(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value)
@@ -362,7 +396,7 @@ class FormatParser(CGMParser):
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
                     pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
             
@@ -389,7 +423,7 @@ class FormatParser(CGMParser):
                     .then(pl.lit(UnifiedEventType.EXERCISE_HEAVY.value))
                     .otherwise(pl.lit(UnifiedEventType.EXERCISE_MEDIUM.value))
                     .alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
                 .drop(["duration_str", "subtype"])
             )
@@ -426,12 +460,16 @@ class FormatParser(CGMParser):
             if len(unified) == 0:
                 raise MalformedDataError("No valid data rows found after processing")
             
+            # Mark duplicate timestamps
+            unified = FormatParser._mark_time_duplicates(unified)
+            
             return unified
             
         except pl.exceptions.PolarsError as e:
             raise MalformedDataError(f"Failed to parse Dexcom CSV: {e}")
     
-    def _process_libre(self, text_data: str) -> UnifiedFormat:
+    @staticmethod
+    def _process_libre(text_data: str) -> UnifiedFormat:
         """Process FreeStyle Libre CSV to unified format.
         
         Args:
@@ -458,7 +496,7 @@ class FormatParser(CGMParser):
             df = df.rename({col: col.strip().replace('"', '').replace('"', '') for col in df.columns})
             
             # Probe timestamp format once for this file
-            timestamp_format = self._probe_timestamp_format(df, LibreColumn.DEVICE_TIMESTAMP, LIBRE_TIMESTAMP_FORMATS)
+            timestamp_format = FormatParser._probe_timestamp_format(df, LibreColumn.DEVICE_TIMESTAMP, LIBRE_TIMESTAMP_FORMATS)
             
             # Process historic glucose data (Record Type = 0)
             glucose_data = (df
@@ -471,7 +509,7 @@ class FormatParser(CGMParser):
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
                     pl.col("glucose").cast(pl.Float64, strict=False),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
             
@@ -492,7 +530,7 @@ class FormatParser(CGMParser):
                     .then(pl.lit(UnifiedEventType.INSULIN_SLOW.value))
                     .otherwise(pl.lit(UnifiedEventType.INSULIN_FAST.value))
                     .alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
             
@@ -506,7 +544,7 @@ class FormatParser(CGMParser):
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
                     pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
-                    pl.lit(Quality.GOOD.value).alias("quality"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
             
@@ -539,6 +577,9 @@ class FormatParser(CGMParser):
             
             if len(unified) == 0:
                 raise MalformedDataError("No valid data rows found after processing")
+            
+            # Mark duplicate timestamps
+            unified = FormatParser._mark_time_duplicates(unified)
             
             return unified
             
@@ -597,10 +638,9 @@ class FormatParser(CGMParser):
             raw_data = f.read()
         
         # Chain all stages
-        parser = cls()
-        text_data = parser.decode_raw_data(raw_data)
-        format_type = parser.detect_format(text_data)
-        return parser.parse_to_unified(text_data, format_type)
+        text_data = cls.decode_raw_data(raw_data)
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
     
     @classmethod
     def parse_from_bytes(cls, raw_data: bytes) -> UnifiedFormat:
@@ -621,10 +661,9 @@ class FormatParser(CGMParser):
             UnknownFormatError: If format cannot be determined
             MalformedDataError: If data cannot be parsed
         """
-        parser = cls()
-        text_data = parser.decode_raw_data(raw_data)
-        format_type = parser.detect_format(text_data)
-        return parser.parse_to_unified(text_data, format_type)
+        text_data = cls.decode_raw_data(raw_data)
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
     
     @classmethod
     def parse_from_string(cls, text_data: str) -> UnifiedFormat:
@@ -644,9 +683,8 @@ class FormatParser(CGMParser):
             UnknownFormatError: If format cannot be determined
             MalformedDataError: If data cannot be parsed
         """
-        parser = cls()
-        format_type = parser.detect_format(text_data)
-        return parser.parse_to_unified(text_data, format_type)
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
     
     @classmethod
     def parse_file(cls, file_path: Union[str, Path]) -> UnifiedFormat:

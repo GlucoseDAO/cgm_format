@@ -18,7 +18,7 @@ from cgm_format.interface.cgm_interface import (
     UnknownFormatError,
     MalformedDataError,
 )
-from cgm_format.formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality, GOOD_QUALITY
 
 
 def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
@@ -116,10 +116,16 @@ def example_2_quality_inspection(file_path: Path) -> None:
     quality_counts = unified_df.group_by('quality').agg(
         pl.count().alias('count')
     )
-    quality_names = {0: "GOOD", 1: "ILL", 2: "SENSOR_CALIBRATION"}
+    quality_flags = {
+        0: "GOOD (no flags)",
+        1: "OUT_OF_RANGE",
+        2: "SENSOR_CALIBRATION",
+        4: "IMPUTATION",
+        8: "TIME_DUPLICATE",
+    }
     for row in quality_counts.iter_rows(named=True):
-        quality_name = quality_names.get(row['quality'], "UNKNOWN")
-        print(f"   {quality_name:20s}: {row['count']:5d} records")
+        quality_name = quality_flags.get(row['quality'], f"FLAG_{row['quality']}")
+        print(f"   {quality_name:25s}: {row['count']:5d} records")
     
     # Process and check impact
     print("\n4. Processing Impact:")
@@ -127,7 +133,7 @@ def example_2_quality_inspection(file_path: Path) -> None:
     processed_df = processor.interpolate_gaps(unified_df)
     
     imputed_count = processed_df.filter(
-        pl.col('event_type') == UnifiedEventType.IMPUTATION.value
+        (pl.col('quality') & Quality.IMPUTATION.value) != 0
     ).height
     print(f"   Records after interpolation: {len(processed_df)}")
     print(f"   Imputed records added: {imputed_count}")
@@ -240,8 +246,8 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     # Filter out imputed and low-quality data
     print("\n3. Filtering for high quality data...")
     high_quality_df = processed_df.filter(
-        (pl.col('event_type') != UnifiedEventType.IMPUTATION.value) &
-        (pl.col('quality') == Quality.GOOD.value)
+        ((pl.col('quality') & Quality.IMPUTATION.value) == 0) &
+        (pl.col('quality') == GOOD_QUALITY.value)
     )
     
     filtered_count = len(processed_df) - len(high_quality_df)
@@ -314,7 +320,7 @@ def example_5_format_detection(file_path: Path) -> None:
     # Format-specific information
     if format_type.name == "DEXCOM":
         print("\n6. Dexcom-specific checks:")
-        out_of_range = unified_df.filter(pl.col('quality') == Quality.ILL.value).height
+        out_of_range = unified_df.filter((pl.col('quality') & Quality.OUT_OF_RANGE.value) != 0).height
         print(f"   Out-of-range readings (High/Low): {out_of_range}")
         
     elif format_type.name == "LIBRE":

@@ -11,7 +11,7 @@ from cgm_format.interface.cgm_interface import (
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
 )
-from cgm_format.formats.unified import UnifiedEventType, Quality
+from cgm_format.formats.unified import UnifiedEventType, Quality, GOOD_QUALITY
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def sample_unified_data() -> pl.DataFrame:
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -48,7 +48,7 @@ def sample_data_with_gaps() -> pl.DataFrame:
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -62,7 +62,7 @@ def sample_data_with_gaps() -> pl.DataFrame:
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+        'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=25),
         'glucose': 110.0,
         'carbs': None,
@@ -81,7 +81,7 @@ def sample_data_with_quality_issues() -> pl.DataFrame:
     
     data = []
     for i in range(5):
-        quality = Quality.ILL.value if i == 2 else Quality.GOOD.value
+        quality = Quality.OUT_OF_RANGE.value if i == 2 else GOOD_QUALITY.value
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
@@ -182,7 +182,7 @@ def test_synchronize_timestamps_no_sequence_id():
     for i in range(3):
         data.append({
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -212,7 +212,7 @@ def test_synchronize_timestamps_with_large_gap():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0,
             'carbs': None,
@@ -225,7 +225,7 @@ def test_synchronize_timestamps_with_large_gap():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=30),
         'glucose': 110.0,
         'carbs': None,
@@ -256,7 +256,7 @@ def test_synchronize_timestamps_glucose_interpolation():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(seconds=seconds_offset),
             'glucose': 100.0 + i * 10,  # 100, 110, 120
             'carbs': None,
@@ -297,7 +297,7 @@ def test_synchronize_timestamps_discrete_events_shifted():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': carbs_value,
@@ -331,7 +331,7 @@ def test_synchronize_timestamps_single_point_sequence():
     data = [{
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+        'quality': GOOD_QUALITY.value,
         'datetime': base_time,
         'glucose': 100.0,
         'carbs': None,
@@ -365,7 +365,7 @@ def test_synchronize_timestamps_multiple_sequences():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -379,7 +379,7 @@ def test_synchronize_timestamps_multiple_sequences():
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=2, minutes=5 * i),
             'glucose': 110.0 + i * 2,
             'carbs': None,
@@ -432,9 +432,9 @@ def test_interpolate_gaps_with_small_gap(sample_data_with_gaps):
     warnings = processor.get_warnings()
     assert ProcessingWarning.IMPUTATION in warnings
     
-    # Check that imputed events were created
+    # Check that imputed events were created (marked with IMPUTATION quality flag)
     imputed_count = result.filter(
-        pl.col('event_type') == UnifiedEventType.IMPUTATION.value
+        (pl.col('quality') & Quality.IMPUTATION.value) != 0
     ).height
     assert imputed_count > 0
 
@@ -470,7 +470,7 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -484,7 +484,7 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=2, minutes=5 * i),
             'glucose': 110.0 + i * 2,
             'carbs': None,
@@ -498,7 +498,7 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
         data.append({
             'sequence_id': 2,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=4, minutes=5 * i),
             'glucose': 120.0 + i * 2,
             'carbs': None,
@@ -537,7 +537,7 @@ def test_prepare_for_inference_single_sequence_unchanged():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -571,7 +571,7 @@ def test_prepare_for_inference_latest_sequence_identification():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0,
             'carbs': None,
@@ -585,7 +585,7 @@ def test_prepare_for_inference_latest_sequence_identification():
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time - timedelta(hours=1) + timedelta(minutes=5 * i),
             'glucose': 110.0,
             'carbs': None,
@@ -598,7 +598,7 @@ def test_prepare_for_inference_latest_sequence_identification():
     data.append({
         'sequence_id': 2,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time - timedelta(hours=2),
         'glucose': 120.0,
         'carbs': None,
@@ -609,7 +609,7 @@ def test_prepare_for_inference_latest_sequence_identification():
     data.append({
         'sequence_id': 2,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(hours=2),  # Latest timestamp overall
         'glucose': 125.0,
         'carbs': None,
@@ -674,8 +674,8 @@ def test_prepare_for_inference_with_quality_issues(sample_data_with_quality_issu
         maximum_wanted_duration=120,
     )
     
-    # Should have QUALITY warning
-    assert ProcessingWarning.QUALITY in warnings
+    # Should have OUT_OF_RANGE warning (since fixture has OUT_OF_RANGE quality)
+    assert ProcessingWarning.OUT_OF_RANGE in warnings
 
 
 def test_prepare_for_inference_zero_valid_input():
@@ -686,7 +686,7 @@ def test_prepare_for_inference_zero_valid_input():
     empty_glucose_data = pl.DataFrame({
         'sequence_id': [0, 0],
         'event_type': [UnifiedEventType.GLUCOSE.value] * 2,
-        'quality': [Quality.GOOD.value] * 2,
+        'quality': [GOOD_QUALITY.value] * 2,
         'datetime': [datetime(2024, 1, 1, 12, 0), datetime(2024, 1, 1, 12, 5)],
         'glucose': [None, None],
         'carbs': [None, None],
@@ -756,7 +756,7 @@ def test_prepare_for_inference_truncation_keeps_latest():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 10,  # 100, 110, 120, ..., 220
             'carbs': None,
@@ -815,7 +815,7 @@ def test_prepare_for_inference_with_calibration_events():
         data.append({
             'sequence_id': 0,
             'event_type': event_type,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -845,7 +845,7 @@ def test_prepare_for_inference_with_sensor_calibration_quality():
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
     for i in range(5):
-        quality = Quality.SENSOR_CALIBRATION.value if i == 2 else Quality.GOOD.value
+        quality = Quality.SENSOR_CALIBRATION.value if i == 2 else GOOD_QUALITY.value
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
@@ -866,9 +866,9 @@ def test_prepare_for_inference_with_sensor_calibration_quality():
         maximum_wanted_duration=120,
     )
     
-    # Should have QUALITY warning (SENSOR_CALIBRATION triggers QUALITY warning)
-    assert ProcessingWarning.QUALITY in processor.get_warnings()
-    assert (warnings & ProcessingWarning.QUALITY) == ProcessingWarning.QUALITY
+    # Should have CALIBRATION warning (SENSOR_CALIBRATION triggers CALIBRATION warning)
+    assert ProcessingWarning.CALIBRATION in processor.get_warnings()
+    assert (warnings & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
 
 
 def test_warnings_accumulation():
@@ -910,7 +910,7 @@ def test_sequence_creation_with_no_sequence_id():
     for i in range(3):
         data.append({
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -923,7 +923,7 @@ def test_sequence_creation_with_no_sequence_id():
     # Next point at 30 minutes
     data.append({
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=30),
         'glucose': 110.0,
         'carbs': None,
@@ -959,7 +959,7 @@ def test_large_gap_creates_new_sequence():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -974,7 +974,7 @@ def test_large_gap_creates_new_sequence():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=30 + 5 * i),
             'glucose': 110.0 + i * 2,
             'carbs': None,
@@ -989,7 +989,7 @@ def test_large_gap_creates_new_sequence():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=65 + 5 * i),
             'glucose': 120.0 + i * 2,
             'carbs': None,
@@ -1043,7 +1043,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0,
             'carbs': None,
@@ -1058,7 +1058,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=30 + 5 * i),
             'glucose': 105.0,
             'carbs': None,
@@ -1072,7 +1072,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 2,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=2, minutes=5 * i),
             'glucose': 110.0,
             'carbs': None,
@@ -1087,7 +1087,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 3,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=4, minutes=5 * i),
             'glucose': 120.0,
             'carbs': None,
@@ -1102,7 +1102,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 3,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
             'glucose': 125.0,
             'carbs': None,
@@ -1117,7 +1117,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 3,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
             'glucose': 130.0,
             'carbs': None,
@@ -1131,7 +1131,7 @@ def test_multiple_existing_sequences_with_internal_gaps():
         data.append({
             'sequence_id': 4,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(hours=6, minutes=5 * i),
             'glucose': 140.0,
             'carbs': None,
@@ -1189,7 +1189,7 @@ def test_small_vs_large_gap_handling():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time,
         'glucose': 100.0,
         'carbs': None,
@@ -1202,7 +1202,7 @@ def test_small_vs_large_gap_handling():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=12),
         'glucose': 105.0,
         'carbs': None,
@@ -1215,7 +1215,7 @@ def test_small_vs_large_gap_handling():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=32),
         'glucose': 110.0,
         'carbs': None,
@@ -1240,7 +1240,7 @@ def test_small_vs_large_gap_handling():
     
     # Check for imputation events in first sequence
     imputed_in_seq_0 = seq_0_data.filter(
-        pl.col('event_type') == UnifiedEventType.IMPUTATION.value
+        (pl.col('quality') & Quality.IMPUTATION.value) != 0
     ).height
     assert imputed_in_seq_0 > 0, "Expected imputation events in first sequence"
     
@@ -1272,7 +1272,7 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -1293,7 +1293,7 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,  # Will be changed by interpolate_gaps
+            'quality': GOOD_QUALITY.value,  # Will be changed by interpolate_gaps
             'datetime': point_time,
             'glucose': 110.0 + i * 0.1,
             'carbs': None,
@@ -1330,7 +1330,7 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
     
     # All points in the 24-hour period should be marked as SENSOR_CALIBRATION
     sensor_calibration_count = points_in_calibration_period.filter(
-        pl.col('quality') == Quality.SENSOR_CALIBRATION.value
+        (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) != 0
     ).height
     
     assert sensor_calibration_count == len(points_in_calibration_period), \
@@ -1344,7 +1344,7 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
     
     if len(points_after_calibration_period) > 0:
         good_quality_count = points_after_calibration_period.filter(
-            pl.col('quality') == Quality.GOOD.value
+            (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) == 0
         ).height
         
         assert good_quality_count == len(points_after_calibration_period), \
@@ -1366,7 +1366,7 @@ def test_calibration_gap_exactly_at_threshold():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time,
         'glucose': 100.0,
         'carbs': None,
@@ -1383,7 +1383,7 @@ def test_calibration_gap_exactly_at_threshold():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': gap_end,
         'glucose': 110.0,
         'carbs': None,
@@ -1397,7 +1397,7 @@ def test_calibration_gap_exactly_at_threshold():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': gap_end + timedelta(minutes=5 * i),
             'glucose': 110.0 + i * 0.1,
             'carbs': None,
@@ -1420,7 +1420,7 @@ def test_calibration_gap_exactly_at_threshold():
     
     if len(points_after_gap) > 0:
         sensor_calibration_count = points_after_gap.filter(
-            pl.col('quality') == Quality.SENSOR_CALIBRATION.value
+            (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) != 0
         ).height
         
         assert sensor_calibration_count == len(points_after_gap), \
@@ -1442,7 +1442,7 @@ def test_calibration_gap_below_threshold_no_marking():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time,
         'glucose': 100.0,
         'carbs': None,
@@ -1459,7 +1459,7 @@ def test_calibration_gap_below_threshold_no_marking():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': gap_end,
         'glucose': 110.0,
         'carbs': None,
@@ -1478,7 +1478,7 @@ def test_calibration_gap_below_threshold_no_marking():
     
     if len(point_after_gap) > 0:
         good_quality_count = point_after_gap.filter(
-            pl.col('quality') == Quality.GOOD.value
+            (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) == 0
         ).height
         
         assert good_quality_count == len(point_after_gap), \
@@ -1555,25 +1555,23 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
 
 
 def test_prepare_for_inference_glucose_only():
-    """Test glucose_only flag drops non-EGV events before truncation."""
+    """Test that prepare_for_inference works with mixed event types."""
     processor = FormatProcessor()
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
     
-    # Create mixed events: GLUCOSE, CALIBRATION, IMPUTATION
+    # Create mixed events: GLUCOSE, CALIBRATION
     for i in range(10):
         if i == 2:
             event_type = UnifiedEventType.CALIBRATION.value
-        elif i == 5:
-            event_type = UnifiedEventType.IMPUTATION.value
         else:
             event_type = UnifiedEventType.GLUCOSE.value
             
         data.append({
             'sequence_id': 0,
             'event_type': event_type,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -1584,36 +1582,21 @@ def test_prepare_for_inference_glucose_only():
     
     df = pl.DataFrame(data)
     
-    # Test without glucose_only (should keep all events)
-    unified_df_all, warnings_all = processor.prepare_for_inference(
+    # Prepare for inference (should keep all events for now)
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
-        glucose_only=False,
     )
     
     # Should have 10 records
-    assert len(unified_df_all) == 10
-    
-    # Test with glucose_only (should drop CALIBRATION but keep IMPUTATION)
-    # Create a new processor to reset warnings
-    processor2 = FormatProcessor()
-    unified_df_glucose, warnings_glucose = processor2.prepare_for_inference(
-        df,
-        minimum_duration_minutes=10,
-        maximum_wanted_duration=120,
-        glucose_only=True,
-    )
-    
-    # Should have 9 records (10 - 1 CALIBRATION)
-    assert len(unified_df_glucose) == 9, f"Expected 9 records, got {len(unified_df_glucose)}"
-    
-    # No CALIBRATION warning should be present (it was filtered out)
-    assert ProcessingWarning.CALIBRATION not in processor2.get_warnings()
+    assert len(unified_df) == 10
+    # Should detect the calibration event
+    assert ProcessingWarning.CALIBRATION in warnings
 
 
 def test_prepare_for_inference_drop_duplicates():
-    """Test drop_duplicates flag removes duplicate timestamps."""
+    """Test that TIME_DUPLICATES warning is raised for duplicate timestamps."""
     processor = FormatProcessor()
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -1624,7 +1607,7 @@ def test_prepare_for_inference_drop_duplicates():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -1637,7 +1620,7 @@ def test_prepare_for_inference_drop_duplicates():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+        'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=15),  # Same as index 3
         'glucose': 999.0,  # Different value
         'carbs': None,
@@ -1649,7 +1632,7 @@ def test_prepare_for_inference_drop_duplicates():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+        'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=25),  # Same as index 5
         'glucose': 888.0,  # Different value
         'carbs': None,
@@ -1660,32 +1643,17 @@ def test_prepare_for_inference_drop_duplicates():
     
     df = pl.DataFrame(data)
     
-    # Test without drop_duplicates (should keep duplicates)
-    unified_df_with_dups, warnings_with_dups = processor.prepare_for_inference(
+    # Test with duplicates - should keep duplicates and warn
+    unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
-        drop_duplicates=False,
     )
     
     # Should have 10 records (with duplicates)
-    assert len(unified_df_with_dups) == 10
+    assert len(unified_df) == 10
     # Should have TIME_DUPLICATES warning
-    assert ProcessingWarning.TIME_DUPLICATES in processor.get_warnings()
-    
-    # Test with drop_duplicates (should remove duplicates)
-    processor2 = FormatProcessor()
-    unified_df_no_dups, warnings_no_dups = processor2.prepare_for_inference(
-        df,
-        minimum_duration_minutes=10,
-        maximum_wanted_duration=120,
-        drop_duplicates=True,
-    )
-    
-    # Should have 8 records (duplicates removed)
-    assert len(unified_df_no_dups) == 8, f"Expected 8 records after dropping duplicates, got {len(unified_df_no_dups)}"
-    # Should NOT have TIME_DUPLICATES warning (duplicates were removed)
-    assert ProcessingWarning.TIME_DUPLICATES not in processor2.get_warnings()
+    assert ProcessingWarning.TIME_DUPLICATES in warnings
 
 
 def test_prepare_for_inference_time_duplicates_warning():
@@ -1700,7 +1668,7 @@ def test_prepare_for_inference_time_duplicates_warning():
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 2,
             'carbs': None,
@@ -1713,7 +1681,7 @@ def test_prepare_for_inference_time_duplicates_warning():
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=10),  # Same as index 2
         'glucose': 999.0,
         'carbs': None,
@@ -1751,7 +1719,7 @@ def test_prepare_for_inference_warnings_after_truncation():
         # Add calibration event at the beginning (will be truncated)
         event_type = UnifiedEventType.CALIBRATION.value if i == 0 else UnifiedEventType.GLUCOSE.value
         # Add quality issue at the beginning (will be truncated)
-        quality = Quality.ILL.value if i == 1 else Quality.GOOD.value
+        quality = int(Quality.OUT_OF_RANGE.value) if i == 1 else GOOD_QUALITY.value
         
         data.append({
             'sequence_id': 0,
@@ -1787,7 +1755,7 @@ def test_prepare_for_inference_warnings_after_truncation():
 
 
 def test_prepare_for_inference_glucose_only_with_truncation():
-    """Test that glucose_only filtering happens before truncation."""
+    """Test truncation and detection of mixed event types."""
     processor = FormatProcessor()
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -1804,7 +1772,7 @@ def test_prepare_for_inference_glucose_only_with_truncation():
         data.append({
             'sequence_id': 0,
             'event_type': event_type,
-            'quality': Quality.GOOD.value,
+            'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
             'glucose': 100.0 + i * 10,
             'carbs': None,
@@ -1815,18 +1783,15 @@ def test_prepare_for_inference_glucose_only_with_truncation():
     
     df = pl.DataFrame(data)
     
-    # First filter to glucose_only, then truncate to last 30 minutes
+    # Prepare for inference with truncation
     unified_df, warnings = processor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=30,
-        glucose_only=True,
     )
     
-    # After filtering out 3 calibration events and truncating to 30 minutes,
-    # we should have no calibration warning
-    assert ProcessingWarning.CALIBRATION not in processor.get_warnings(), \
-        "No CALIBRATION warning should be present with glucose_only=True"
+    # Should detect calibration events
+    assert ProcessingWarning.CALIBRATION in warnings
 
 
 if __name__ == "__main__":

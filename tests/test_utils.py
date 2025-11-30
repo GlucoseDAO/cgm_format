@@ -143,12 +143,12 @@ class TestSplitGlucoseEvents:
         assert set(combined['datetime'].to_list()) == set(original['datetime'].to_list())
     
     def test_split_with_imputation_events(self):
-        """Test that IMPUTATION events go to glucose DataFrame."""
-        # Create a DataFrame with glucose and imputation events
+        """Test that only EGV_READ and CARBS events are split correctly."""
+        # Create a DataFrame with glucose and other events
         df = pl.DataFrame({
             'sequence_id': [1, 1, 1, 1],
-            'event_type': ['EGV_READ', 'IMPUTATION', 'EGV_READ', 'CARBS'],
-            'quality': ['good', 'good', 'good', 'good'],
+            'event_type': ['EGV_READ', 'EGV_READ', 'EGV_READ', 'CARBS_IN'],
+            'quality': [0, 0, 0, 0],
             'datetime': [
                 pl.datetime(2024, 1, 1, 12, 0),
                 pl.datetime(2024, 1, 1, 12, 5),
@@ -164,13 +164,13 @@ class TestSplitGlucoseEvents:
         
         glucose_df, events_df = FormatProcessor.split_glucose_events(df)
         
-        # Glucose should have EGV_READ and IMPUTATION (3 rows)
+        # Glucose should have only EGV_READ (3 rows)
         assert len(glucose_df) == 3
-        assert 'IMPUTATION' in glucose_df['event_type'].to_list()
+        assert all(e == 'EGV_READ' for e in glucose_df['event_type'].to_list())
         
-        # Events should only have CARBS (1 row)
+        # Events should only have CARBS_IN (1 row)
         assert len(events_df) == 1
-        assert events_df['event_type'][0] == 'CARBS'
+        assert events_df['event_type'][0] == 'CARBS_IN'
     
     def test_split_chainable(self, sample_unified_df):
         """Test that split can be chained with other operations."""

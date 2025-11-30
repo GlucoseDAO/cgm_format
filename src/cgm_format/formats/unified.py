@@ -4,7 +4,7 @@ This module defines the specific schema for the unified CGM data format,
 using the base schema infrastructure from interface.schema.
 """
 
-from enum import Enum
+from enum import Flag, auto
 import polars as pl
 from cgm_format.interface.schema import (
     ColumnSchema,
@@ -82,15 +82,18 @@ class UnifiedEventType(EnumLiteral):
     HEALTH_ALCOHOL = "HLTH_ALC"  # Alcohol consumption
     
     # System events
-    IMPUTATION = "IMPUTATN"  # Imputed/interpolated data
     OTHER = "OTHEREVT"  # Other/unknown event type
 
 
-class Quality(int, Enum):
+class Quality(Flag):
     """Data quality indicator."""
-    GOOD = 0  # Valid, high-quality data
-    ILL = 1  # Out-of-range or flagged values
-    SENSOR_CALIBRATION = 2  # excluded 24hr period after gap ≥ CALIBRATION_GAP_THRESHOLD
+
+    OUT_OF_RANGE = auto()  # Out-of-range or flagged values
+    SENSOR_CALIBRATION = auto()  # excluded 24hr period after gap ≥ CALIBRATION_GAP_THRESHOLD
+    IMPUTATION = auto()  # Imputed/interpolated data
+    TIME_DUPLICATE = auto()  # Event time is non-unique
+
+GOOD_QUALITY = Quality(0)
 
 # CGM Unified Format Schema
 CGM_SCHEMA = CGMSchemaDefinition(

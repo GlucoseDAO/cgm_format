@@ -22,6 +22,7 @@ except ImportError:
 # from schema import EventType, Quality
 
 CALIBRATION_GAP_THRESHOLD = 2*60*60+45*60  # 2 hours and 45 minutes
+CALIBRATION_PERIOD_HOURS = 24
 MINIMUM_DURATION_MINUTES = 60 # minimum expected duration of a sequence for inference
 MAXIMUM_WANTED_DURATION_MINUTES = 480 # maximum duration of a sequence to be included in the inference
 
@@ -42,10 +43,22 @@ class ProcessingWarning(Flag):
     Example: warnings = ProcessingWarning.TOO_SHORT | ProcessingWarning.QUALITY
     """
     TOO_SHORT = auto()  # Minimum duration requirement not met
-    CALIBRATION = auto()  # Output sequence contains calibration events
-    QUALITY = auto()  # Contains ill or sensor calibration events
+    CALIBRATION = auto()  # Output sequence contains calibration events or 24hr period after gap ≥ CALIBRATION_GAP_THRESHOLD
+    OUT_OF_RANGE = auto()  # Contains out-of-range values
     IMPUTATION = auto()  # Contains imputed gaps
     TIME_DUPLICATES = auto()  # Sequence contains non-unique time entries
+    QUALITY = auto()  # Other quality issues
+
+NO_WARNING = ProcessingWarning(0)
+
+class WarningDescription(Enum):
+    """Descriptions of warnings."""
+    TOO_SHORT = "Minimum duration requirement not met"
+    CALIBRATION = "Sequence contains calibration events or 24hr period after gap ≥ CALIBRATION_GAP_THRESHOLD"
+    OUT_OF_RANGE = "Contains out-of-range values"
+    IMPUTATION = "Contains imputed gaps"
+    TIME_DUPLICATES = "Sequence contains non-unique time entries"
+    QUALITY = "Other quality issues"
 
 # Simple tuple return types
 ValidationResult = Tuple[pl.DataFrame, int, int]  # (dataframe, bad_rows, valid_rows)
@@ -185,14 +198,14 @@ class CGMProcessor(ABC):
     def interpolate_gaps(self, dataframe: UnifiedFormat) -> UnifiedFormat:
         """Fill gaps in continuous data with imputed values.
         
-        Adds rows with event_type='impute' for missing data points.
+        Adds rows with Quality.IMPUTATION flag for missing data points.
         Updates ProcessingWarning.IMPUTATION flag if gaps were filled.
         
         Args:
             dataframe: DataFrame with potential gaps
             
         Returns:
-            DataFrame with interpolated values and impute events
+            DataFrame with interpolated values marked with IMPUTATION quality flag
         """
         pass
     
@@ -223,7 +236,7 @@ class CGMProcessor(ABC):
             dataframe: Fully processed DataFrame in unified format
             minimum_duration_minutes: Minimum required sequence duration
             maximum_wanted_duration: Maximum desired sequence duration (truncates if exceeded)
-            glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE and IMPUTATION)
+            glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
             drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             
         Returns:
