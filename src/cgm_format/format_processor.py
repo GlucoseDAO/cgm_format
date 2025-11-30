@@ -208,10 +208,18 @@ class FormatProcessor(CGMProcessor):
         
         # Ensure timestamp precision matches original data (ms vs us) to avoid join errors
         # FormatParser typically produces 'ms', while python datetime list -> Polars defaults to 'us'
-        original_dtype = seq_data.schema['datetime']
-        if fixed_df.schema['datetime'] != original_dtype:
+        original_datetime_dtype = seq_data.schema['datetime']
+        if fixed_df.schema['datetime'] != original_datetime_dtype:
             fixed_df = fixed_df.with_columns(
-                pl.col('datetime').cast(original_dtype)
+                pl.col('datetime').cast(original_datetime_dtype)
+            )
+        
+        # Ensure sequence_id type matches original data to avoid concat errors
+        # Polars may infer UInt32 from Python list, but original may be Int64
+        original_sequence_dtype = seq_data.schema['sequence_id']
+        if fixed_df.schema['sequence_id'] != original_sequence_dtype:
+            fixed_df = fixed_df.with_columns(
+                pl.col('sequence_id').cast(original_sequence_dtype)
             )
         
         # Join with original data to get nearest values
@@ -736,40 +744,60 @@ class FormatProcessor(CGMProcessor):
         if valid_glucose_count == 0:
             raise ZeroValidInputError("No valid glucose data points in the sequence")
         
-        # Keep only the last (latest) sequence
-        # Find the sequence with the most recent (maximum) timestamp
+        # Keep only the last (latest) valid sequence
+        # Try sequences starting from the most recent, fallback to previous ones if invalid
         if 'sequence_id' in dataframe.columns:
-            # Get the maximum datetime for each sequence
-            seq_max_times = dataframe.group_by('sequence_id').agg(
-                pl.col('datetime').max().alias('max_time')
-            ).sort('max_time', descending=True)
+            # Get the maximum datetime for each sequence, sorted by recency
+            seq_max_times = dataframe.group_by('sequence_id').agg([
+                pl.col('datetime').max().alias('max_time'),
+                pl.col('glucose').count().alias('glucose_count')
+            ]).sort('max_time', descending=True)
             
-            # Get the sequence_id with the latest timestamp
-            if len(seq_max_times) > 0:
-                latest_sequence_id = seq_max_times['sequence_id'][0]
-                dataframe = dataframe.filter(pl.col('sequence_id') == latest_sequence_id)
-        
-
+            # Try sequences starting from the most recent
+            df_truncated = None
+            for seq_idx in range(len(seq_max_times)):
+                candidate_seq_id = seq_max_times['sequence_id'][seq_idx]
+                candidate_df = dataframe.filter(pl.col('sequence_id') == candidate_seq_id)
+                
+                # Check if this sequence has glucose data
+                if candidate_df.filter(pl.col('glucose').is_not_null()).height == 0:
+                    continue  # Skip sequences with no glucose data
+                
+                # Try truncating this sequence
+                candidate_truncated = self._truncate_by_duration(
+                    candidate_df, 
+                    maximum_wanted_duration
+                )
+                
+                # Check if truncated sequence meets minimum duration
+                if len(candidate_truncated) > 0:
+                    duration_minutes = self._calculate_duration_minutes(candidate_truncated)
+                    if duration_minutes >= minimum_duration_minutes:
+                        # Found a valid sequence!
+                        df_truncated = candidate_truncated
+                        break
             
-            # Check if we still have data after filtering
-            if len(dataframe) == 0:
-                raise ZeroValidInputError("No glucose data points after filtering to glucose-only events")
-        
-        # Truncate if exceeding maximum duration (before warning calculations)
-        df_truncated = self._truncate_by_duration(
-            dataframe, 
-            maximum_wanted_duration
-        )
+            # If no valid sequence found, raise error
+            if df_truncated is None:
+                raise ZeroValidInputError(
+                    f"No valid sequences found. Tried {len(seq_max_times)} sequences, "
+                    f"none met minimum duration of {minimum_duration_minutes} minutes with glucose data."
+                )
+        else:
+            # No sequence_id column, process entire dataframe
+            df_truncated = self._truncate_by_duration(
+                dataframe, 
+                maximum_wanted_duration
+            )
         
         # NOW calculate warnings on the truncated data
         
-        # Check duration
+        # Check duration (already verified above, but add warning if close to minimum)
         if len(df_truncated) > 0:
             duration_minutes = self._calculate_duration_minutes(df_truncated)
             if duration_minutes < minimum_duration_minutes:
                 self._add_warning(ProcessingWarning.TOO_SHORT)
-        else:
-            raise ZeroValidInputError("No data points in the sequence after truncation")
+        
         # Check for calibration events or SENSOR_CALIBRATION flag
         calibration_count = df_truncated.filter(
             (pl.col('event_type') == UnifiedEventType.CALIBRATION.value) |
