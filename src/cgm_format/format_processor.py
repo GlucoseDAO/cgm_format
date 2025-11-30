@@ -82,9 +82,9 @@ class FormatProcessor(CGMProcessor):
         
         This method should be called after interpolate_gaps() when sequences are already
         created and small gaps are filled. It performs:
-        1. Rounds timestamps to nearest minute (seconds = 00)
+        1. Rounds timestamps to nearest minute using built-in rounding
         2. Creates fixed-frequency timestamps with expected_interval_minutes
-        3. Linearly interpolates glucose values
+        3. Linearly interpolates glucose values (time-weighted)
         4. Shifts discrete events (carbs, insulin, exercise) to nearest timestamps
         
         Args:
@@ -115,9 +115,9 @@ class FormatProcessor(CGMProcessor):
             seq_data = dataframe.filter(pl.col('sequence_id') == seq_id).sort('datetime')
             
             if len(seq_data) < 2:
-                # Keep single-point sequences as-is, just round the timestamp
+                # Keep single-point sequences as-is, just round the timestamp using Polars rounding
                 seq_data = seq_data.with_columns([
-                    pl.col('datetime').dt.truncate('1m').alias('datetime')
+                    pl.col('datetime').dt.round('1m').alias('datetime')
                 ])
                 synchronized_sequences.append(seq_data)
                 continue
@@ -160,34 +160,59 @@ class FormatProcessor(CGMProcessor):
         first_timestamp = seq_data['datetime'].min()
         last_timestamp = seq_data['datetime'].max()
         
-        # Round to nearest minute (remove seconds)
-        # If seconds >= 30, round up; otherwise round down
-        first_second = first_timestamp.second
-        if first_second >= 30:
+        # Use Polars built-in rounding for start alignment as in Gluformer logic
+        # aligned_start = seq_data.select(pl.col('datetime').min().dt.round('1m')).item()
+        # Round to nearest minute in scalar (faster, identical to rounding above)
+        if first_timestamp.second >= 30:
             aligned_start = first_timestamp.replace(second=0, microsecond=0) + timedelta(minutes=1)
         else:
             aligned_start = first_timestamp.replace(second=0, microsecond=0)
         
         # Calculate duration and number of intervals
+        # Ensure we cover the full range from aligned_start up to last_timestamp
         total_duration = (last_timestamp - aligned_start).total_seconds()
-        num_intervals = int(total_duration / (self.expected_interval_minutes * 60)) + 1
+        
+        # We use floor + 1 to ensure we don't overshoot if exact, but cover if partial?
+        # Actually, we want grid points <= last_timestamp.
+        # If total_duration is negative (started after last), num is 0.
+        if total_duration < 0:
+            num_intervals = 0
+        else:
+            num_intervals = int(total_duration / (self.expected_interval_minutes * 60)) + 1
         
         # Create fixed-frequency timestamps
+        # Generate explicitly to ensure strict control
         fixed_timestamps_list = [
             aligned_start + timedelta(minutes=i * self.expected_interval_minutes)
             for i in range(num_intervals)
-            if aligned_start + timedelta(minutes=i * self.expected_interval_minutes) <= last_timestamp
         ]
         
-        # Handle edge case: if no timestamps generated, use aligned_start
-        if not fixed_timestamps_list:
-            fixed_timestamps_list = [aligned_start]
+        # Handle edge case: if list empty or generated points exceed bounds (unlikely with logic above)
+        # Filter to strictly <= last_timestamp to be safe
+        fixed_timestamps_list = [
+            ts for ts in fixed_timestamps_list if ts <= last_timestamp
+        ]
         
+        # If list ended up empty (e.g. short sequence), at least include aligned start if valid
+        if not fixed_timestamps_list:
+             # Only if aligned start is reasonable? 
+             # If seq is [12:00:40, 12:01:00], aligned 12:01.
+             # If seq is [12:00:00], aligned 12:00.
+             fixed_timestamps_list = [aligned_start]
+
         # Create DataFrame with fixed timestamps
         fixed_df = pl.DataFrame({
             'datetime': fixed_timestamps_list,
             'sequence_id': [seq_id] * len(fixed_timestamps_list)
         })
+        
+        # Ensure timestamp precision matches original data (ms vs us) to avoid join errors
+        # FormatParser typically produces 'ms', while python datetime list -> Polars defaults to 'us'
+        original_dtype = seq_data.schema['datetime']
+        if fixed_df.schema['datetime'] != original_dtype:
+            fixed_df = fixed_df.with_columns(
+                pl.col('datetime').cast(original_dtype)
+            )
         
         # Join with original data to get nearest values
         result_df = self._join_and_interpolate_values(fixed_df, seq_data)
@@ -202,9 +227,9 @@ class FormatProcessor(CGMProcessor):
         """Join fixed timestamps with original data and interpolate/shift values.
         
         Uses asof_join to find nearest neighbors efficiently.
-        - Glucose: linear interpolation between prev and next
+        - Glucose: Time-weighted linear interpolation between prev and next
         - Carbs, insulin, exercise: use nearest value (prefer backward/previous)
-        - Event type, quality: use from nearest neighbor
+        - Event type, quality: use from nearest neighbor (backward)
         
         Args:
             fixed_df: DataFrame with fixed timestamps and sequence_id
@@ -213,63 +238,63 @@ class FormatProcessor(CGMProcessor):
         Returns:
             DataFrame with interpolated/shifted values
         """
-        # Join backward (get previous values)
-        backward_join = fixed_df.join_asof(
-            seq_data,
-            left_on='datetime',
-            right_on='datetime',
-            strategy='backward',
-            suffix='_prev'
+        # Prepare seq_data: Preserve original timestamps for interpolation math
+        seq_data_prep = seq_data.with_columns(
+            pl.col('datetime').alias('original_time')
         )
+
+        # Join backward (get previous values)
+        # Includes: glucose, other columns, and 'original_time' as 'time_prev'
+        backward_join = fixed_df.join_asof(
+            seq_data_prep,
+            on='datetime',
+            strategy='backward'
+        ).rename({'original_time': 'time_prev'})
         
         # Join forward (get next values) for glucose interpolation
+        # We only need glucose and time for the "next" point
         forward_join = fixed_df.join_asof(
-            seq_data.select(['datetime', 'glucose']),
-            left_on='datetime',
-            right_on='datetime',
-            strategy='forward',
-            suffix='_next'
-        )
+            seq_data_prep.select(['datetime', 'glucose', 'original_time']),
+            on='datetime',
+            strategy='forward'
+        ).rename({'glucose': 'glucose_next', 'original_time': 'time_next'})
         
-        # Combine joins
+        # Combine joins: Add glucose_next and time_next to backward_join results
         combined = backward_join.join(
-            forward_join.select(['datetime', pl.col('glucose').alias('glucose_next')]),
+            forward_join.select(['datetime', 'glucose_next', 'time_next']),
             on='datetime',
             how='left'
         )
         
-        # Handle sequence_id conflict (keep the one from fixed_df)
-        if 'sequence_id_prev' in combined.columns:
-            combined = combined.drop('sequence_id_prev')
-        
-        # Interpolate glucose linearly between prev and next values
+        # Perform Time-Weighted Linear Interpolation for Glucose
+        # Formula: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+        # x = datetime, x0 = time_prev, x1 = time_next
+        combined = combined.with_columns([
+            (pl.col('datetime') - pl.col('time_prev')).dt.total_seconds().alias('delta_prev'),
+            (pl.col('time_next') - pl.col('time_prev')).dt.total_seconds().alias('delta_total')
+        ])
+
         combined = combined.with_columns([
             pl.when(pl.col('glucose').is_not_null())
-            .then(pl.col('glucose'))
+            .then(pl.col('glucose')) # Exact match or existing value
             .when(
                 pl.col('glucose').is_null() &
                 pl.col('glucose_next').is_not_null() &
-                (pl.col('glucose').shift(1).over('sequence_id').is_not_null())
+                (pl.col('delta_total') > 0) # Ensure no division by zero
             )
             .then(
-                # Linear interpolation: average of prev and next
-                (pl.col('glucose').shift(1).over('sequence_id') + pl.col('glucose_next')) / 2.0
+                # Linear interpolation
+                pl.col('glucose') + (pl.col('delta_prev') / pl.col('delta_total')) * (pl.col('glucose_next') - pl.col('glucose'))
             )
-            .otherwise(pl.col('glucose'))
+            .otherwise(pl.col('glucose')) # Fallback (e.g. end of series)
             .alias('glucose')
         ])
         
-        # For discrete events (carbs, insulin, exercise), use previous value or None
-        # These are point events that should not be interpolated
-        event_columns = ['carbs', 'insulin_slow', 'insulin_fast', 'exercise']
+        # Ensure Discrete Events persist from Backward Join (already done by join_asof backward)
+        # (Carbs, insulin, exercise columns are already populated from 'backward_join')
         
-        for col in event_columns:
-            if col in combined.columns:
-                # Keep the value from backward join (previous value)
-                # This is already the desired behavior from asof_join backward
-                pass
-        
-        # For event_type and quality, use from previous value or default
+        # Ensure Event Type & Quality persist
+        # We handle nulls just in case, though backward join usually fills them
         if 'event_type' in combined.columns:
             combined = combined.with_columns([
                 pl.when(pl.col('event_type').is_null())
@@ -285,10 +310,16 @@ class FormatProcessor(CGMProcessor):
                 .otherwise(pl.col('quality'))
                 .alias('quality')
             ])
+            
+        # Note: If we interpolated across a gap that wasn't pre-filled by interpolate_gaps,
+        # we technically "imputed".
+        # But since synchronize_timestamps enforces max_gap check, any remaining gaps are small.
+        # And since interpolate_gaps should have run, gaps are filled.
+        # So 'quality' from backward join correctly carries the IMPUTATION flag from the filled points.
         
         # Clean up temporary columns
-        temp_cols = [col for col in combined.columns if col.endswith('_next') or col.endswith('_prev')]
-        result = combined.drop(temp_cols)
+        temp_cols = ['time_prev', 'time_next', 'glucose_next', 'delta_prev', 'delta_total']
+        result = combined.drop([c for c in temp_cols if c in combined.columns])
         
         # Ensure column order matches unified format
         expected_columns = ['sequence_id', 'event_type', 'quality', 'datetime', 

@@ -16,6 +16,7 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     ZeroValidInputError,
     ProcessingWarning,
+    WarningDescription,
     InferenceResult,
     ValidationResult,
     MINIMUM_DURATION_MINUTES,
@@ -40,6 +41,7 @@ __all__ = [
     "ZeroValidInputError",
     # Warnings and result types
     "ProcessingWarning",
+    "WarningDescription",
     "InferenceResult",
     "ValidationResult",
     # Constants
