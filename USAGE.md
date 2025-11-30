@@ -29,27 +29,32 @@ processor = FormatProcessor(
 )
 
 # Stage 4a: Fill gaps and create sequences
-processed_df = processor.interpolate_gaps(unified_df)
+unified_df = processor.interpolate_gaps(unified_df)
 
-# Stage 4b: Align to fixed-frequency timestamps
-synchronized_df = processor.synchronize_timestamps(processed_df)
+# Stage 4b: Align to fixed-frequency timestamps (optional but recommended)
+unified_df = processor.synchronize_timestamps(unified_df)
 
-# Stage 5: Prepare final inference data (returns full UnifiedFormat)
-unified_df, warnings = processor.prepare_for_inference(
-    synchronized_df,
-    minimum_duration_minutes=180,      # Require 3 hours minimum
-    maximum_wanted_duration=1440       # Truncate to 24 hours max
+# Stage 5: Prepare final inference data with quality checks
+inference_df, warning_flags = processor.prepare_for_inference(
+    unified_df,
+    minimum_duration_minutes=15,       # 15 minutes minimum (default: 60)
+    maximum_wanted_duration=24 * 60    # 24 hours maximum (1440 minutes, default: 480)
 )
 
-# Strip service columns for ML model
-inference_df = FormatProcessor.to_data_only_df(unified_df)
+# Convert to glucose-only data format for ML model
+glucose_only_df = FormatProcessor.to_data_only_df(
+    inference_df,
+    drop_service_columns=False,  # Keep metadata columns like sequence_id, quality
+    drop_duplicates=True,        # Remove duplicate timestamps
+    glucose_only=True            # Filter to glucose readings only
+)
 
 # Check data quality warnings
-if processor.has_warnings():
-    print(f"Processing warnings: {processor.get_warnings()}")
+if warning_flags:
+    print(f"Processing warnings: {warning_flags}")
 
 # Feed to ML model
-model_predictions = your_model.predict(inference_df)
+model_predictions = your_model.predict(glucose_only_df)
 ```
 
 ## Stage-by-Stage Workflow
@@ -62,9 +67,11 @@ The `FormatParser` handles all vendor-specific quirks and converts to unified fo
 
 ```python
 from cgm_format import FormatParser
+from pathlib import Path
 
 # Automatically detects Dexcom, Libre, or Unified format
-unified_df = FormatParser.parse_file("path/to/cgm_export.csv")
+file_path = Path("path/to/cgm_export.csv")
+unified_df = FormatParser.parse_file(file_path)
 
 print(f"Parsed {len(unified_df)} data points")
 print(unified_df.head())
@@ -112,12 +119,13 @@ unified_df = FormatParser.parse_to_unified(text_data, format_type)
 ```python
 from cgm_format import FormatParser
 from cgm_format.formats.unified import Quality
+import polars as pl
 
 # Dexcom marks out-of-range readings as "High" or "Low"
 # These are replaced with numeric placeholders (default: 401, 39 mg/dL)
 # and marked with the OUT_OF_RANGE quality flag
 
-unified_df = FormatParser.parse_from_file("dexcom_export.csv")
+unified_df = FormatParser.parse_file("dexcom_export.csv")
 
 # Check for out-of-range readings
 out_of_range_count = unified_df.filter(
@@ -232,58 +240,68 @@ print(f"Calibration period points: {calibration_points}")
 print(f"Threshold: {CALIBRATION_GAP_THRESHOLD} seconds")
 ```
 
-### Stage 5: Timestamp Synchronization (Optional)
+### Stage 5: Timestamp Synchronization (Recommended)
 
-Aligns timestamps to exact minute boundaries with fixed intervals.
+Aligns timestamps to exact minute boundaries with fixed intervals. **Recommended to call before `prepare_for_inference()`**.
 
 ```python
 # After interpolate_gaps(), synchronize to fixed frequency
-synchronized_df = processor.synchronize_timestamps(processed_df)
+unified_df = processor.interpolate_gaps(unified_df)
+synchronized_df = processor.synchronize_timestamps(unified_df)
 
 # Now all timestamps are at exact 5-minute intervals
 # Example: 10:00:00, 10:05:00, 10:10:00, etc.
 print(synchronized_df['datetime'].head(10))
+
+# Then prepare for inference
+inference_df, warnings = processor.prepare_for_inference(synchronized_df)
 ```
 
 **When to use:**
-- ML models expecting fixed-frequency time series
+- ML models expecting fixed-frequency time series (most common)
 - Time-series forecasting with regular intervals
 - Simplifying temporal feature engineering
+- Before calling `prepare_for_inference()` (recommended workflow)
 
 **When to skip:**
 - Models handling irregular timestamps
 - Preserving original measurement times is critical
-- Already using prepare_for_inference() with truncation
 
-### Stage 6: Inference Preparation
+### Stage 6: Inference Preparation and Data Filtering
 
 The `prepare_for_inference()` method performs final QA and returns full UnifiedFormat:
 
 ```python
 # Prepare data for ML model (returns full UnifiedFormat)
-unified_df, warnings = processor.prepare_for_inference(
+inference_df, warning_flags = processor.prepare_for_inference(
     synchronized_df,
-    minimum_duration_minutes=180,      # 3 hours minimum
-    maximum_wanted_duration=1440       # 24 hours maximum
+    minimum_duration_minutes=15,       # 15 minutes minimum (default: 60)
+    maximum_wanted_duration=24 * 60    # 24 hours maximum (1440 minutes, default: 480)
 )
 
-# Strip service columns for ML model (optional)
-inference_df = FormatProcessor.to_data_only_df(unified_df)
+# Convert to glucose-only data for ML model
+glucose_only_df = FormatProcessor.to_data_only_df(
+    inference_df,
+    drop_service_columns=False,  # Keep metadata columns (sequence_id, quality, event_type)
+    drop_duplicates=True,        # Remove duplicate timestamps
+    glucose_only=True            # Filter to glucose readings only (EGV_READ, IMPUTATION)
+)
 
-# warnings is a ProcessingWarning flags enum
+# warning_flags is a ProcessingWarning flags enum (or None)
 from cgm_format.interface.cgm_interface import ProcessingWarning
 
-if warnings & ProcessingWarning.TOO_SHORT:
-    print("Warning: Sequence shorter than minimum duration")
-
-if warnings & ProcessingWarning.QUALITY:
-    print("Warning: Data contains quality issues")
-
-if warnings & ProcessingWarning.IMPUTATION:
-    print("Warning: Data contains interpolated values")
-
-if warnings & ProcessingWarning.CALIBRATION:
-    print("Warning: Data contains calibration events")
+if warning_flags:
+    if warning_flags & ProcessingWarning.TOO_SHORT:
+        print("Warning: Sequence shorter than minimum duration")
+    
+    if warning_flags & ProcessingWarning.QUALITY:
+        print("Warning: Data contains quality issues")
+    
+    if warning_flags & ProcessingWarning.IMPUTATION:
+        print("Warning: Data contains interpolated values")
+    
+    if warning_flags & ProcessingWarning.CALIBRATION:
+        print("Warning: Data contains calibration events")
 ```
 
 #### What prepare_for_inference() Does
@@ -292,24 +310,35 @@ if warnings & ProcessingWarning.CALIBRATION:
 2. **Sequence Selection**: Keeps only the **latest** sequence (most recent timestamps)
 3. **Duration Check**: Warns if sequence < minimum_duration_minutes
 4. **Quality Checks**: Collects warnings for calibration, quality issues, imputation
-5. **Returns**: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
 5. **Truncation**: Keeps last N minutes if exceeding maximum_wanted_duration
-6. **Column Extraction**: Returns only data columns (removes service columns)
+6. **Returns**: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
 
 #### Inference DataFrame Structure
 
-The returned DataFrame contains only data columns:
+After `to_data_only_df()` with `glucose_only=True`:
 
 ```python
-# inference_df columns:
-# - datetime: Timestamp
-# - glucose: Float64 (mg/dL)
-# - carbs: Float64 (grams)
-# - insulin_slow: Float64 (units)
-# - insulin_fast: Float64 (units)
-# - exercise: Int64 (seconds)
+# glucose_only_df columns when drop_service_columns=False:
+# - sequence_id: Int64 (sequence identifier)
+# - event_type: Utf8 (e.g., "EGV_READ", "IMPUTATION")
+# - quality: Int64 (quality flags: 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION)
+# - datetime: Datetime (timestamp)
+# - glucose: Float64 (mg/dL, always present for glucose-only data)
+# - carbs: Float64 (grams, nullable)
+# - insulin_slow: Float64 (units, nullable)
+# - insulin_fast: Float64 (units, nullable)
+# - exercise: Int64 (seconds, nullable)
 
-print(inference_df.columns)
+print(glucose_only_df.columns)
+# ['sequence_id', 'event_type', 'quality', 'datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
+
+# If you want only data columns without metadata, use drop_service_columns=True:
+data_only_df = FormatProcessor.to_data_only_df(
+    inference_df,
+    drop_service_columns=True,
+    glucose_only=True
+)
+print(data_only_df.columns)
 # ['datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
 ```
 
@@ -320,37 +349,59 @@ print(inference_df.columns)
 For most ML use cases, use the complete pipeline:
 
 ```python
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
+from pathlib import Path
 
 # Parse
-unified_df = FormatParser.parse_from_file("cgm_data.csv")
+file_path = Path("cgm_data.csv")
+unified_df = FormatParser.parse_file(file_path)
 
 # Process
-processor = FormatProcessor()
-processed_df = processor.interpolate_gaps(unified_df)
-unified_df, warnings = processor.prepare_for_inference(processed_df)
-inference_df = FormatProcessor.to_data_only_df(unified_df)
+processor = FormatProcessor(
+    expected_interval_minutes=5,
+    small_gap_max_minutes=15
+)
+
+# Interpolate gaps and synchronize timestamps
+unified_df = processor.interpolate_gaps(unified_df)
+unified_df = processor.synchronize_timestamps(unified_df)
+
+# Prepare for inference
+inference_df, warning_flags = processor.prepare_for_inference(
+    unified_df,
+    minimum_duration_minutes=15,
+    maximum_wanted_duration=24 * 60
+)
+
+# Convert to glucose-only data
+glucose_only_df = FormatProcessor.to_data_only_df(
+    inference_df,
+    drop_service_columns=False,
+    drop_duplicates=True,
+    glucose_only=True
+)
 
 # Check quality
-if warnings:
-    print(f"Data quality warnings: {warnings}")
+if warning_flags:
+    print(f"Data quality warnings: {warning_flags}")
     # Decide whether to proceed or reject data
 
 # Feed to model
-predictions = model.predict(inference_df)
+predictions = model.predict(glucose_only_df)
 ```
 
 ### Workflow 2: Batch Processing Multiple Files
 
 ```python
 from pathlib import Path
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
 import polars as pl
 
 data_dir = Path("data/exports")
-processor = FormatProcessor()
+processor = FormatProcessor(
+    expected_interval_minutes=5,
+    small_gap_max_minutes=15
+)
 
 results = []
 
@@ -358,18 +409,32 @@ for csv_file in data_dir.glob("*.csv"):
     try:
         # Parse and process
         unified_df = FormatParser.parse_file(csv_file)
-        processed_df = processor.interpolate_gaps(unified_df)
-        unified_df, warnings = processor.prepare_for_inference(processed_df)
-        inference_df = FormatProcessor.to_data_only_df(unified_df)
+        unified_df = processor.interpolate_gaps(unified_df)
+        unified_df = processor.synchronize_timestamps(unified_df)
+        
+        # Prepare for inference
+        inference_df, warning_flags = processor.prepare_for_inference(
+            unified_df,
+            minimum_duration_minutes=15,
+            maximum_wanted_duration=24 * 60
+        )
+        
+        # Convert to glucose-only data
+        glucose_only_df = FormatProcessor.to_data_only_df(
+            inference_df,
+            drop_service_columns=False,
+            drop_duplicates=True,
+            glucose_only=True
+        )
         
         # Add patient_id from filename
         patient_id = csv_file.stem
-        inference_df = inference_df.with_columns([
+        glucose_only_df = glucose_only_df.with_columns([
             pl.lit(patient_id).alias('patient_id')
         ])
         
-        results.append(inference_df)
-        print(f"✓ {csv_file.name}: {len(inference_df)} points, warnings={warnings}")
+        results.append(glucose_only_df)
+        print(f"✓ {csv_file.name}: {len(glucose_only_df)} points, warnings={warning_flags}")
         
     except Exception as e:
         print(f"✗ {csv_file.name}: {e}")
@@ -549,14 +614,14 @@ libre_processor = FormatProcessor(
 
 ```python
 # Short-term prediction (next 30 minutes)
-inference_df, warnings = processor.prepare_for_inference(
+unified_df, warnings = processor.prepare_for_inference(
     processed_df,
-    minimum_duration_minutes=60,   # Need 1 hour history
-    maximum_wanted_duration=180    # Use last 3 hours
+    minimum_duration_minutes=60,   # Need 1 hour history (default: 60)
+    maximum_wanted_duration=180    # Use last 3 hours (default: 480)
 )
 
 # Long-term analysis (daily patterns)
-inference_df, warnings = processor.prepare_for_inference(
+unified_df, warnings = processor.prepare_for_inference(
     processed_df,
     minimum_duration_minutes=720,   # Need 12 hours minimum
     maximum_wanted_duration=10080   # Use last 7 days

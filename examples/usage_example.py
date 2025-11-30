@@ -30,7 +30,7 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
         file_path: Path to CGM export file (any supported format)
         
     Returns:
-        Inference-ready DataFrame
+        Glucose-only DataFrame ready for ML inference
     """
     print("\n" + "="*70)
     print("EXAMPLE 1: Basic Inference Pipeline")
@@ -38,7 +38,7 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     
     # Stage 1-3: Parse vendor format to unified
     print(f"\n1. Parsing file: {file_path.name}")
-    unified_df = FormatParser.parse_from_file(file_path)
+    unified_df = FormatParser.parse_file(file_path)
     print(f"   ✓ Parsed {len(unified_df)} records")
     print(f"   Date range: {unified_df['datetime'].min()} to {unified_df['datetime'].max()}")
     
@@ -50,30 +50,50 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     )
     
     # Fill gaps and create sequences
-    processed_df = processor.interpolate_gaps(unified_df)
-    sequence_count = processed_df['sequence_id'].n_unique()
+    unified_df = processor.interpolate_gaps(unified_df)
+    sequence_count = unified_df['sequence_id'].n_unique()
     print(f"   ✓ Created {sequence_count} sequence(s)")
     
+    # Synchronize timestamps to fixed intervals
+    unified_df = processor.synchronize_timestamps(unified_df)
+    print(f"   ✓ Synchronized timestamps to 5-minute intervals")
+    
     # Prepare final inference data
-    inference_df, warnings = processor.prepare_for_inference(
-        processed_df,
-        minimum_duration_minutes=180,    # 3 hours minimum
-        maximum_wanted_duration=1440     # 24 hours maximum
+    inference_df, warning_flags = processor.prepare_for_inference(
+        unified_df,
+        minimum_duration_minutes=15,        # 15 minutes minimum
+        maximum_wanted_duration=24 * 60     # 24 hours maximum (1440 minutes)
     )
     print(f"   ✓ Prepared {len(inference_df)} inference records")
     
+    # Convert to glucose-only data
+    glucose_only_df = FormatProcessor.to_data_only_df(
+        inference_df,
+        drop_service_columns=False,  # Keep metadata columns
+        drop_duplicates=True,        # Remove duplicate timestamps
+        glucose_only=True            # Filter to glucose readings only
+    )
+    print(f"   ✓ Converted to {len(glucose_only_df)} glucose-only records")
+    
     # Check warnings
-    if processor.has_warnings():
+    if warning_flags:
         print("\n3. Data Quality Warnings:")
-        for warning in processor.get_warnings():
-            print(f"   ⚠ {warning.name}")
+        if warning_flags & ProcessingWarning.TOO_SHORT:
+            print("   ⚠ TOO_SHORT: Sequence shorter than minimum duration")
+        if warning_flags & ProcessingWarning.IMPUTATION:
+            print("   ⚠ IMPUTATION: Data contains interpolated values")
+        if warning_flags & ProcessingWarning.QUALITY:
+            print("   ⚠ QUALITY: Data contains quality issues")
+        if warning_flags & ProcessingWarning.CALIBRATION:
+            print("   ⚠ CALIBRATION: Data contains calibration events")
     else:
         print("\n3. ✓ No data quality warnings")
     
-    print("\n4. Inference DataFrame:")
-    print(inference_df.head())
+    print("\n4. Glucose-only DataFrame:")
+    print(glucose_only_df.head())
+    print(f"   Columns: {glucose_only_df.columns}")
     
-    return inference_df
+    return glucose_only_df
 
 
 def example_2_quality_inspection(file_path: Path) -> None:
@@ -87,7 +107,7 @@ def example_2_quality_inspection(file_path: Path) -> None:
     print("="*70)
     
     # Parse
-    unified_df = FormatParser.parse_from_file(file_path)
+    unified_df = FormatParser.parse_file(file_path)
     
     print("\n1. Original Data Statistics:")
     print(f"   Total records: {len(unified_df)}")
@@ -165,10 +185,16 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
     
     output_dir.mkdir(exist_ok=True, parents=True)
     
-    processor = FormatProcessor()
+    processor = FormatProcessor(
+        expected_interval_minutes=5,
+        small_gap_max_minutes=15
+    )
     results = []
     
     csv_files = list(data_dir.glob("*.csv"))
+    # Exclude the parsed subdirectory if it exists
+    csv_files = [f for f in csv_files if "parsed" not in str(f)]
+    
     print(f"\nProcessing {len(csv_files)} files from {data_dir}...")
     
     for csv_file in csv_files:
@@ -176,24 +202,39 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
         
         try:
             # Parse and process
-            unified_df = FormatParser.parse_from_file(csv_file)
-            processed_df = processor.interpolate_gaps(unified_df)
-            inference_df, warnings = processor.prepare_for_inference(processed_df)
+            unified_df = FormatParser.parse_file(csv_file)
+            unified_df = processor.interpolate_gaps(unified_df)
+            unified_df = processor.synchronize_timestamps(unified_df)
+            
+            # Prepare for inference
+            inference_df, warning_flags = processor.prepare_for_inference(
+                unified_df,
+                minimum_duration_minutes=15,
+                maximum_wanted_duration=24 * 60
+            )
+            
+            # Convert to glucose-only data
+            glucose_only_df = FormatProcessor.to_data_only_df(
+                inference_df,
+                drop_service_columns=False,
+                drop_duplicates=True,
+                glucose_only=True
+            )
             
             # Add filename as identifier
             patient_id = csv_file.stem
-            inference_df = inference_df.with_columns([
+            glucose_only_df = glucose_only_df.with_columns([
                 pl.lit(patient_id).alias('patient_id')
             ])
             
             # Save individual processed file
-            output_file = output_dir / f"{patient_id}_inference.csv"
-            FormatParser.to_csv_file(inference_df, str(output_file))
+            output_file = output_dir / f"{patient_id}_glucose.csv"
+            FormatParser.to_csv_file(glucose_only_df, str(output_file))
             
-            results.append(inference_df)
+            results.append(glucose_only_df)
             
-            warning_str = f"warnings={warnings.value}" if warnings else "no warnings"
-            print(f"    ✓ Processed {len(inference_df)} records, {warning_str}")
+            warning_str = f"warnings={warning_flags.value}" if warning_flags else "no warnings"
+            print(f"    ✓ Processed {len(glucose_only_df)} records, {warning_str}")
             
         except UnknownFormatError as e:
             print(f"    ✗ Unknown format: {e}")
@@ -208,7 +249,7 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
     if results:
         print(f"\nCombining {len(results)} processed files...")
         combined_df = pl.concat(results)
-        combined_file = output_dir / "combined_inference.csv"
+        combined_file = output_dir / "combined_glucose.csv"
         FormatParser.to_csv_file(combined_df, str(combined_file))
         print(f"  ✓ Saved combined dataset: {combined_file}")
         print(f"  Total records: {len(combined_df)}")
@@ -223,7 +264,7 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
         file_path: Path to CGM export file
         
     Returns:
-        High-quality inference DataFrame
+        High-quality glucose-only DataFrame
     """
     print("\n" + "="*70)
     print("EXAMPLE 4: Custom Processing (Strict Quality)")
@@ -231,7 +272,7 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     
     # Parse
     print(f"\n1. Parsing: {file_path.name}")
-    unified_df = FormatParser.parse_from_file(file_path)
+    unified_df = FormatParser.parse_file(file_path)
     print(f"   Original records: {len(unified_df)}")
     
     # Custom gap handling: only interpolate very small gaps
@@ -241,16 +282,16 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
         small_gap_max_minutes=10  # Only fill gaps ≤10 minutes
     )
     
-    processed_df = processor.interpolate_gaps(unified_df)
+    unified_df = processor.interpolate_gaps(unified_df)
     
     # Filter out imputed and low-quality data
     print("\n3. Filtering for high quality data...")
-    high_quality_df = processed_df.filter(
+    high_quality_df = unified_df.filter(
         ((pl.col('quality') & Quality.IMPUTATION.value) == 0) &
         (pl.col('quality') == GOOD_QUALITY.value)
     )
     
-    filtered_count = len(processed_df) - len(high_quality_df)
+    filtered_count = len(unified_df) - len(high_quality_df)
     print(f"   Filtered out {filtered_count} records")
     print(f"   Remaining: {len(high_quality_df)} records")
     
@@ -261,23 +302,37 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     
     # Prepare with strict duration requirements
     print("\n5. Preparing for inference (strict requirements)...")
-    inference_df, warnings = processor.prepare_for_inference(
+    inference_df, warning_flags = processor.prepare_for_inference(
         synchronized_df,
         minimum_duration_minutes=360,  # Require 6 hours
         maximum_wanted_duration=2880   # Allow up to 48 hours
     )
     
-    print(f"   Final records: {len(inference_df)}")
+    # Convert to glucose-only data
+    glucose_only_df = FormatProcessor.to_data_only_df(
+        inference_df,
+        drop_service_columns=False,
+        drop_duplicates=True,
+        glucose_only=True
+    )
     
-    if warnings:
+    print(f"   Final glucose-only records: {len(glucose_only_df)}")
+    
+    if warning_flags:
         print("\n⚠ Quality Warnings:")
-        for warning in processor.get_warnings():
-            print(f"   - {warning.name}")
+        if warning_flags & ProcessingWarning.TOO_SHORT:
+            print("   - TOO_SHORT")
+        if warning_flags & ProcessingWarning.IMPUTATION:
+            print("   - IMPUTATION")
+        if warning_flags & ProcessingWarning.QUALITY:
+            print("   - QUALITY")
+        if warning_flags & ProcessingWarning.CALIBRATION:
+            print("   - CALIBRATION")
         raise ValueError("Data does not meet strict quality requirements")
     else:
         print("\n✓ Data meets strict quality requirements")
     
-    return inference_df
+    return glucose_only_df
 
 
 def example_5_format_detection(file_path: Path) -> None:
@@ -350,7 +405,7 @@ def example_6_error_handling() -> None:
         
         try:
             # Parse
-            unified_df = FormatParser.parse_from_file(file_path)
+            unified_df = FormatParser.parse_file(file_path)
             
             # Process
             processor = FormatProcessor()
@@ -390,18 +445,35 @@ def example_7_ml_integration(file_path: Path) -> None:
     
     # Process data
     print("\n1. Processing data...")
-    unified_df = FormatParser.parse_from_file(file_path)
-    processor = FormatProcessor()
-    processed_df = processor.interpolate_gaps(unified_df)
-    inference_df, warnings = processor.prepare_for_inference(processed_df)
+    unified_df = FormatParser.parse_file(file_path)
+    processor = FormatProcessor(
+        expected_interval_minutes=5,
+        small_gap_max_minutes=15
+    )
+    unified_df = processor.interpolate_gaps(unified_df)
+    unified_df = processor.synchronize_timestamps(unified_df)
     
-    print(f"   ✓ Prepared {len(inference_df)} records for inference")
+    inference_df, warning_flags = processor.prepare_for_inference(
+        unified_df,
+        minimum_duration_minutes=15,
+        maximum_wanted_duration=24 * 60
+    )
+    
+    # Convert to glucose-only data
+    glucose_only_df = FormatProcessor.to_data_only_df(
+        inference_df,
+        drop_service_columns=True,  # Drop metadata for ML
+        drop_duplicates=True,
+        glucose_only=True
+    )
+    
+    print(f"   ✓ Prepared {len(glucose_only_df)} records for inference")
     
     # Extract features
     print("\n2. Extracting features for ML model...")
     
     # Example: Prepare feature matrix
-    features = inference_df.select([
+    features = glucose_only_df.select([
         'glucose',
         'carbs',
         'insulin_fast',
@@ -422,7 +494,7 @@ def example_7_ml_integration(file_path: Path) -> None:
     
     # Create target (predict glucose 30 minutes ahead = 6 intervals * 5min)
     print("\n3. Creating prediction target...")
-    target = inference_df['glucose'].shift(-6)  # 30 minutes ahead
+    target = glucose_only_df['glucose'].shift(-6)  # 30 minutes ahead
     
     # Remove last 6 rows (no target available)
     features_train = features[:-6]

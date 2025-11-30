@@ -19,6 +19,13 @@ Quick Start:
     >>> inference_df, warnings = processor.prepare_for_inference(processed_df)
 """
 
+try:
+    from importlib.metadata import version
+    __version__ = version("cgm-format")
+except Exception:
+    # Fallback if package not installed (e.g., during development)
+    __version__ = "0.4.4"  # Keep in sync with pyproject.toml
+
 from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 

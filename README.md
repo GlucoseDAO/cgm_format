@@ -66,8 +66,8 @@ processed_df = processor.interpolate_gaps(unified_df)
 # Prepare final inference data (returns full UnifiedFormat)
 unified_df, warnings = processor.prepare_for_inference(
     processed_df,
-    minimum_duration_minutes=180,
-    maximum_wanted_duration=1440
+    minimum_duration_minutes=180,      # Require 3 hours minimum (default: 60)
+    maximum_wanted_duration=1440       # Truncate to last 24 hours if longer (default: 480)
 )
 
 # Strip service columns for ML model
@@ -253,8 +253,8 @@ The `prepare_for_inference()` method performs final quality assurance and return
 # Prepare final inference-ready data (returns full UnifiedFormat)
 unified_df, warnings = processor.prepare_for_inference(
     processed_df,
-    minimum_duration_minutes=180,      # Require 3 hours minimum
-    maximum_wanted_duration=1440       # Truncate to last 24 hours if longer
+    minimum_duration_minutes=180,      # Require 3 hours minimum (default: 60)
+    maximum_wanted_duration=1440       # Truncate to last 24 hours if longer (default: 480)
 )
 
 # Optionally strip service columns for ML models
@@ -278,7 +278,7 @@ if warnings & ProcessingWarning.IMPUTATION:
 3. **Duration Checks**: Warns if sequence < `minimum_duration_minutes`
 4. **Quality Checks**: Collects warnings for calibration events and quality flags
 5. **Truncation**: Keeps last N minutes if exceeding `maximum_wanted_duration`
-6. **Column Extraction**: Returns only data columns (removes service metadata)
+6. **Returns**: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
 
 **Output DataFrame:**
 
@@ -311,8 +311,8 @@ processed_df = processor.interpolate_gaps(unified_df)
 # Stage 6: Prepare for inference (returns full UnifiedFormat)
 unified_df, warnings = processor.prepare_for_inference(
     processed_df,  # or synchronized_df if using Stage 5
-    minimum_duration_minutes=MINIMUM_DURATION_MINUTES,        # Default: 180 (3 hours)
-    maximum_wanted_duration=MAXIMUM_WANTED_DURATION_MINUTES   # Default: 1440 (24 hours)
+    minimum_duration_minutes=MINIMUM_DURATION_MINUTES,        # Default: 60 (1 hour)
+    maximum_wanted_duration=MAXIMUM_WANTED_DURATION_MINUTES   # Default: 480 (8 hours)
 )
 
 # Optional: Strip service columns for ML models
@@ -558,16 +558,17 @@ processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=3
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `minimum_duration_minutes` | 180 | Minimum sequence duration required (warns if shorter) |
-| `maximum_wanted_duration` | 1440 | Maximum duration to keep (truncates from beginning) |
+| `minimum_duration_minutes` | 60 | Minimum sequence duration required (warns if shorter) |
+| `maximum_wanted_duration` | 480 | Maximum duration to keep (truncates from beginning) |
 
 **Constants from interface:**
 
 ```python
 from cgm_format.interface.cgm_interface import (
-    MINIMUM_DURATION_MINUTES,           # 180 (3 hours)
-    MAXIMUM_WANTED_DURATION_MINUTES,    # 1440 (24 hours)
+    MINIMUM_DURATION_MINUTES,           # 60 (1 hour)
+    MAXIMUM_WANTED_DURATION_MINUTES,    # 480 (8 hours)
     CALIBRATION_GAP_THRESHOLD,          # 9900 seconds (2h45m)
+    CALIBRATION_PERIOD_HOURS,           # 24 hours
 )
 ```
 
@@ -665,7 +666,7 @@ python3 -c "from cgm_format.formats.libre import regenerate_schema_json; regener
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.10+
 - polars 1.34.0+
 
 Optional:

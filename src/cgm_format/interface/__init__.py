@@ -16,12 +16,15 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     ZeroValidInputError,
     ProcessingWarning,
+    NO_WARNING,
     WarningDescription,
     InferenceResult,
     ValidationResult,
+    UnifiedFormat,
     MINIMUM_DURATION_MINUTES,
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
+    CALIBRATION_PERIOD_HOURS,
     to_pandas,
     to_polars,
 )
@@ -35,12 +38,15 @@ __all__ = [
     "SupportedCGMFormat",
     "CGMParser",
     "CGMProcessor",
+    # Type aliases
+    "UnifiedFormat",
     # Exceptions
     "UnknownFormatError",
     "MalformedDataError",
     "ZeroValidInputError",
     # Warnings and result types
     "ProcessingWarning",
+    "NO_WARNING",
     "WarningDescription",
     "InferenceResult",
     "ValidationResult",
@@ -48,6 +54,7 @@ __all__ = [
     "MINIMUM_DURATION_MINUTES",
     "MAXIMUM_WANTED_DURATION_MINUTES",
     "CALIBRATION_GAP_THRESHOLD",
+    "CALIBRATION_PERIOD_HOURS",
     # Conversion utilities
     "to_pandas",
     "to_polars",
