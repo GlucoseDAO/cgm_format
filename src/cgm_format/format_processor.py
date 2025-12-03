@@ -13,6 +13,7 @@ from cgm_format.interface.cgm_interface import (
     InferenceResult,
     ProcessingWarning,
     ZeroValidInputError,
+    MalformedDataError,
     MINIMUM_DURATION_MINUTES,
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
@@ -200,27 +201,15 @@ class FormatProcessor(CGMProcessor):
              # If seq is [12:00:00], aligned 12:00.
              fixed_timestamps_list = [aligned_start]
 
-        # Create DataFrame with fixed timestamps
+        # Create fixed-frequency DataFrame with proper dtypes matching unified schema
         fixed_df = pl.DataFrame({
             'datetime': fixed_timestamps_list,
             'sequence_id': [seq_id] * len(fixed_timestamps_list)
         })
         
-        # Ensure timestamp precision matches original data (ms vs us) to avoid join errors
-        # FormatParser typically produces 'ms', while python datetime list -> Polars defaults to 'us'
-        original_datetime_dtype = seq_data.schema['datetime']
-        if fixed_df.schema['datetime'] != original_datetime_dtype:
-            fixed_df = fixed_df.with_columns(
-                pl.col('datetime').cast(original_datetime_dtype)
-            )
-        
-        # Ensure sequence_id type matches original data to avoid concat errors
-        # Polars may infer UInt32 from Python list, but original may be Int64
-        original_sequence_dtype = seq_data.schema['sequence_id']
-        if fixed_df.schema['sequence_id'] != original_sequence_dtype:
-            fixed_df = fixed_df.with_columns(
-                pl.col('sequence_id').cast(original_sequence_dtype)
-            )
+        # Enforce schema to match unified format (Datetime[ms] and Int64)
+        # Now that FormatParser enforces schema, this should always match
+        fixed_df = CGM_SCHEMA.validate_dataframe(fixed_df, enforce=True)
         
         # Join with original data to get nearest values
         result_df = self._join_and_interpolate_values(fixed_df, seq_data)
@@ -247,7 +236,10 @@ class FormatProcessor(CGMProcessor):
             DataFrame with interpolated/shifted values
         """
         # Prepare seq_data: Preserve original timestamps for interpolation math
-        seq_data_prep = seq_data.with_columns(
+        # Ensure datetime is in milliseconds precision to match fixed_df and CGM_SCHEMA
+        seq_data_prep = seq_data.with_columns([
+            pl.col('datetime').cast(pl.Datetime('ms')),
+        ]).with_columns(
             pl.col('datetime').alias('original_time')
         )
 
@@ -409,6 +401,11 @@ class FormatProcessor(CGMProcessor):
         Returns:
             DataFrame with sequence_id column
         """
+        # Get canonical sequence_id dtype from schema
+        sequence_id_dtype = next(
+            col['dtype'] for col in CGM_SCHEMA.service_columns if col['name'] == 'sequence_id'
+        )
+        
         # Sort by datetime
         df = dataframe.sort('datetime')
         
@@ -440,9 +437,9 @@ class FormatProcessor(CGMProcessor):
             .alias('is_gap'),
         ])
         
-        # Create sequence IDs based on gaps
+        # Create sequence IDs based on gaps (cum_sum on bool creates UInt32, cast to schema dtype)
         df = df.with_columns([
-            pl.col('is_gap').cum_sum().alias('sequence_id')
+            pl.col('is_gap').cum_sum().cast(sequence_id_dtype).alias('sequence_id')
         ])
         
         # Remove temporary columns
@@ -462,6 +459,11 @@ class FormatProcessor(CGMProcessor):
         Returns:
             DataFrame with updated sequence_id column (some sequences may be split)
         """
+        # Get canonical sequence_id dtype from schema
+        sequence_id_dtype = next(
+            col['dtype'] for col in CGM_SCHEMA.service_columns if col['name'] == 'sequence_id'
+        )
+        
         unique_sequences = dataframe['sequence_id'].unique().sort().to_list()
         processed_sequences = []
         next_sequence_id = max(unique_sequences) + 1
@@ -507,10 +509,9 @@ class FormatProcessor(CGMProcessor):
                 for sub_seq_idx in unique_sub_seqs:
                     sub_seq_data = seq_data.filter(pl.col('sub_seq_id') == sub_seq_idx)
                     
-                    # Assign new unique sequence_id (cast to match original dtype)
-                    original_dtype = dataframe['sequence_id'].dtype
+                    # Assign new unique sequence_id (use canonical schema dtype)
                     sub_seq_data = sub_seq_data.with_columns([
-                        pl.lit(next_sequence_id).cast(original_dtype).alias('sequence_id')
+                        pl.lit(next_sequence_id).cast(sequence_id_dtype).alias('sequence_id')
                     ])
                     
                     # Remove temporary columns

@@ -25,7 +25,8 @@ UNIFIED_METADATA_LINES = ()  # No metadata lines to skip
 
 # Multiple timestamp formats for unified format (tuple for consistency)
 UNIFIED_TIMESTAMP_FORMATS = (
-    "%Y-%m-%dT%H:%M:%S",  # ISO 8601: 2024-05-01T12:30:45
+    "%Y-%m-%dT%H:%M:%S%.f",  # ISO 8601 with milliseconds: 2024-05-01T12:30:45.000
+    "%Y-%m-%dT%H:%M:%S",     # ISO 8601 without milliseconds: 2024-05-01T12:30:45
 )
 
 # Format detection patterns (unique identifiers in CSV headers/content)
@@ -97,7 +98,7 @@ GOOD_QUALITY = Quality(0)
 
 # CGM Unified Format Schema
 CGM_SCHEMA = CGMSchemaDefinition(
-    service_columns=[
+    service_columns=(
         {
             "name": "sequence_id",
             "dtype": pl.Int64,
@@ -122,8 +123,8 @@ CGM_SCHEMA = CGMSchemaDefinition(
                 "enum": [e.value for e in Quality]
             }
         },
-    ],
-    data_columns=[
+    ),
+    data_columns=(
         {
             "name": "datetime",
             "dtype": pl.Datetime('ms'),
@@ -165,13 +166,13 @@ CGM_SCHEMA = CGMSchemaDefinition(
             "unit": "seconds",
             "constraints": {"minimum": 0}
         },
-    ],
+    ),
     header_line=UNIFIED_HEADER_LINE,
     data_start_line=UNIFIED_DATA_START_LINE,
     metadata_lines=UNIFIED_METADATA_LINES,
     # Primary key: All data columns (service columns are metadata)
     # Rows with identical data values are true duplicates
-    primary_key=["datetime", "glucose", "carbs", "insulin_slow", "insulin_fast", "exercise"]
+    primary_key=("datetime", "glucose", "carbs", "insulin_slow", "insulin_fast", "exercise")
 )
 
 

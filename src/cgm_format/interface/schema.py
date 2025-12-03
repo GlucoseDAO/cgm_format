@@ -5,9 +5,11 @@ that can be used to define any CGM data format schema.
 """
 
 import polars as pl
+from dataclasses import dataclass
+from functools import cached_property
 from enum import Enum
 from typing import Dict, Any, List, Union, Type, TypedDict, NotRequired
-
+from cgm_format.interface.cgm_interface import MalformedDataError
 
 class EnumLiteral(str, Enum):
     """
@@ -47,40 +49,32 @@ class ColumnSchema(TypedDict):
     constraints: NotRequired[Dict[str, Any]]
 
 
+@dataclass(frozen=True)
 class CGMSchemaDefinition:
     """Complete schema definition builder for CGM data formats.
     
     This class provides infrastructure for defining and working with
     CGM data schemas, including conversion to various formats (Polars,
     Frictionless Data Table Schema) and generation of cast expressions.
+    
+    Immutable by design to prevent accidental modification of schema definitions.
     """
     
-    def __init__(
-        self,
-        service_columns: List[ColumnSchema],
-        data_columns: List[ColumnSchema],
-        header_line: int = 1,
-        data_start_line: int = 2,
-        metadata_lines: tuple[int, ...] = (),
-        primary_key: List[str] | None = None
-    ) -> None:
-        """Initialize schema definition.
+    service_columns: tuple[ColumnSchema, ...]
+    data_columns: tuple[ColumnSchema, ...]
+    header_line: int = 1
+    data_start_line: int = 2
+    metadata_lines: tuple[int, ...] = ()
+    primary_key: tuple[str, ...] | None = None
+    
+    @cached_property
+    def _dialect(self) -> Dict[str, Any] | None:
+        """Lazily compute and cache the Frictionless dialect configuration.
         
-        Args:
-            service_columns: Metadata columns (e.g., sequence_id, event_type, quality)
-            data_columns: Data columns (e.g., datetime, glucose, carbs, insulin)
-            header_line: Line number where the header row is located (1-indexed)
-            data_start_line: Line number where data rows start (1-indexed)
-            metadata_lines: Tuple of line numbers that are metadata to skip (1-indexed)
-            primary_key: Optional list of field names that form the primary key
+        Returns:
+            Dialect dictionary for Frictionless validation, or None if standard format
         """
-        self.service_columns = service_columns
-        self.data_columns = data_columns
-        self.header_line = header_line
-        self.data_start_line = data_start_line
-        self.metadata_lines = metadata_lines
-        self.primary_key = primary_key
-        self._dialect = self._generate_dialect(header_line, metadata_lines)
+        return self._generate_dialect(self.header_line, self.metadata_lines)
     
     def get_polars_schema(self, data_only: bool = False) -> Dict[str, pl.DataType]:
         """Get Polars dtype schema dictionary.
@@ -181,7 +175,7 @@ class CGMSchemaDefinition:
     
     def to_frictionless_schema(
         self, 
-        primary_key: List[str] | None = None,
+        primary_key: List[str] | tuple[str, ...] | None = None,
         dialect: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Convert to Frictionless Data Table Schema format.
@@ -190,7 +184,7 @@ class CGMSchemaDefinition:
         that can be used with the frictionless library for validation.
         
         Args:
-            primary_key: Optional list of field names that form the primary key.
+            primary_key: Optional list/tuple of field names that form the primary key.
                         If None, uses the schema's primary_key (if set).
             dialect: Optional dialect configuration for CSV parsing.
                     If None, uses the auto-generated dialect from format constants.
@@ -258,17 +252,83 @@ class CGMSchemaDefinition:
         else:
             return "string"
     
+    def validate_dataframe(self, dataframe: pl.DataFrame, enforce: bool = False) -> pl.DataFrame:
+        """Validate or enforce schema on a DataFrame.
+        
+        This ensures the DataFrame matches the schema definition. Can either validate
+        (raise on mismatch) or enforce (cast to correct types).
+        
+        Args:
+            dataframe: DataFrame to validate/enforce
+            enforce: If True, cast columns to match schema. If False, raise on mismatch.
+            
+        Returns:
+            DataFrame (unchanged if enforce=False, cast if enforce=True)
+            
+        Raises:
+            MalformedDataError: If schema doesn't match (enforce=False) or casting fails (enforce=True)
+        """
+        # Build expected schema from definition
+        expected_schema = self.get_polars_schema(data_only=False)
+        
+        # Check each column in dataframe
+        mismatches = []
+        for col_name in dataframe.columns:
+            if col_name in expected_schema:
+                expected_dtype = expected_schema[col_name]
+                actual_dtype = dataframe[col_name].dtype
+                
+                if actual_dtype != expected_dtype:
+                    mismatches.append((col_name, expected_dtype, actual_dtype))
+        
+        if not mismatches:
+            # Schema matches, return as-is
+            return dataframe
+        
+        # Schema mismatch detected
+        if not enforce:
+            # Validation mode: raise error
+            error_lines = [f"  {col}: expected {exp}, got {act}" for col, exp, act in mismatches]
+            error_msg = "Schema validation failed. DataFrame does not match schema:\n"
+            error_msg += "\n".join(error_lines)
+            raise MalformedDataError(error_msg)
+        
+        # Enforcement mode: cast to correct types
+        cast_exprs = []
+        for col_name in dataframe.columns:
+            if col_name in expected_schema:
+                expected_dtype = expected_schema[col_name]
+                current_dtype = dataframe[col_name].dtype
+                
+                # Only cast if dtype doesn't match
+                if current_dtype != expected_dtype:
+                    # For numeric types, use strict=False to handle nulls
+                    if expected_dtype in (pl.Float64, pl.Int64):
+                        cast_exprs.append(pl.col(col_name).cast(expected_dtype, strict=False))
+                    else:
+                        cast_exprs.append(pl.col(col_name).cast(expected_dtype))
+                else:
+                    cast_exprs.append(pl.col(col_name))
+            else:
+                # Keep columns not in schema as-is
+                cast_exprs.append(pl.col(col_name))
+        
+        if cast_exprs:
+            dataframe = dataframe.select(cast_exprs)
+        
+        return dataframe
+    
     def export_to_json(
         self, 
         output_path: str, 
-        primary_key: List[str] | None = None,
+        primary_key: List[str] | tuple[str, ...] | None = None,
         dialect: Dict[str, Any] | None = None
     ) -> None:
         """Export schema to JSON file in Frictionless Data Table Schema format.
         
         Args:
             output_path: Path to output JSON file
-            primary_key: Optional list of field names that form the primary key
+            primary_key: Optional list/tuple of field names that form the primary key
             dialect: Optional dialect configuration for CSV parsing
         """
         import json
@@ -285,7 +345,7 @@ class CGMSchemaDefinition:
 def regenerate_schema_json(
     schema: CGMSchemaDefinition, 
     calling_module_file: str,
-    primary_key: List[str] | None = None,
+    primary_key: List[str] | tuple[str, ...] | None = None,
     dialect: Dict[str, Any] | None = None
 ) -> None:
     """Regenerate schema JSON file from a schema definition.
@@ -296,7 +356,7 @@ def regenerate_schema_json(
     Args:
         schema: The CGMSchemaDefinition instance to export
         calling_module_file: The __file__ variable from the calling module
-        primary_key: Optional list of field names that form the primary key.
+        primary_key: Optional list/tuple of field names that form the primary key.
                     If None, uses schema's primary_key.
         dialect: Optional dialect configuration for CSV parsing.
                 If None, uses schema's auto-generated dialect.

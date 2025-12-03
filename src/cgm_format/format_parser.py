@@ -17,7 +17,13 @@ from cgm_format.interface.cgm_interface import (
 )
 
 # Import detection patterns from format modules
-from cgm_format.formats.unified import UNIFIED_DETECTION_PATTERNS, UnifiedEventType, Quality
+from cgm_format.formats.unified import (
+    UNIFIED_DETECTION_PATTERNS, 
+    UnifiedEventType, 
+    Quality, 
+    UNIFIED_TIMESTAMP_FORMATS,
+    CGM_SCHEMA
+)
 from cgm_format.formats.dexcom import (
     DEXCOM_DETECTION_PATTERNS, 
     DexcomColumn, 
@@ -269,6 +275,20 @@ class FormatParser(CGMParser):
             if len(df) == 0:
                 raise MalformedDataError("No valid data rows found")
             
+            # Parse datetime column if it's a string
+            # Unified format may have datetime as string when loaded from CSV
+            if df['datetime'].dtype == pl.Utf8 or df['datetime'].dtype == pl.String:
+                # Probe timestamp format for this file
+                timestamp_format = FormatParser._probe_timestamp_format(df, 'datetime', UNIFIED_TIMESTAMP_FORMATS)
+                
+                # Parse datetime column to Datetime type
+                df = df.with_columns([
+                    pl.col('datetime').str.strptime(pl.Datetime("ms"), timestamp_format)
+                ])
+            
+            # Enforce canonical unified schema for idempotent roundtrips
+            df = CGM_SCHEMA.validate_dataframe(df, enforce=True)
+            
             # Mark duplicate timestamps
             df = FormatParser._mark_time_duplicates(df)
             
@@ -460,6 +480,9 @@ class FormatParser(CGMParser):
             if len(unified) == 0:
                 raise MalformedDataError("No valid data rows found after processing")
             
+            # Enforce canonical unified schema for idempotent roundtrips
+            unified = CGM_SCHEMA.validate_dataframe(unified, enforce=True)
+            
             # Mark duplicate timestamps
             unified = FormatParser._mark_time_duplicates(unified)
             
@@ -577,6 +600,9 @@ class FormatParser(CGMParser):
             
             if len(unified) == 0:
                 raise MalformedDataError("No valid data rows found after processing")
+            
+            # Enforce canonical unified schema for idempotent roundtrips
+            unified = CGM_SCHEMA.validate_dataframe(unified, enforce=True)
             
             # Mark duplicate timestamps
             unified = FormatParser._mark_time_duplicates(unified)

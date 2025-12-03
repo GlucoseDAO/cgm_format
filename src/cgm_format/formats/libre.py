@@ -116,7 +116,7 @@ class LibreColumn(EnumLiteral):
 # =============================================================================
 
 LIBRE_SCHEMA = CGMSchemaDefinition(
-    service_columns=[
+    service_columns=(
         {
             "name": LibreColumn.DEVICE,
             "dtype": pl.Utf8,
@@ -144,8 +144,8 @@ LIBRE_SCHEMA = CGMSchemaDefinition(
                 "enum": [e.value for e in LibreRecordType]
             }
         },
-    ],
-    data_columns=[
+    ),
+    data_columns=(
         # Column order must match the exact CSV file structure
         {
             "name": LibreColumn.HISTORIC_GLUCOSE,
@@ -248,7 +248,7 @@ LIBRE_SCHEMA = CGMSchemaDefinition(
             "unit": "units",
             "constraints": {"minimum": 0}
         },
-    ],
+    ),
     header_line=LIBRE_HEADER_LINE,
     data_start_line=LIBRE_DATA_START_LINE,
     metadata_lines=LIBRE_METADATA_LINES

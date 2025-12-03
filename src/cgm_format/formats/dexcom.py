@@ -184,7 +184,7 @@ class DexcomColumn(EnumLiteral):
 # =============================================================================
 
 DEXCOM_SCHEMA = CGMSchemaDefinition(
-    service_columns=[
+    service_columns=(
         {
             "name": DexcomColumn.INDEX,
             "dtype": pl.Int64,
@@ -231,8 +231,8 @@ DEXCOM_SCHEMA = CGMSchemaDefinition(
             "description": "Source device identifier",
             "constraints": {"required": False}
         },
-    ],
-    data_columns=[
+    ),
+    data_columns=(
         {
             "name": DexcomColumn.GLUCOSE_VALUE,
             "dtype": pl.Float64,
@@ -280,7 +280,7 @@ DEXCOM_SCHEMA = CGMSchemaDefinition(
             "description": "Transmitter identifier (e.g., '8AM1EY')",
             "constraints": {"required": False}
         },
-    ],
+    ),
     header_line=DEXCOM_HEADER_LINE,
     data_start_line=DEXCOM_DATA_START_LINE,
     metadata_lines=DEXCOM_METADATA_LINES

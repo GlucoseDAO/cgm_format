@@ -186,7 +186,7 @@ class MedtronicColumn(EnumLiteral):
 # =============================================================================
 
 MEDTRONIC_SCHEMA = CGMSchemaDefinition(
-    service_columns=[
+    service_columns=(
         {
             "name": MedtronicColumn.INDEX,
             "dtype": pl.Utf8,  # Can have format like "1,00000" with commas
@@ -325,8 +325,8 @@ MEDTRONIC_SCHEMA = CGMSchemaDefinition(
             "description": "Sensor exception or error message",
             "constraints": {"required": False}
         },
-    ],
-    data_columns=[
+    ),
+    data_columns=(
         # Glucose readings
         {
             "name": MedtronicColumn.BG_READING,
@@ -510,7 +510,7 @@ MEDTRONIC_SCHEMA = CGMSchemaDefinition(
             "unit": "hours",
             "constraints": {"minimum": 0}
         },
-    ],
+    ),
     header_line=MEDTRONIC_HEADER_LINE,
     data_start_line=MEDTRONIC_DATA_START_LINE,
     metadata_lines=MEDTRONIC_METADATA_LINES

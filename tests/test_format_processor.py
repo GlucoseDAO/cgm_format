@@ -11,7 +11,21 @@ from cgm_format.interface.cgm_interface import (
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
 )
-from cgm_format.formats.unified import UnifiedEventType, Quality, GOOD_QUALITY
+from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType, Quality, GOOD_QUALITY
+
+
+def create_test_dataframe(data: list[dict]) -> pl.DataFrame:
+    """Helper to create test DataFrame with correct schema (datetime[ms] not datetime[μs]).
+    
+    Args:
+        data: List of dicts with unified format columns
+        
+    Returns:
+        DataFrame with canonical unified schema
+    """
+    df = pl.DataFrame(data)
+    # Enforce canonical schema to match FormatParser output
+    return CGM_SCHEMA.validate_dataframe(df, enforce=True)
 
 
 @pytest.fixture
@@ -34,7 +48,7 @@ def sample_unified_data() -> pl.DataFrame:
             'exercise': None,
         })
     
-    return pl.DataFrame(data)
+    return create_test_dataframe(data)
 
 
 @pytest.fixture
@@ -71,7 +85,7 @@ def sample_data_with_gaps() -> pl.DataFrame:
         'exercise': None,
     })
     
-    return pl.DataFrame(data)
+    return create_test_dataframe(data)
 
 
 @pytest.fixture
@@ -94,7 +108,7 @@ def sample_data_with_quality_issues() -> pl.DataFrame:
             'exercise': None,
         })
     
-    return pl.DataFrame(data)
+    return create_test_dataframe(data)
 
 
 def test_processor_initialization():
