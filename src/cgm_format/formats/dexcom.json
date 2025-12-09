@@ -9,6 +9,14 @@
       }
     },
     {
+      "name": "Timestamp (YYYY-MM-DDThh:mm:ss)",
+      "type": "string",
+      "description": "Timestamp of the event in YYYY-MM-DD HH:MM:SS format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
       "name": "Event Type",
       "type": "string",
       "description": "Type of recorded event",
@@ -58,30 +66,6 @@
       }
     },
     {
-      "name": "Transmitter Time (Long Integer)",
-      "type": "integer",
-      "description": "Transmitter time as long integer (epoch-like timestamp)",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Transmitter ID",
-      "type": "string",
-      "description": "Transmitter identifier (e.g., '8AM1EY')",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Timestamp (YYYY-MM-DDThh:mm:ss)",
-      "type": "string",
-      "description": "Timestamp of the event in YYYY-MM-DD HH:MM:SS format",
-      "constraints": {
-        "required": true
-      }
-    },
-    {
       "name": "Glucose Value (mg/dL)",
       "type": "number",
       "description": "Blood glucose reading from CGM sensor",
@@ -125,10 +109,22 @@
       "constraints": {
         "required": false
       }
+    },
+    {
+      "name": "Transmitter Time (Long Integer)",
+      "type": "integer",
+      "description": "Transmitter time as long integer (epoch-like timestamp)",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Transmitter ID",
+      "type": "string",
+      "description": "Transmitter identifier (e.g., '8AM1EY')",
+      "constraints": {
+        "required": false
+      }
     }
-  ],
-  "primaryKey": [
-    "sequence_id",
-    "datetime"
   ]
 }

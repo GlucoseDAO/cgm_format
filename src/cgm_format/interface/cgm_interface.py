@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from enum import Flag, auto
 from typing import Union, Tuple
 from enum import Enum
+from pathlib import Path
 import polars as pl
 
 # Check pandas availability
@@ -23,6 +24,15 @@ except ImportError:
 
 CALIBRATION_GAP_THRESHOLD = 2*60*60+45*60  # 2 hours and 45 minutes
 CALIBRATION_PERIOD_HOURS = 24
+
+EXPECTED_INTERVAL_MINUTES = 5
+TOLERANCE_INTERVAL_MINUTES = 1.2*EXPECTED_INTERVAL_MINUTES
+SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 4 - 0.2*EXPECTED_INTERVAL_MINUTES
+# Expected sequence (- = 1 minue, | = registered value, every 5 minutes):
+#|-----|-----|-----|-----|-----|
+#Synchronizeable/fillable gap schema (x - missing value, : - synchronized value, | - registered value):
+#|---|--:-----x-----x-----:--|---|
+
 MINIMUM_DURATION_MINUTES = 60 # minimum expected duration of a sequence for inference
 MAXIMUM_WANTED_DURATION_MINUTES = 480 # maximum duration of a sequence to be included in the inference
 
@@ -36,6 +46,14 @@ class SupportedCGMFormat(Enum):
     LIBRE = "libre"
     UNIFIED_CGM = "unified"  # Format that this library provides
 
+class ValidationMethod(Flag):
+    """Validation method for validating the input and output dataframes."""
+    INPUT = auto()
+    OUTPUT = auto()
+    INPUT_FORCED = auto()
+    OUTPUT_FORCED = auto()
+
+NO_VALIDATION = ValidationMethod(0)
 class ProcessingWarning(Flag):
     """Warnings that can occur during additional transformations.
     
@@ -47,6 +65,7 @@ class ProcessingWarning(Flag):
     OUT_OF_RANGE = auto()  # Contains out-of-range values
     IMPUTATION = auto()  # Contains imputed gaps
     TIME_DUPLICATES = auto()  # Sequence contains non-unique time entries
+    SYNCHRONIZATION = auto()  # Sequence undergone synchronization corrections
     QUALITY = auto()  # Other quality issues
 
 NO_WARNING = ProcessingWarning(0)
@@ -58,6 +77,7 @@ class WarningDescription(Enum):
     OUT_OF_RANGE = "Contains out-of-range values"
     IMPUTATION = "Contains imputed gaps"
     TIME_DUPLICATES = "Sequence contains non-unique time entries"
+    SYNCHRONIZATION = "Sequence undergone synchronization corrections"
     QUALITY = "Other quality issues"
 
 # Simple tuple return types
@@ -70,6 +90,21 @@ class MalformedDataError(ValueError):
     """Raised when data cannot be parsed or converted properly."""
     pass
 
+class MissingColumnError(MalformedDataError):
+    """Raised when a required column is missing from the dataframe."""
+    pass
+
+class ExtraColumnError(MalformedDataError):
+    """Raised when an extra column is present in the dataframe."""
+    pass
+
+class ColumnOrderError(MalformedDataError):
+    """Raised when the column order is not correct."""
+    pass
+
+class ColumnTypeError(MalformedDataError):
+    """Raised when the column type is not correct."""
+    pass
 
 class UnknownFormatError(ValueError):
     """Raised when format cannot be determined."""
@@ -139,18 +174,53 @@ class CGMParser(ABC):
         - CSV validation and sanity checks
         - Vendor-specific quirk handling (High/Low values, timezone fixes, etc.)
         - Column mapping to unified schema
-        - Populating service fields (sequence_id, event_type, quality)
+        - Populating service fields (event_type, quality)
+        - Sequence detection and assignment (sequence_id)
         
-        After this stage, processing flow converges to UnifiedFormat.
+        After this stage, processing flow converges to UnifiedFormat with sequence_id assigned.
         
         Args:
             text_data: Preprocessed string data
             
         Returns:
-            DataFrame in unified format matching CGM_SCHEMA
+            DataFrame in unified format matching CGM_SCHEMA with sequence_id assigned
             
         Raises:
             MalformedDataError: If CSV is unparseable, zero valid rows, or conversion fails
+        """
+        pass
+    
+    # ===== STAGE 4: Sequence Detection (Lossless Annotation) =====
+    
+    @classmethod
+    @abstractmethod
+    def detect_and_assign_sequences(
+        cls,
+        dataframe: UnifiedFormat,
+        expected_interval_minutes: int = 5,
+        large_gap_threshold_minutes: int = 15
+    ) -> UnifiedFormat:
+        """Detect large gaps and assign sequence_id column (lossless annotation).
+        
+        This is a final parsing step that splits data into continuous sequences
+        based on time gaps. It's a lossless operation that only adds metadata.
+        
+        **Separation of Concerns:**
+        - This method is called automatically at the end of parse_to_unified()
+        - Can also be called standalone for re-detecting sequences on existing data
+        - Ensures sequence_id is always present in parsed data
+        
+        Large gaps (> large_gap_threshold_minutes) create new sequences.
+        This method is idempotent - if sequence_id already exists, it validates
+        and potentially splits sequences with internal large gaps.
+        
+        Args:
+            dataframe: DataFrame in unified format (may or may not have sequence_id)
+            expected_interval_minutes: Expected data collection interval (default: 5)
+            large_gap_threshold_minutes: Threshold for creating new sequences (default: 15)
+            
+        Returns:
+            DataFrame with sequence_id column assigned
         """
         pass
     
@@ -167,6 +237,159 @@ class CGMParser(ABC):
             CSV string representation of the unified format
         """
         return dataframe.write_csv(separator=",")
+    
+    @staticmethod
+    def to_csv_file(dataframe: UnifiedFormat, file_path: str) -> None:
+        """Save unified format DataFrame to CSV file.
+        
+        Args:
+            dataframe: DataFrame in unified format
+            file_path: Path where to save the CSV file
+        """
+        dataframe.write_csv(file_path)
+    
+    # ===== Convenience Methods =====
+    
+    @classmethod
+    def parse_from_file(cls, file_path: str) -> UnifiedFormat:
+        """Convenience method to parse a CGM file directly to unified format.
+        
+        This method chains all stages together:
+        1. Read file
+        2. Decode raw data
+        3. Detect format
+        4. Parse to unified format
+        
+        Args:
+            file_path: Path to CGM data file
+            
+        Returns:
+            DataFrame in unified format
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        # Read file as bytes
+        with open(file_path, 'rb') as f:
+            raw_data = f.read()
+        
+        # Chain all stages
+        text_data = cls.decode_raw_data(raw_data)
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
+    
+    @classmethod
+    def parse_from_bytes(cls, raw_data: bytes) -> UnifiedFormat:
+        """Convenience method to parse raw bytes directly to unified format.
+        
+        This method chains all stages together:
+        1. Decode raw data
+        2. Detect format
+        3. Parse to unified format
+        
+        Args:
+            raw_data: Raw file contents as bytes
+            
+        Returns:
+            DataFrame in unified format with sequence_id assigned
+            
+        Raises:
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        text_data = cls.decode_raw_data(raw_data)
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
+    
+    @classmethod
+    def parse_from_string(cls, text_data: str) -> UnifiedFormat:
+        """Convenience method to parse cleaned string directly to unified format.
+        
+        This method assumes data is already decoded and chains:
+        1. Detect format
+        2. Parse to unified format
+        
+        Args:
+            text_data: Cleaned CSV string
+            
+        Returns:
+            DataFrame in unified format with sequence_id assigned
+            
+        Raises:
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        format_type = cls.detect_format(text_data)
+        return cls.parse_to_unified(text_data, format_type)
+    
+    @classmethod
+    def parse_file(cls, file_path: Union[str, Path]) -> UnifiedFormat:
+        """Parse CGM data from file path.
+        
+        Convenience method that reads file and parses to unified format.
+        Automatically detects format and handles encoding.
+        
+        Args:
+            file_path: Path to CGM data file (CSV format)
+            
+        Returns:
+            DataFrame in unified format
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        
+        file_path = Path(file_path)
+        with open(file_path, 'rb') as f:
+            raw_data = f.read()
+        
+        return cls.parse_from_bytes(raw_data)
+    
+    @classmethod
+    def parse_base64(cls, base64_data: str) -> UnifiedFormat:
+        """Parse CGM data from base64 encoded string.
+        
+        Useful for web API endpoints that receive base64 encoded CSV data.
+        Automatically decodes base64, detects format, and parses to unified format.
+        
+        Args:
+            base64_data: Base64 encoded CSV data string
+            
+        Returns:
+            DataFrame in unified format
+            
+        Raises:
+            ValueError: If base64 decoding fails
+            UnknownFormatError: If format cannot be determined
+            MalformedDataError: If data cannot be parsed
+        """
+        from base64 import b64decode
+        
+        try:
+            raw_data = b64decode(base64_data)
+        except Exception as e:
+            raise ValueError(f"Failed to decode base64 data: {e}")
+        
+        return cls.parse_from_bytes(raw_data)
+    
+    @classmethod
+    def mark_time_duplicates(cls, df: "pl.DataFrame") -> "pl.DataFrame":
+        """Mark events with duplicate timestamps (keeping first occurrence).
+        
+        Uses keepfirst logic: the first event at a timestamp is kept clean,
+        subsequent events with the same timestamp are marked with TIME_DUPLICATE flag.
+        
+        Args:
+            df: DataFrame in unified format (must have 'datetime' and 'quality' columns)
+            
+        Returns:
+            DataFrame with TIME_DUPLICATE flag added to quality column for duplicate timestamps
+        """
+        pass
 
 
 class CGMProcessor(ABC):
@@ -176,8 +399,12 @@ class CGMProcessor(ABC):
     - Stage 4: Postprocessing (synchronization, interpolation)
     - Stage 5: Inference preparation (truncation, validation, warnings)
     
-    This class operates only on data already in UnifiedFormat, regardless of vendor.
-    Can be used with deserialized CSV data or directly after parsing.
+    This class operates only on data already in UnifiedFormat with sequence_id assigned.
+    Data should come from CGMParser (which assigns sequences automatically) or have
+    sequences assigned via detect_and_assign_sequences() before processing.
+    
+    **Important**: All methods expect sequence_id to exist in the input dataframe.
+    If parsing with FormatParser, sequences are assigned automatically.
     """
     
     # ===== STAGE 4: Postprocessing (Unified Operations) =====

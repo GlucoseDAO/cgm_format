@@ -93,7 +93,8 @@ class Quality(Flag):
     SENSOR_CALIBRATION = auto()  # excluded 24hr period after gap ≥ CALIBRATION_GAP_THRESHOLD
     IMPUTATION = auto()  # Imputed/interpolated data
     TIME_DUPLICATE = auto()  # Event time is non-unique
-
+    SYNCHRONIZATION = auto()  # Event time was synchronized
+    
 GOOD_QUALITY = Quality(0)
 
 # CGM Unified Format Schema
@@ -106,13 +107,10 @@ CGM_SCHEMA = CGMSchemaDefinition(
             "constraints": {"required": True}
         },
         {
-            "name": "event_type",
-            "dtype": pl.Utf8,  # Enum as string in Polars
-            "description": "Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE)",
-            "constraints": {
-                "required": True,
-                "enum": [e.value for e in UnifiedEventType]
-            }
+            "name": "original_datetime",
+            "dtype": pl.Datetime('ms'),
+            "description": "Original timestamp before any modifications (preserved from conversion)",
+            "constraints": {"required": True}
         },
         {
             "name": "quality",
@@ -123,6 +121,15 @@ CGM_SCHEMA = CGMSchemaDefinition(
                 "enum": [e.value for e in Quality]
             }
         },
+        {
+            "name": "event_type",
+            "dtype": pl.Utf8,  # Enum as string in Polars
+            "description": "Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE)",
+            "constraints": {
+                "required": True,
+                "enum": [e.value for e in UnifiedEventType]
+            }
+        }
     ),
     data_columns=(
         {

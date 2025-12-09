@@ -230,7 +230,8 @@ class TestFullPipelineIntegration:
         print(f"   Created {sequence_count} sequence(s)")
         
         # Validate sequences
-        for seq_id in range(sequence_count):
+        sequence_ids = interpolated_df['sequence_id'].unique().sort()
+        for seq_id in sequence_ids:
             seq_df = interpolated_df.filter(pl.col('sequence_id') == seq_id)
             seq_len = len(seq_df)
             duration = (seq_df['datetime'].max() - seq_df['datetime'].min()).total_seconds() / 60

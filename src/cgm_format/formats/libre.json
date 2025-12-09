@@ -17,6 +17,14 @@
       }
     },
     {
+      "name": "Device Timestamp",
+      "type": "string",
+      "description": "Timestamp of the event in MM-DD-YYYY HH:MM format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
       "name": "Record Type",
       "type": "integer",
       "description": "Type of record (0=Historic, 1=Scan, 2=Strip, 4=Insulin, 5=Food, 6=Other)",
@@ -31,46 +39,6 @@
           5,
           6
         ]
-      }
-    },
-    {
-      "name": "Non-numeric Rapid-Acting Insulin",
-      "type": "string",
-      "description": "Non-numeric rapid-acting insulin notes",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Non-numeric Food",
-      "type": "string",
-      "description": "Non-numeric food notes",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Non-numeric Long-Acting Insulin",
-      "type": "string",
-      "description": "Non-numeric long-acting insulin notes",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Notes",
-      "type": "string",
-      "description": "User notes and comments",
-      "constraints": {
-        "required": false
-      }
-    },
-    {
-      "name": "Device Timestamp",
-      "type": "string",
-      "description": "Timestamp of the event in MM-DD-YYYY HH:MM format",
-      "constraints": {
-        "required": true
       }
     },
     {
@@ -92,12 +60,11 @@
       }
     },
     {
-      "name": "Strip Glucose mg/dL",
-      "type": "number",
-      "description": "Finger prick calibration glucose reading",
-      "unit": "mg/dL",
+      "name": "Non-numeric Rapid-Acting Insulin",
+      "type": "string",
+      "description": "Non-numeric rapid-acting insulin notes",
       "constraints": {
-        "minimum": 0
+        "required": false
       }
     },
     {
@@ -110,10 +77,70 @@
       }
     },
     {
+      "name": "Non-numeric Food",
+      "type": "string",
+      "description": "Non-numeric food notes",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Carbohydrates (grams)",
+      "type": "number",
+      "description": "Carbohydrate intake",
+      "unit": "grams",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Carbohydrates (servings)",
+      "type": "number",
+      "description": "Carbohydrate intake in servings",
+      "unit": "servings",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Non-numeric Long-Acting Insulin",
+      "type": "string",
+      "description": "Non-numeric long-acting insulin notes",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
       "name": "Long-Acting Insulin Value (units)",
       "type": "number",
       "description": "Long-acting (basal) insulin dose",
       "unit": "units",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Notes",
+      "type": "string",
+      "description": "User notes and comments",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Strip Glucose mg/dL",
+      "type": "number",
+      "description": "Finger prick calibration glucose reading",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Ketone mmol/L",
+      "type": "number",
+      "description": "Ketone level measurement",
+      "unit": "mmol/L",
       "constraints": {
         "minimum": 0
       }
@@ -144,37 +171,6 @@
       "constraints": {
         "minimum": 0
       }
-    },
-    {
-      "name": "Carbohydrates (grams)",
-      "type": "number",
-      "description": "Carbohydrate intake",
-      "unit": "grams",
-      "constraints": {
-        "minimum": 0
-      }
-    },
-    {
-      "name": "Carbohydrates (servings)",
-      "type": "number",
-      "description": "Carbohydrate intake in servings",
-      "unit": "servings",
-      "constraints": {
-        "minimum": 0
-      }
-    },
-    {
-      "name": "Ketone mmol/L",
-      "type": "number",
-      "description": "Ketone level measurement",
-      "unit": "mmol/L",
-      "constraints": {
-        "minimum": 0
-      }
     }
-  ],
-  "primaryKey": [
-    "sequence_id",
-    "datetime"
   ]
 }

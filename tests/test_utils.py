@@ -6,10 +6,11 @@ Tests cover:
 
 import pytest
 from pathlib import Path
+from datetime import datetime
 import polars as pl
 
 from cgm_format import FormatParser, FormatProcessor
-from cgm_format.formats.unified import UnifiedEventType
+from cgm_format.formats.unified import UnifiedEventType, CGM_SCHEMA
 
 
 # Constants - relative to project root
@@ -45,28 +46,27 @@ class TestSplitGlucoseEvents:
         assert glucose_df.columns == expected_columns
         assert events_df.columns == expected_columns
     
-    def test_split_glucose_only_contains_egv_and_imputation(self, sample_unified_df):
-        """Test that glucose DataFrame contains only EGV_READ and IMPUTATION events."""
+    def test_split_glucose_only_contains_egv(self, sample_unified_df):
+        """Test that glucose DataFrame contains only EGV_READ events."""
         glucose_df, _ = FormatProcessor.split_glucose_events(sample_unified_df)
         
         # Get unique event types in glucose DataFrame
         event_types = glucose_df['event_type'].unique().to_list()
         
-        # Should only contain EGV_READ and/or IMPUTATION
+        # Should only contain EGV_READ (imputation is now a quality flag, not an event type)
         for event_type in event_types:
-            assert event_type in ['EGV_READ', 'IMPUTATION'], \
+            assert event_type == 'EGV_READ', \
                 f"Unexpected event type in glucose_df: {event_type}"
     
     def test_split_events_excludes_glucose(self, sample_unified_df):
-        """Test that events DataFrame excludes EGV_READ and IMPUTATION."""
+        """Test that events DataFrame excludes EGV_READ."""
         _, events_df = FormatProcessor.split_glucose_events(sample_unified_df)
         
         # Get unique event types in events DataFrame
         event_types = events_df['event_type'].unique().to_list()
         
-        # Should not contain EGV_READ or IMPUTATION
+        # Should not contain EGV_READ (imputation is now a quality flag, not an event type)
         assert 'EGV_READ' not in event_types, "EGV_READ found in events_df"
-        assert 'IMPUTATION' not in event_types, "IMPUTATION found in events_df"
     
     def test_split_no_data_loss(self, sample_unified_df):
         """Test that split doesn't lose any rows."""
@@ -79,22 +79,30 @@ class TestSplitGlucoseEvents:
     
     def test_split_empty_events(self):
         """Test split when DataFrame has no non-glucose events."""
-        # Create a DataFrame with only glucose events
+        # Create a DataFrame with only glucose events (use Python datetime for correct dtype inference)
         df = pl.DataFrame({
             'sequence_id': [1, 1, 1],
+            'original_datetime': [
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5),
+                datetime(2024, 1, 1, 12, 10)
+            ],
+            'quality': [0, 0, 0],
             'event_type': ['EGV_READ', 'EGV_READ', 'EGV_READ'],
-            'quality': ['good', 'good', 'good'],
             'datetime': [
-                pl.datetime(2024, 1, 1, 12, 0),
-                pl.datetime(2024, 1, 1, 12, 5),
-                pl.datetime(2024, 1, 1, 12, 10)
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5),
+                datetime(2024, 1, 1, 12, 10)
             ],
             'glucose': [100.0, 105.0, 110.0],
-            'insulin_fast': [None, None, None],
-            'insulin_slow': [None, None, None],
             'carbs': [None, None, None],
+            'insulin_slow': [None, None, None],
+            'insulin_fast': [None, None, None],
             'exercise': [None, None, None]
         })
+        
+        # Enforce schema to cast types properly
+        df = CGM_SCHEMA.validate_dataframe(df, enforce=True)
         
         glucose_df, events_df = FormatProcessor.split_glucose_events(df)
         
@@ -105,21 +113,28 @@ class TestSplitGlucoseEvents:
     
     def test_split_empty_glucose(self):
         """Test split when DataFrame has no glucose events."""
-        # Create a DataFrame with only non-glucose events
+        # Create a DataFrame with only non-glucose events (use Python datetime for correct dtype inference)
         df = pl.DataFrame({
             'sequence_id': [1, 1],
-            'event_type': ['CARBS', 'INSULIN_FAST'],
-            'quality': ['good', 'good'],
+            'original_datetime': [
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5)
+            ],
+            'quality': [0, 0],
+            'event_type': ['CARBS_IN', 'INS_FAST'],
             'datetime': [
-                pl.datetime(2024, 1, 1, 12, 0),
-                pl.datetime(2024, 1, 1, 12, 5)
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5)
             ],
             'glucose': [None, None],
-            'insulin_fast': [None, 5.0],
-            'insulin_slow': [None, None],
             'carbs': [30.0, None],
+            'insulin_slow': [None, None],
+            'insulin_fast': [None, 5.0],
             'exercise': [None, None]
         })
+        
+        # Enforce schema to cast types properly
+        df = CGM_SCHEMA.validate_dataframe(df, enforce=True)
         
         glucose_df, events_df = FormatProcessor.split_glucose_events(df)
         
@@ -144,23 +159,32 @@ class TestSplitGlucoseEvents:
     
     def test_split_with_imputation_events(self):
         """Test that only EGV_READ and CARBS events are split correctly."""
-        # Create a DataFrame with glucose and other events
+        # Create a DataFrame with glucose and other events (use Python datetime for correct dtype inference)
         df = pl.DataFrame({
             'sequence_id': [1, 1, 1, 1],
-            'event_type': ['EGV_READ', 'EGV_READ', 'EGV_READ', 'CARBS_IN'],
+            'original_datetime': [
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5),
+                datetime(2024, 1, 1, 12, 10),
+                datetime(2024, 1, 1, 12, 15)
+            ],
             'quality': [0, 0, 0, 0],
+            'event_type': ['EGV_READ', 'EGV_READ', 'EGV_READ', 'CARBS_IN'],
             'datetime': [
-                pl.datetime(2024, 1, 1, 12, 0),
-                pl.datetime(2024, 1, 1, 12, 5),
-                pl.datetime(2024, 1, 1, 12, 10),
-                pl.datetime(2024, 1, 1, 12, 15)
+                datetime(2024, 1, 1, 12, 0),
+                datetime(2024, 1, 1, 12, 5),
+                datetime(2024, 1, 1, 12, 10),
+                datetime(2024, 1, 1, 12, 15)
             ],
             'glucose': [100.0, 102.5, 105.0, None],
-            'insulin_fast': [None, None, None, None],
-            'insulin_slow': [None, None, None, None],
             'carbs': [None, None, None, 30.0],
+            'insulin_slow': [None, None, None, None],
+            'insulin_fast': [None, None, None, None],
             'exercise': [None, None, None, None]
         })
+        
+        # Enforce schema to cast types properly
+        df = CGM_SCHEMA.validate_dataframe(df, enforce=True)
         
         glucose_df, events_df = FormatProcessor.split_glucose_events(df)
         

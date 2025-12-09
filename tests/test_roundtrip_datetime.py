@@ -67,14 +67,17 @@ def get_test_files_by_format():
 
 def create_minimal_unified_csv() -> str:
     """Create minimal unified CSV for testing."""
-    return """sequence_id,event_type,quality,datetime,glucose,carbs,insulin_slow,insulin_fast,exercise
-0,EGV_READ,0,2019-10-14T16:42:37.000,55.0,,,,
-0,EGV_READ,0,2019-10-14T16:47:37.000,55.0,,,,
-0,EGV_READ,0,2019-10-14T16:52:37.000,60.0,,,,"""
+    return """sequence_id,event_type,quality,original_datetime,datetime,glucose,carbs,insulin_slow,insulin_fast,exercise
+0,EGV_READ,0,2019-10-14T16:42:37.000,2019-10-14T16:42:37.000,55.0,,,,
+0,EGV_READ,0,2019-10-14T16:47:37.000,2019-10-14T16:47:37.000,55.0,,,,
+0,EGV_READ,0,2019-10-14T16:52:37.000,2019-10-14T16:52:37.000,60.0,,,,"""
 
 
 class TestDatetimeRoundtrip:
     """Test datetime type preservation through roundtrip."""
+    
+    # Datetime columns to test (both should preserve Datetime type)
+    DATETIME_COLUMNS = ["datetime", "original_datetime"]
     
     def test_dataframe_equality_polars(self):
         """Test that roundtrip preserves DataFrame equality in Polars."""
@@ -173,10 +176,15 @@ class TestDatetimeRoundtrip:
                     print(f"   Roundtrip: {df_roundtrip_pd_sorted[col].tolist()}")
             raise
     
-    def test_unified_format_roundtrip_datetime_type(self):
+    @pytest.mark.parametrize("datetime_column", DATETIME_COLUMNS)
+    def test_unified_format_roundtrip_datetime_type(self, datetime_column: str):
         """Test that unified format preserves datetime type in roundtrip.
         
-        This is the bug: unified CSV -> DataFrame -> CSV -> DataFrame should preserve datetime type.
+        This tests both 'datetime' and 'original_datetime' columns.
+        unified CSV -> DataFrame -> CSV -> DataFrame should preserve datetime type.
+        
+        Args:
+            datetime_column: Name of the datetime column to test
         """
         # Create minimal unified CSV
         csv_data = create_minimal_unified_csv()
@@ -185,11 +193,11 @@ class TestDatetimeRoundtrip:
         df1 = FormatParser.parse_from_string(csv_data)
         
         print(f"\n1. Initial parse from unified CSV:")
-        print(f"   datetime dtype: {df1['datetime'].dtype}")
+        print(f"   {datetime_column} dtype: {df1[datetime_column].dtype}")
         
         # Check datetime column type (this should be Datetime, but it's String - BUG!)
-        assert str(df1['datetime'].dtype).startswith('Datetime'), \
-            f"BUG: First parse should have Datetime type, got {df1['datetime'].dtype}"
+        assert str(df1[datetime_column].dtype).startswith('Datetime'), \
+            f"BUG: First parse should have Datetime type for '{datetime_column}', got {df1[datetime_column].dtype}"
         
         # Convert back to CSV
         csv_string = FormatParser.to_csv_string(df1)
@@ -198,20 +206,23 @@ class TestDatetimeRoundtrip:
         df2 = FormatParser.parse_from_string(csv_string)
         
         print(f"\n2. After roundtrip:")
-        print(f"   datetime dtype: {df2['datetime'].dtype}")
+        print(f"   {datetime_column} dtype: {df2[datetime_column].dtype}")
         
         # Check datetime column type is preserved
-        assert str(df2['datetime'].dtype).startswith('Datetime'), \
-            f"BUG: Roundtrip should preserve Datetime type, got {df2['datetime'].dtype}"
+        assert str(df2[datetime_column].dtype).startswith('Datetime'), \
+            f"BUG: Roundtrip should preserve Datetime type for '{datetime_column}', got {df2[datetime_column].dtype}"
         
         # Verify both have same dtype
-        assert df1['datetime'].dtype == df2['datetime'].dtype, \
-            f"Datetime dtype changed after roundtrip: {df1['datetime'].dtype} -> {df2['datetime'].dtype}"
+        assert df1[datetime_column].dtype == df2[datetime_column].dtype, \
+            f"Datetime dtype changed after roundtrip for '{datetime_column}': {df1[datetime_column].dtype} -> {df2[datetime_column].dtype}"
     
+    @pytest.mark.parametrize("datetime_column", DATETIME_COLUMNS)
     @pytest.mark.parametrize("file_path,format_type", get_test_files_by_format(), 
                             ids=lambda x: x.name if isinstance(x, Path) else str(x))
-    def test_real_file_roundtrip_datetime_type(self, file_path: Path, format_type: SupportedCGMFormat):
+    def test_real_file_roundtrip_datetime_type(self, file_path: Path, format_type: SupportedCGMFormat, datetime_column: str):
         """Test that real vendor files preserve datetime type through roundtrip.
+        
+        Tests both 'datetime' and 'original_datetime' columns.
         
         Test flow:
         1. Parse vendor CSV (Dexcom/Libre/Unified) -> unified DataFrame
@@ -222,10 +233,12 @@ class TestDatetimeRoundtrip:
         Args:
             file_path: Path to test file
             format_type: Detected format type
+            datetime_column: Name of the datetime column to test
         """
         print(f"\n{'='*70}")
         print(f"Testing: {file_path.name}")
         print(f"Format: {format_type.name}")
+        print(f"Column: {datetime_column}")
         print(f"{'='*70}")
         
         # Step 1: Parse original vendor file
@@ -233,12 +246,12 @@ class TestDatetimeRoundtrip:
         
         print(f"\n1. Original parse ({format_type.name} -> unified):")
         print(f"   Rows: {len(df_original)}")
-        print(f"   datetime dtype: {df_original['datetime'].dtype}")
-        print(f"   datetime range: {df_original['datetime'].min()} to {df_original['datetime'].max()}")
+        print(f"   {datetime_column} dtype: {df_original[datetime_column].dtype}")
+        print(f"   {datetime_column} range: {df_original[datetime_column].min()} to {df_original[datetime_column].max()}")
         
         # Verify original parse has Datetime type
-        assert str(df_original['datetime'].dtype).startswith('Datetime'), \
-            f"Original parse should have Datetime type, got {df_original['datetime'].dtype}"
+        assert str(df_original[datetime_column].dtype).startswith('Datetime'), \
+            f"Original parse should have Datetime type for '{datetime_column}', got {df_original[datetime_column].dtype}"
         
         # Step 2: Convert to unified CSV
         unified_csv = FormatParser.to_csv_string(df_original)
@@ -252,15 +265,15 @@ class TestDatetimeRoundtrip:
         
         print(f"\n3. Roundtrip parse (unified CSV -> unified DataFrame):")
         print(f"   Rows: {len(df_roundtrip)}")
-        print(f"   datetime dtype: {df_roundtrip['datetime'].dtype}")
+        print(f"   {datetime_column} dtype: {df_roundtrip[datetime_column].dtype}")
         
         # **THE KEY TEST**: datetime column should be Datetime type, not String
-        assert str(df_roundtrip['datetime'].dtype).startswith('Datetime'), \
-            f"ROUNDTRIP BUG: datetime should be Datetime type after roundtrip, got {df_roundtrip['datetime'].dtype}"
+        assert str(df_roundtrip[datetime_column].dtype).startswith('Datetime'), \
+            f"ROUNDTRIP BUG: {datetime_column} should be Datetime type after roundtrip, got {df_roundtrip[datetime_column].dtype}"
         
         # Verify dtypes match
-        assert df_original['datetime'].dtype == df_roundtrip['datetime'].dtype, \
-            f"Datetime dtype changed: {df_original['datetime'].dtype} -> {df_roundtrip['datetime'].dtype}"
+        assert df_original[datetime_column].dtype == df_roundtrip[datetime_column].dtype, \
+            f"Datetime dtype changed for '{datetime_column}': {df_original[datetime_column].dtype} -> {df_roundtrip[datetime_column].dtype}"
         
         # Verify row count matches
         assert len(df_original) == len(df_roundtrip), \
@@ -293,10 +306,17 @@ class TestDatetimeRoundtrip:
         pd.testing.assert_frame_equal(df_original_pd, df_roundtrip_pd)
         print(f"   ✅ Pandas DataFrames are equal")
         
-        print(f"\n✅ SUCCESS: datetime type and data preserved perfectly through roundtrip")
+        print(f"\n✅ SUCCESS: {datetime_column} type and data preserved perfectly through roundtrip")
     
-    def test_unified_format_all_datetime_formats(self):
-        """Test that unified format parser handles various ISO 8601 datetime formats."""
+    @pytest.mark.parametrize("datetime_column", DATETIME_COLUMNS)
+    def test_unified_format_all_datetime_formats(self, datetime_column: str):
+        """Test that unified format parser handles various ISO 8601 datetime formats.
+        
+        Tests both 'datetime' and 'original_datetime' columns.
+        
+        Args:
+            datetime_column: Name of the datetime column to test
+        """
         test_cases = [
             # ISO 8601 with milliseconds (standard)
             "2019-10-14T16:42:37.000",
@@ -307,19 +327,19 @@ class TestDatetimeRoundtrip:
         ]
         
         for datetime_str in test_cases:
-            csv_data = f"""sequence_id,event_type,quality,datetime,glucose,carbs,insulin_slow,insulin_fast,exercise
-0,EGV_READ,0,{datetime_str},55.0,,,,"""
+            csv_data = f"""sequence_id,event_type,quality,original_datetime,datetime,glucose,carbs,insulin_slow,insulin_fast,exercise
+0,EGV_READ,0,{datetime_str},{datetime_str},55.0,,,,"""
             
-            print(f"\nTesting datetime format: {datetime_str}")
+            print(f"\nTesting {datetime_column} with format: {datetime_str}")
             
             # This might fail for some formats if UNIFIED_TIMESTAMP_FORMATS doesn't cover them
             try:
                 df = FormatParser.parse_from_string(csv_data)
-                print(f"  ✅ Parsed successfully, dtype: {df['datetime'].dtype}")
-                assert str(df['datetime'].dtype).startswith('Datetime'), \
-                    f"Should parse as Datetime, got {df['datetime'].dtype}"
+                print(f"  ✅ Parsed successfully, dtype: {df[datetime_column].dtype}")
+                assert str(df[datetime_column].dtype).startswith('Datetime'), \
+                    f"Should parse {datetime_column} as Datetime, got {df[datetime_column].dtype}"
             except Exception as e:
-                pytest.fail(f"Failed to parse datetime format '{datetime_str}': {e}")
+                pytest.fail(f"Failed to parse {datetime_column} with format '{datetime_str}': {e}")
 
 
 if __name__ == "__main__":

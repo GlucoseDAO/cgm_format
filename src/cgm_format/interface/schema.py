@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from functools import cached_property
 from enum import Enum
 from typing import Dict, Any, List, Union, Type, TypedDict, NotRequired
-from cgm_format.interface.cgm_interface import MalformedDataError
+from cgm_format.interface.cgm_interface import (
+    MalformedDataError,
+    MissingColumnError,
+    ExtraColumnError,
+    ColumnOrderError,
+    ColumnTypeError,
+)
 
 class EnumLiteral(str, Enum):
     """
@@ -118,6 +124,26 @@ class CGMSchemaDefinition:
         columns = self.data_columns if data_only else self.service_columns + self.data_columns
         return [col["name"] for col in columns]
     
+    def get_stable_sort_keys(self) -> List[str]:
+        """Get stable sort keys for deterministic row ordering.
+        
+        Returns all column names in schema-defined order for stable sorting.
+        The schema defines columns in priority order:
+        1. sequence_id - group by sequence
+        2. original_datetime - temporal order (preserves original timing)
+        3. quality - clean data first (0 = no flags)
+        4. event_type - consistent event ordering
+        5. All data columns - final tiebreaker for identical events
+        
+        This ensures completely deterministic ordering even when multiple events
+        have the same timestamp, quality, and type (e.g., duplicate carb entries).
+        
+        Returns:
+            List of column names for stable sorting
+        """
+        # Return all column names in schema order (service columns are already in priority order)
+        return list(self.get_polars_schema(data_only=False).keys())
+    
     def get_cast_expressions(self, data_only: bool = False) -> List[pl.Expr]:
         """Get Polars expressions for casting columns.
         
@@ -213,7 +239,8 @@ class CGMSchemaDefinition:
         # Use provided primary_key, or fall back to schema's primary_key
         effective_primary_key = primary_key if primary_key is not None else self.primary_key
         if effective_primary_key:
-            schema["primaryKey"] = effective_primary_key
+            # Convert to list if tuple (Frictionless requires list, not tuple)
+            schema["primaryKey"] = list(effective_primary_key) if isinstance(effective_primary_key, tuple) else effective_primary_key
         
         # Only include dialect if explicitly provided by caller
         # The auto-generated _dialect is available via get_dialect() but not included by default
@@ -252,6 +279,42 @@ class CGMSchemaDefinition:
         else:
             return "string"
     
+    def validate_columns(self, dataframe: pl.DataFrame, enforce: bool = False) -> pl.DataFrame:
+        """Soft validation, ensure all expected columns are present.
+        
+        Args:
+            dataframe: DataFrame to validate
+            enforce: If True, enforce schema by adding missing columns. If False, raise on mismatch.
+        """
+        expected_columns = self.get_polars_schema(data_only=False)
+
+        if len(expected_columns) != len(dataframe.columns) and not enforce:
+            raise MalformedDataError(f"Number of columns in schema and dataframe do not match. Schema has {len(expected_columns)} columns, dataframe has {len(dataframe.columns)} columns.")
+
+        for i, col_name in enumerate(expected_columns):
+            if col_name not in dataframe.columns:
+                if enforce:
+                    if col_name == 'original_datetime':
+                        dataframe = dataframe.with_columns([
+                            pl.lit(None, dtype=pl.Datetime('ms')).alias(col_name)
+                        ])
+                    else:
+                        dataframe = dataframe.with_columns([
+                            pl.lit(None, dtype=expected_columns[col_name]).alias(col_name)
+                        ])
+                else:
+                    raise MissingColumnError(f"Column {col_name} not found in dataframe")
+            elif not enforce and i != dataframe.columns.index(col_name):
+                raise ColumnOrderError(f"Column {col_name} is not in the correct position in the dataframe")
+        
+        # we have all columns, now reorder and remove any extra columns
+        if enforce:
+            dataframe = dataframe.select(expected_columns.keys())
+            # Stable sorting using schema-defined sort keys
+            dataframe = dataframe.sort(self.get_stable_sort_keys())
+
+        return dataframe
+
     def validate_dataframe(self, dataframe: pl.DataFrame, enforce: bool = False) -> pl.DataFrame:
         """Validate or enforce schema on a DataFrame.
         
@@ -270,17 +333,22 @@ class CGMSchemaDefinition:
         """
         # Build expected schema from definition
         expected_schema = self.get_polars_schema(data_only=False)
+        expected_columns = expected_schema.keys()
         
+        dataframe = self.validate_columns(dataframe, enforce=enforce)
+
         # Check each column in dataframe
         mismatches = []
         for col_name in dataframe.columns:
-            if col_name in expected_schema:
-                expected_dtype = expected_schema[col_name]
-                actual_dtype = dataframe[col_name].dtype
+            if col_name in expected_columns:
                 
+                expected_dtype = expected_schema[col_name]
+                actual_dtype = dataframe[col_name].dtype           
                 if actual_dtype != expected_dtype:
                     mismatches.append((col_name, expected_dtype, actual_dtype))
-        
+            elif not enforce:
+                raise ExtraColumnError(f"Column {col_name} not in schema but present in dataframe")
+
         if not mismatches:
             # Schema matches, return as-is
             return dataframe
@@ -291,9 +359,9 @@ class CGMSchemaDefinition:
             error_lines = [f"  {col}: expected {exp}, got {act}" for col, exp, act in mismatches]
             error_msg = "Schema validation failed. DataFrame does not match schema:\n"
             error_msg += "\n".join(error_lines)
-            raise MalformedDataError(error_msg)
+            raise ColumnTypeError(error_msg)
         
-        # Enforcement mode: cast to correct types
+        # Enforcement mode: validate columns and cast types
         cast_exprs = []
         for col_name in dataframe.columns:
             if col_name in expected_schema:

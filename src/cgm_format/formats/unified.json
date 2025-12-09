@@ -9,6 +9,29 @@
       }
     },
     {
+      "name": "original_datetime",
+      "type": "datetime",
+      "description": "Original timestamp before any modifications (preserved from conversion)",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "quality",
+      "type": "integer",
+      "description": "Data quality indicator (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          1,
+          2,
+          4,
+          8,
+          16
+        ]
+      }
+    },
+    {
       "name": "event_type",
       "type": "string",
       "description": "Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE)",
@@ -35,21 +58,7 @@
           "HLTH_LSY",
           "HLTH_CYC",
           "HLTH_ALC",
-          "IMPUTATN",
           "OTHEREVT"
-        ]
-      }
-    },
-    {
-      "name": "quality",
-      "type": "integer",
-      "description": "Data quality indicator (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION)",
-      "constraints": {
-        "required": true,
-        "enum": [
-          0,
-          1,
-          2
         ]
       }
     },
@@ -108,7 +117,11 @@
     }
   ],
   "primaryKey": [
-    "sequence_id",
-    "datetime"
+    "datetime",
+    "glucose",
+    "carbs",
+    "insulin_slow",
+    "insulin_fast",
+    "exercise"
   ]
 }
