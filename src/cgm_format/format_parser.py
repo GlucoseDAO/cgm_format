@@ -281,26 +281,15 @@ class FormatParser(CGMParser):
             if len(df) == 0:
                 raise ZeroValidInputError("No valid data rows found")
             
-            # Parse datetime column if it's a string
-            # Unified format may have datetime as string when loaded from CSV
-            if df['datetime'].dtype == pl.Utf8 or df['datetime'].dtype == pl.String:
-                # Probe timestamp format for this file
-                timestamp_format = FormatParser._probe_timestamp_format(df, 'datetime', UNIFIED_TIMESTAMP_FORMATS)
-                
-                # Parse datetime column to Datetime type
-                df = df.with_columns([
-                    pl.col('datetime').str.strptime(pl.Datetime("ms"), timestamp_format)
-                ])
-            
-            # Parse original_datetime column if it's a string
-            if df['original_datetime'].dtype == pl.Utf8 or df['original_datetime'].dtype == pl.String:
-                # Probe timestamp format for this file (use same logic as datetime)
-                timestamp_format = FormatParser._probe_timestamp_format(df, 'original_datetime', UNIFIED_TIMESTAMP_FORMATS)
-                
-                # Parse original_datetime column to Datetime type
-                df = df.with_columns([
-                    pl.col('original_datetime').str.strptime(pl.Datetime("ms"), timestamp_format)
-                ])
+            for column in ['datetime', 'original_datetime']:
+                if column not in df.columns:
+                    continue #original_datetime is not always present in old files
+                # Parse datetime column if it's a string (applies to data loaded from CSV)
+                if df[column].dtype == pl.Utf8 or df[column].dtype == pl.String:
+                    timestamp_format = FormatParser._probe_timestamp_format(df, column, UNIFIED_TIMESTAMP_FORMATS)
+                    df = df.with_columns([
+                        pl.col(column).str.strptime(pl.Datetime("ms"), timestamp_format)
+                    ])
              
             return cls._postprocess_unified(df)
             

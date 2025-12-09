@@ -118,10 +118,10 @@ class TestFullPipelineIntegration:
         # Stage 4: Process and prepare for inference
         processor = FormatProcessor(
             expected_interval_minutes=5,
-            small_gap_max_minutes=15
+            small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
         )
         
-        # Interpolate gaps
+        # Interpolate gaps (sequences already created during parsing)
         interpolated_df = processor.interpolate_gaps(unified_df)
         interpolated_rows = len(interpolated_df)
         
@@ -220,14 +220,14 @@ class TestFullPipelineIntegration:
         print("\n2. Processing with interpolation...")
         processor = FormatProcessor(
             expected_interval_minutes=5,
-            small_gap_max_minutes=15
+            small_gap_max_minutes=19  # Default
         )
         
         interpolated_df = processor.interpolate_gaps(unified_df)
         print(f"   ✅ Interpolated to {len(interpolated_df)} rows")
         
         sequence_count = interpolated_df['sequence_id'].n_unique()
-        print(f"   Created {sequence_count} sequence(s)")
+        print(f"   Data contains {sequence_count} sequence(s)")
         
         # Validate sequences
         sequence_ids = interpolated_df['sequence_id'].unique().sort()

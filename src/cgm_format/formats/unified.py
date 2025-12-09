@@ -84,7 +84,7 @@ class UnifiedEventType(EnumLiteral):
     
     # System events
     OTHER = "OTHEREVT"  # Other/unknown event type
-
+    IMPUTATION = "IMPUTATN"  # Imputed/interpolated data DEPRECATED!
 
 class Quality(Flag):
     """Data quality indicator."""

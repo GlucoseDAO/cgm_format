@@ -27,7 +27,8 @@ CALIBRATION_PERIOD_HOURS = 24
 
 EXPECTED_INTERVAL_MINUTES = 5
 TOLERANCE_INTERVAL_MINUTES = 1.2*EXPECTED_INTERVAL_MINUTES
-SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 4 - 0.2*EXPECTED_INTERVAL_MINUTES
+SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 3 + 0.8*EXPECTED_INTERVAL_MINUTES #3 intervals +- 40% tolerance on each side
+
 # Expected sequence (- = 1 minue, | = registered value, every 5 minutes):
 #|-----|-----|-----|-----|-----|
 #Synchronizeable/fillable gap schema (x - missing value, : - synchronized value, | - registered value):

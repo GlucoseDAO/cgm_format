@@ -7,8 +7,11 @@ Python library for converting vendor-specific Continuous Glucose Monitoring (CGM
 - **Vendor format detection**: Automatic detection of Dexcom, Libre, and Unified formats
 - **Robust parsing**: Handles BOM marks, encoding artifacts, and vendor-specific CSV quirks
 - **Unified schema**: Standardized data format with service columns (metadata) and data columns
-- **Schema validation**: Frictionless Data Table Schema support for validation
+- **Idempotent processing**: All operations are idempotent - applying them multiple times produces the same result
+- **Schema validation**: Comprehensive validation and enforcement system with Frictionless Data Table Schema support
 - **Type-safe**: Polars-based with strict type definitions and enum support
+- **Quality tracking**: Fine-grained data quality tracking via bitwise flags
+- **Extensively tested**: Comprehensive test suite with real data (no mocking)
 - **Extensible**: Clean abstract interfaces for adding new vendor formats
 
 ## Installation
@@ -110,9 +113,10 @@ The library converts all vendor formats to a standardized schema with two types 
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `sequence_id` | `Int64` | Unique sequence identifier |
+| `sequence_id` | `Int64` | Unique sequence identifier (split by large gaps in glucose data) |
+| `original_datetime` | `Datetime` | Original timestamp before any modifications (preserved for idempotency) |
 | `event_type` | `Utf8` | Event type (8-char code: EGV_READ, INS_FAST, CARBS_IN, etc.) |
-| `quality` | `Int64` | Data quality flags (bitwise): 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE |
+| `quality` | `Int64` | Data quality flags (bitwise): 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION |
 
 ### Data Columns
 
@@ -129,7 +133,43 @@ See [`formats/UNIFIED_FORMAT.md`](formats/UNIFIED_FORMAT.md) for complete specif
 
 ## Processing Pipeline
 
-The library implements a 3-stage parsing pipeline defined in the `CGMParser` interface:
+The library implements a comprehensive processing pipeline with two main stages:
+
+### Parsing (Stages 1-3): CGMParser Interface
+
+Vendor-specific parsing to unified format with automatic sequence detection.
+
+### Processing (Stages 4-5): CGMProcessor Interface
+
+Vendor-agnostic operations on unified data. All operations are **idempotent** through `original_datetime` preservation and quality flags.
+
+**Complete Pipeline Example:**
+
+```python
+from cgm_format import FormatParser, FormatProcessor
+
+# Stages 1-3: Parse to unified format (sequences automatically assigned)
+unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+
+# Stage 4: Interpolate gaps and mark calibration periods
+processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=19)
+unified_df = processor.interpolate_gaps(unified_df)
+
+# Optional: Synchronize timestamps to fixed grid
+unified_df = processor.synchronize_timestamps(unified_df)
+
+# Stage 5: Prepare for inference with quality checks
+inference_df, warnings = processor.prepare_for_inference(
+    unified_df,
+    minimum_duration_minutes=60,
+    maximum_wanted_duration=480
+)
+
+# Strip service columns for ML model
+data_only = FormatProcessor.to_data_only_df(inference_df)
+```
+
+See [`interface/PIPELINE.md`](src/cgm_format/interface/PIPELINE.md) for complete documentation.
 
 ### Stage 1: Preprocess Raw Data
 
@@ -152,19 +192,23 @@ format_type = FormatParser.detect_format(text_data)
 
 ### Stage 3: Vendor-Specific Parsing
 
-Parse vendor CSV to unified format, handling vendor-specific quirks:
+Parse vendor CSV to unified format, handling vendor-specific quirks and automatically detecting sequences:
 
 - Dexcom: High/Low glucose markers, variable-length rows, metadata rows
 - Libre: Record type filtering, timestamp format variations
+- **Sequence detection**: Automatically splits data at large gaps (>15 min) in glucose readings
+- **Original timestamp preservation**: Creates `original_datetime` column for idempotency
 
 ```python
 unified_df = FormatParser.parse_to_unified(text_data, format_type)
+# ✓ Sequences automatically assigned based on glucose gaps
+# ✓ original_datetime preserved for idempotent processing
 ```
 
 All stages can be chained with convenience methods:
 
 ```python
-# Parse from file path (recommended)
+# Parse from file path (recommended) - sequences auto-detected
 unified_df = FormatParser.parse_file("data.csv")
 
 # Parse from base64 string (web APIs)
@@ -177,31 +221,34 @@ unified_df = FormatParser.parse_from_bytes(raw_data)
 unified_df = FormatParser.parse_from_string(text_data)
 ```
 
-See [`interface/PIPELINE.md`](interface/PIPELINE.md) for complete pipeline documentation.
+### Stage 4: Gap Interpolation and Calibration Marking
 
-### Stage 4: Gap Interpolation and Sequence Creation
-
-The `FormatProcessor.interpolate_gaps()` method handles data continuity:
+The `FormatProcessor.interpolate_gaps()` method handles data continuity and quality marking:
 
 ```python
 from cgm_format import FormatProcessor
 
 processor = FormatProcessor(
     expected_interval_minutes=5,    # Normal CGM reading interval
-    small_gap_max_minutes=15        # Max gap size to interpolate
+    small_gap_max_minutes=19,       # Max gap size to interpolate (3 intervals + 80% tolerance)
+    snap_to_grid=True               # Align interpolated points to synchronization grid (default)
 )
 
-# Detect gaps, create sequences, and interpolate missing values
+# Fill small gaps with linear interpolation
 processed_df = processor.interpolate_gaps(unified_df)
 ```
 
 **What it does:**
 
-1. **Gap Detection**: Identifies gaps in continuous glucose monitoring data
-2. **Sequence Creation**: Splits data at large gaps (>15 min default) into separate sequences
-3. **Small Gap Interpolation**: Fills small gaps (≤15 min) with linearly interpolated glucose values
-4. **Calibration Marking**: Marks 24-hour periods after gaps ≥2h45m with `SENSOR_CALIBRATION` quality flag
+1. **Gap Detection**: Identifies gaps in continuous glucose monitoring data (only glucose events)
+2. **Small Gap Interpolation**: Fills gaps (>5 min, ≤19 min) with linearly interpolated glucose values
+3. **Snap-to-Grid Mode** (default): Interpolated points align with synchronization grid
+   - Adds both `IMPUTATION` and `SYNCHRONIZATION` quality flags
+   - Guarantees idempotency: `interpolate → sync` ≡ `sync → interpolate`
+4. **Calibration Period Marking**: Called automatically in `prepare_for_inference()`
+   - Marks 24-hour periods after gaps ≥2h45m with `SENSOR_CALIBRATION` quality flag
 5. **Warning Collection**: Tracks imputation events via `ProcessingWarning.IMPUTATION`
+6. **Idempotency**: Uses `original_datetime` for gap detection (never modified)
 
 **Example - Analyze sequences created:**
 
@@ -225,7 +272,7 @@ for row in sequence_info.iter_rows(named=True):
 
 ### Stage 5: Timestamp Synchronization (Optional)
 
-Align timestamps to fixed-frequency intervals for ML models requiring regular time steps:
+Align timestamps to fixed-frequency intervals for ML models requiring regular time steps. This is a **lossless operation** - it keeps ALL source rows and only rounds their timestamps to the grid:
 
 ```python
 # After interpolate_gaps(), synchronize to exact intervals
@@ -237,10 +284,12 @@ synchronized_df = processor.synchronize_timestamps(processed_df)
 **What it does:**
 
 1. Rounds timestamps to nearest minute boundary (removes seconds)
-2. Creates fixed-frequency timestamps at `expected_interval_minutes` intervals
-3. Linearly interpolates glucose values between measurements
-4. Shifts discrete events (carbs, insulin, exercise) to nearest timestamp
+2. Each source row independently maps to its nearest grid point
+3. Marks all rows with `SYNCHRONIZATION` quality flag
+4. Uses `original_datetime` for grid calculations (ensures idempotency)
 5. Preserves sequence boundaries (processes each sequence independently)
+
+**Idempotency:** Multiple applications produce identical results because grid calculations use `original_datetime` (never modified) and quality flags are additive.
 
 **When to use:** Time-series models expecting fixed intervals (LSTM, transformers, ARIMA)  
 **When to skip:** Models handling irregular timestamps, or when original timing is critical
@@ -265,20 +314,31 @@ from cgm_format.interface.cgm_interface import ProcessingWarning
 
 if warnings & ProcessingWarning.TOO_SHORT:
     print("Warning: Sequence shorter than minimum duration")
-if warnings & ProcessingWarning.QUALITY:
-    print("Warning: Data contains quality issues (OUT_OF_RANGE or SENSOR_CALIBRATION)")
+if warnings & ProcessingWarning.OUT_OF_RANGE:
+    print("Warning: Data contains sensor out-of-range errors")
 if warnings & ProcessingWarning.IMPUTATION:
     print("Warning: Data contains interpolated values")
+if warnings & ProcessingWarning.CALIBRATION:
+    print("Warning: Data contains calibration events or post-calibration periods")
+if warnings & ProcessingWarning.TIME_DUPLICATES:
+    print("Warning: Data contains duplicate timestamps")
 ```
 
 **What it does:**
 
 1. **Validation**: Raises `ZeroValidInputError` if no valid glucose data exists
-2. **Sequence Selection**: Keeps only the **latest** sequence (most recent timestamps)
-3. **Duration Checks**: Warns if sequence < `minimum_duration_minutes`
-4. **Quality Checks**: Collects warnings for calibration events and quality flags
-5. **Truncation**: Keeps last N minutes if exceeding `maximum_wanted_duration`
-6. **Returns**: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
+2. **Sequence Selection**: Keeps only the **latest** valid sequence (most recent timestamps)
+   - Tries sequences from most recent, falls back if too short
+3. **Truncation**: Keeps last N minutes if exceeding `maximum_wanted_duration`
+4. **Time Duplicate Marking**: Marks duplicate timestamps with `TIME_DUPLICATE` quality flag
+5. **Calibration Period Marking**: Marks 24h periods after gaps ≥2h45m with `SENSOR_CALIBRATION` flag
+6. **Quality Checks**: Collects warnings for:
+   - `TOO_SHORT`: sequence duration < minimum_duration_minutes
+   - `OUT_OF_RANGE`: sensor out-of-range errors ("High"/"Low" readings)
+   - `CALIBRATION`: calibration events or 24hr post-calibration gap periods
+   - `IMPUTATION`: imputed/interpolated data
+   - `TIME_DUPLICATES`: non-unique timestamps
+7. **Returns**: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
 
 **Output DataFrame:**
 
@@ -299,10 +359,11 @@ from cgm_format.interface.cgm_interface import MINIMUM_DURATION_MINUTES, MAXIMUM
 # Initialize processor with custom intervals
 processor = FormatProcessor(
     expected_interval_minutes=5,     # CGM reading interval (5 min for Dexcom, 15 min for Libre)
-    small_gap_max_minutes=15         # Max gap to interpolate (larger gaps create new sequences)
+    small_gap_max_minutes=19,        # Max gap to interpolate (3 intervals + 80% tolerance)
+    snap_to_grid=True                # Align interpolated points to sync grid (default, ensures idempotency)
 )
 
-# Stage 4: Fill gaps and create sequences
+# Stage 4: Fill gaps
 processed_df = processor.interpolate_gaps(unified_df)
 
 # Stage 5 (Optional): Synchronize to fixed intervals
@@ -484,17 +545,22 @@ cgm_format/
 
 - `decode_raw_data()` - Encoding cleanup
 - `detect_format()` - Format detection
-- `parse_to_unified()` - Vendor CSV → UnifiedFormat
+- `parse_to_unified()` - Vendor CSV → UnifiedFormat with sequence detection
+- `detect_and_assign_sequences()` - Glucose-gap-based sequence assignment (automatic)
 
 **CGMProcessor** (Stages 4-5): Vendor-agnostic operations on unified data
 
-- `synchronize_timestamps()` - Timestamp alignment to fixed intervals
-- `interpolate_gaps()` - Gap detection, sequence creation, and interpolation
+- `interpolate_gaps()` - Gap detection and interpolation with calibration marking
+- `synchronize_timestamps()` - Timestamp alignment to fixed intervals (lossless)
+- `mark_calibration_periods()` - 24hr post-gap quality marking
+- `mark_time_duplicates()` - Duplicate timestamp flagging
 - `prepare_for_inference()` - ML preparation with quality checks and truncation
 
 The current implementation:
 - `FormatParser` implements the `CGMParser` interface (Stages 1-3)
 - `FormatProcessor` implements the `CGMProcessor` interface (Stages 4-5)
+
+All operations are **idempotent** through `original_datetime` preservation and quality flags.
 
 ### Processing Stages Implementation
 
@@ -502,31 +568,36 @@ The current implementation:
 - BOM removal and encoding normalization
 - Pattern-based format detection (first 15 lines)
 - Vendor-specific CSV parsing with quirk handling
+- Timestamp format probing (handles multiple formats per vendor)
 - Column mapping to unified schema
-- Service field population (sequence_id, event_type, quality)
+- Service field population (sequence_id, event_type, quality, original_datetime)
+- Glucose-only gap detection and sequence assignment (two-pass approach)
+- Schema validation and enforcement
 
 **Stage 4 (FormatProcessor.interpolate_gaps):**
-- Time difference calculation between consecutive readings
-- Sequence boundary detection (gaps > `small_gap_max_minutes`)
-- Linear interpolation for small gaps (≤ `small_gap_max_minutes`)
-- Imputation row creation with `Quality.IMPUTATION` flag
-- Calibration period marking (24h after gaps ≥ 2h45m) with `Quality.SENSOR_CALIBRATION` flag
+- Time difference calculation between consecutive glucose readings
+- Small gap interpolation (> expected_interval, ≤ small_gap_max_minutes)
+- Linear interpolation with snap-to-grid mode for idempotency
+- Imputation row creation with `Quality.IMPUTATION` + `Quality.SYNCHRONIZATION` flags
 - Warning collection for imputed data
+- Uses `original_datetime` for gap detection (ensures idempotency)
 
 **Stage 5 (FormatProcessor.synchronize_timestamps):**
-- Timestamp rounding to minute boundaries
-- Fixed-frequency grid generation at `expected_interval_minutes`
-- Asof join (backward/forward) for value alignment
-- Linear glucose interpolation between grid points
-- Discrete event shifting to nearest timestamp
+- Timestamp rounding to minute boundaries using grid alignment
+- Each source row maps to nearest grid point (lossless operation)
+- Grid calculations use `original_datetime` (ensures idempotency)
+- All rows marked with `Quality.SYNCHRONIZATION` flag
+- Preserves sequence boundaries (processes each independently)
 
 **Stage 6 (FormatProcessor.prepare_for_inference):**
 - Zero-data validation (raises `ZeroValidInputError`)
-- Latest sequence selection (max timestamp)
+- Latest valid sequence selection with fallback
+- Time duplicate marking with `Quality.TIME_DUPLICATE` flag
+- Calibration period marking (24h after gaps ≥2h45m) with `Quality.SENSOR_CALIBRATION` flag
 - Duration verification with `TOO_SHORT` warning
-- Quality flag detection (`OUT_OF_RANGE`, `SENSOR_CALIBRATION`)
+- Quality flag detection (`OUT_OF_RANGE`, `SENSOR_CALIBRATION`, `IMPUTATION`, `TIME_DUPLICATES`)
 - Sequence truncation from beginning (preserves most recent data)
-- Service column removal (data columns only)
+- Optional service column removal via `to_data_only_df()`
 - Warning flag aggregation and return
 
 ### Processing Configuration Parameters
@@ -536,16 +607,17 @@ The current implementation:
 | Parameter | Default | Description | Effect |
 |-----------|---------|-------------|--------|
 | `expected_interval_minutes` | 5 | Normal reading interval | Grid spacing for synchronization; gap detection baseline |
-| `small_gap_max_minutes` | 15 | Max gap to interpolate | Gaps > this create new sequences; gaps ≤ this are filled |
+| `small_gap_max_minutes` | 19 | Max gap to interpolate | Gaps > this are not filled; gaps ≤ this are filled with interpolation |
+| `snap_to_grid` | True | Align interpolated points to grid | When True, ensures idempotency between interpolate and sync operations |
 
 **Common configurations:**
 
 ```python
 # Dexcom G6/G7 (5-minute readings)
-processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=15)
+processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=19)
 
 # FreeStyle Libre (manual scans, typically 15 min)
-processor = FormatProcessor(expected_interval_minutes=15, small_gap_max_minutes=45)
+processor = FormatProcessor(expected_interval_minutes=15, small_gap_max_minutes=57)  # 3 intervals + 80%
 
 # Strict quality (minimal imputation)
 processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=10)
@@ -576,10 +648,43 @@ from cgm_format.interface.cgm_interface import (
 
 Schemas are defined using `CGMSchemaDefinition` from `interface/schema.py`:
 
-- **Type-safe**: Polars dtypes with constraints
+- **Type-safe**: Polars dtypes with strict validation
 - **Vendor-specific**: Each format has its own schema with quirks documented
+- **Validation modes**: Validate (raise on mismatch) or enforce (cast and fix)
 - **Frictionless export**: Auto-generate validation schemas
 - **Dialect support**: CSV parsing hints (header rows, comment rows, etc.)
+- **Stable sorting**: Deterministic row ordering for idempotency
+
+**Configuration:**
+
+```python
+from cgm_format.format_parser import FormatParser
+from cgm_format.format_processor import FormatProcessor
+from cgm_format.interface.cgm_interface import ValidationMethod
+
+# Parser validation (class variable)
+FormatParser.validation_mode = ValidationMethod.INPUT  # Validate inputs (default)
+FormatParser.validation_mode = ValidationMethod.INPUT_FORCED  # Enforce schema on inputs
+
+# Processor validation (instance parameter)
+processor = FormatProcessor(validation_mode=ValidationMethod.INPUT)
+```
+
+**Schema usage:**
+
+```python
+from cgm_format.formats.unified import CGM_SCHEMA
+
+# Validate DataFrame matches schema (raises on mismatch)
+validated_df = CGM_SCHEMA.validate_dataframe(df, enforce=False)
+
+# Enforce schema (add missing columns, cast types, reorder, sort)
+enforced_df = CGM_SCHEMA.validate_dataframe(df, enforce=True)
+
+# Get stable sort keys for deterministic ordering
+sort_keys = CGM_SCHEMA.get_stable_sort_keys()
+df = df.sort(sort_keys)
+```
 
 ## Error Handling
 
@@ -589,6 +694,10 @@ Schemas are defined using `CGMSchemaDefinition` from `interface/schema.py`:
 |-----------|------|-------------|
 | `UnknownFormatError` | `ValueError` | Format cannot be detected |
 | `MalformedDataError` | `ValueError` | CSV parsing or conversion failed |
+| `MissingColumnError` | `MalformedDataError` | Required column missing from DataFrame |
+| `ExtraColumnError` | `MalformedDataError` | Unexpected column present in DataFrame |
+| `ColumnOrderError` | `MalformedDataError` | Columns not in correct schema order |
+| `ColumnTypeError` | `MalformedDataError` | Column type doesn't match schema |
 | `ZeroValidInputError` | `ValueError` | No valid data points found |
 
 ### Processing Warnings
@@ -598,10 +707,9 @@ The `FormatProcessor` collects quality warnings during processing:
 | Warning Flag | Description | Triggered By |
 |--------------|-------------|--------------|
 | `ProcessingWarning.TOO_SHORT` | Sequence duration < minimum_duration_minutes | `prepare_for_inference()` |
-| `ProcessingWarning.QUALITY` | Data contains OUT_OF_RANGE or SENSOR_CALIBRATION quality flags | `prepare_for_inference()` |
-| `ProcessingWarning.OUT_OF_RANGE` | Data contains OUT_OF_RANGE quality flag | `prepare_for_inference()` |
-| `ProcessingWarning.IMPUTATION` | Data contains IMPUTATION quality flag | `interpolate_gaps()` |
-| `ProcessingWarning.CALIBRATION` | Data contains SENSOR_CALIBRATION quality flag | `prepare_for_inference()` |
+| `ProcessingWarning.OUT_OF_RANGE` | Data contains OUT_OF_RANGE quality flag (sensor errors) | `prepare_for_inference()` |
+| `ProcessingWarning.CALIBRATION` | Data contains calibration events or SENSOR_CALIBRATION quality flag | `prepare_for_inference()` |
+| `ProcessingWarning.IMPUTATION` | Data contains IMPUTATION quality flag (interpolated data) | `interpolate_gaps()` |
 | `ProcessingWarning.TIME_DUPLICATES` | Data contains TIME_DUPLICATE quality flag | `prepare_for_inference()` |
 
 **Usage:**
@@ -611,9 +719,11 @@ processor = FormatProcessor()
 processed_df = processor.interpolate_gaps(unified_df)
 inference_df, warnings = processor.prepare_for_inference(processed_df)
 
-# Check individual warnings
-if warnings & ProcessingWarning.QUALITY:
-    print("Quality issues detected")
+# Check individual warnings using bitwise AND
+if warnings & ProcessingWarning.OUT_OF_RANGE:
+    print("Sensor out-of-range errors detected")
+if warnings & ProcessingWarning.CALIBRATION:
+    print("Calibration events or post-calibration periods present")
 
 # Get all warnings as list
 all_warnings = processor.get_warnings()
@@ -626,12 +736,17 @@ if processor.has_warnings():
 
 ## Testing
 
+The library has comprehensive test coverage with real data (no mocking):
+
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest tests/
 
-# Run specific test
-pytest tests/test_format_parser.py -v
+# Run specific test file
+uv run pytest tests/test_format_processor.py -v
+
+# Run idempotency tests
+uv run pytest tests/test_idempotency.py -v
 
 # Generate validation report
 uv run python examples/example_schema_usage.py
@@ -639,6 +754,26 @@ uv run python examples/example_schema_usage.py
 # Run usage examples with real data
 uv run python examples/usage_example.py
 ```
+
+**Test Coverage:**
+
+- **test_format_detection_validation.py** - Format detection, Frictionless schema validation
+- **test_integration_pipeline.py** - Full end-to-end pipeline on real data (no mocking)
+- **test_format_processor.py** - Processor implementation: sync, interpolation, inference prep
+- **test_format_converter.py** - Parser: detection, parsing, roundtrip, sequence detection
+- **test_roundtrip_datetime.py** - Datetime type preservation through conversions
+- **test_idempotency.py** - Idempotency and commutativity of operations
+- **test_schema.py** - Schema validation and Frictionless conversion
+- **test_utils.py** - Utility methods (split_glucose_events, to_data_only_df)
+
+All tests verify:
+- Data integrity and consistency
+- Timestamp ordering and idempotency
+- Lossless operations (no data loss)
+- Schema compliance
+- Error handling
+
+See [`tests/README.md`](tests/README.md) for detailed test documentation.
 
 ## Development
 

@@ -46,13 +46,13 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     print("\n2. Processing data for inference...")
     processor = FormatProcessor(
         expected_interval_minutes=5,
-        small_gap_max_minutes=15
+        small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
     )
     
-    # Fill gaps and create sequences
+    # Fill gaps within existing sequences (sequences created during parsing)
     unified_df = processor.interpolate_gaps(unified_df)
     sequence_count = unified_df['sequence_id'].n_unique()
-    print(f"   ✓ Created {sequence_count} sequence(s)")
+    print(f"   ✓ Data contains {sequence_count} sequence(s)")
     
     # Synchronize timestamps to fixed intervals
     unified_df = processor.synchronize_timestamps(unified_df)
@@ -187,7 +187,7 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
     
     processor = FormatProcessor(
         expected_interval_minutes=5,
-        small_gap_max_minutes=15
+        small_gap_max_minutes=19  # Default
     )
     results = []
     
@@ -286,6 +286,8 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     
     # Filter out imputed and low-quality data
     print("\n3. Filtering for high quality data...")
+    from cgm_format.formats.unified import Quality
+    
     high_quality_df = unified_df.filter(
         ((pl.col('quality') & Quality.IMPUTATION.value) == 0) &
         (pl.col('quality') == GOOD_QUALITY.value)
@@ -448,7 +450,7 @@ def example_7_ml_integration(file_path: Path) -> None:
     unified_df = FormatParser.parse_file(file_path)
     processor = FormatProcessor(
         expected_interval_minutes=5,
-        small_gap_max_minutes=15
+        small_gap_max_minutes=19  # Default
     )
     unified_df = processor.interpolate_gaps(unified_df)
     unified_df = processor.synchronize_timestamps(unified_df)
