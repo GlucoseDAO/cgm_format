@@ -5,12 +5,14 @@ Separated into two concerns:
 - CGMProcessor: Vendor-agnostic unified format processing (Stages 4-5)
 """
 
+from datetime import datetime
 from abc import ABC, abstractmethod
 from enum import Flag, auto
-from typing import Union, Tuple
+from typing import Union, Tuple, List
 from enum import Enum
 from pathlib import Path
 import polars as pl
+from base64 import b64decode
 
 # Check pandas availability
 try:
@@ -115,6 +117,24 @@ class ZeroValidInputError(ValueError):
     """Raised when there are no valid data points in the sequence."""
     pass
 
+# Maximum length for error messages to prevent huge CSV dumps in logs
+MAX_ERROR_MESSAGE_LENGTH = 8192
+
+def truncate_error_message(message: str, max_length: int = MAX_ERROR_MESSAGE_LENGTH) -> str:
+    """Truncate error message to prevent huge data dumps in logs.
+    
+    Args:
+        message: Original error message
+        max_length: Maximum length in bytes (default 8192)
+        
+    Returns:
+        Truncated error message with indicator if truncated
+    """
+    if len(message) <= max_length:
+        return message
+    
+    truncated = message[:max_length]
+    return f"{truncated}... [ERROR MESSAGE TRUNCATED - original length: {len(message)} bytes]"
 
 class CGMParser(ABC):
     """Abstract base class for vendor-specific CGM data parsing (Stages 1-3).
@@ -164,6 +184,21 @@ class CGMParser(ABC):
         """
         pass
 
+    @classmethod
+    @abstractmethod
+    def format_supported(cls, raw_data: Union[bytes, str]) -> bool:
+        """Check if the library can parse the given data format.
+        
+        Uses the detector to determine if the format is supported without parsing the data.
+        
+        Args:
+            raw_data: Raw file contents (bytes or string)
+            
+        Returns:
+            True if format is supported and can be parsed, False otherwise
+        """
+        pass
+
     # ===== STAGE 3: Device-Specific Parsing to Unified Format =====
     
     @classmethod
@@ -188,40 +223,6 @@ class CGMParser(ABC):
             
         Raises:
             MalformedDataError: If CSV is unparseable, zero valid rows, or conversion fails
-        """
-        pass
-    
-    # ===== STAGE 4: Sequence Detection (Lossless Annotation) =====
-    
-    @classmethod
-    @abstractmethod
-    def detect_and_assign_sequences(
-        cls,
-        dataframe: UnifiedFormat,
-        expected_interval_minutes: int = 5,
-        large_gap_threshold_minutes: int = 15
-    ) -> UnifiedFormat:
-        """Detect large gaps and assign sequence_id column (lossless annotation).
-        
-        This is a final parsing step that splits data into continuous sequences
-        based on time gaps. It's a lossless operation that only adds metadata.
-        
-        **Separation of Concerns:**
-        - This method is called automatically at the end of parse_to_unified()
-        - Can also be called standalone for re-detecting sequences on existing data
-        - Ensures sequence_id is always present in parsed data
-        
-        Large gaps (> large_gap_threshold_minutes) create new sequences.
-        This method is idempotent - if sequence_id already exists, it validates
-        and potentially splits sequences with internal large gaps.
-        
-        Args:
-            dataframe: DataFrame in unified format (may or may not have sequence_id)
-            expected_interval_minutes: Expected data collection interval (default: 5)
-            large_gap_threshold_minutes: Threshold for creating new sequences (default: 15)
-            
-        Returns:
-            DataFrame with sequence_id column assigned
         """
         pass
     
@@ -250,36 +251,6 @@ class CGMParser(ABC):
         dataframe.write_csv(file_path)
     
     # ===== Convenience Methods =====
-    
-    @classmethod
-    def parse_from_file(cls, file_path: str) -> UnifiedFormat:
-        """Convenience method to parse a CGM file directly to unified format.
-        
-        This method chains all stages together:
-        1. Read file
-        2. Decode raw data
-        3. Detect format
-        4. Parse to unified format
-        
-        Args:
-            file_path: Path to CGM data file
-            
-        Returns:
-            DataFrame in unified format
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """
-        # Read file as bytes
-        with open(file_path, 'rb') as f:
-            raw_data = f.read()
-        
-        # Chain all stages
-        text_data = cls.decode_raw_data(raw_data)
-        format_type = cls.detect_format(text_data)
-        return cls.parse_to_unified(text_data, format_type)
     
     @classmethod
     def parse_from_bytes(cls, raw_data: bytes) -> UnifiedFormat:
@@ -368,29 +339,13 @@ class CGMParser(ABC):
             UnknownFormatError: If format cannot be determined
             MalformedDataError: If data cannot be parsed
         """
-        from base64 import b64decode
-        
         try:
             raw_data = b64decode(base64_data)
         except Exception as e:
             raise ValueError(f"Failed to decode base64 data: {e}")
         
         return cls.parse_from_bytes(raw_data)
-    
-    @classmethod
-    def mark_time_duplicates(cls, df: "pl.DataFrame") -> "pl.DataFrame":
-        """Mark events with duplicate timestamps (keeping first occurrence).
-        
-        Uses keepfirst logic: the first event at a timestamp is kept clean,
-        subsequent events with the same timestamp are marked with TIME_DUPLICATE flag.
-        
-        Args:
-            df: DataFrame in unified format (must have 'datetime' and 'quality' columns)
-            
-        Returns:
-            DataFrame with TIME_DUPLICATE flag added to quality column for duplicate timestamps
-        """
-        pass
+
 
 
 class CGMProcessor(ABC):
@@ -406,56 +361,179 @@ class CGMProcessor(ABC):
     
     **Important**: All methods expect sequence_id to exist in the input dataframe.
     If parsing with FormatParser, sequences are assigned automatically.
+    
+    All methods are classmethods - no need to instantiate.
     """
+    
+    # ===== Quality Flag Management =====
+    
+    @classmethod
+    @abstractmethod
+    def mark_time_duplicates(
+        cls,
+        df: UnifiedFormat,
+        **kwargs
+    ) -> UnifiedFormat:
+        """Mark events with duplicate timestamps (keeping first occurrence).
+        
+        Args:
+            df: DataFrame in unified format
+            **kwargs: Implementation-specific parameters (e.g., validation_mode)
+            
+        Returns:
+            DataFrame with TIME_DUPLICATE flag added to quality column
+        """
+        pass
+    
+    @classmethod
+    @abstractmethod
+    def mark_calibration_periods(
+        cls,
+        dataframe: UnifiedFormat,
+        **kwargs
+    ) -> UnifiedFormat:
+        """Mark periods after calibration gaps with SENSOR_CALIBRATION quality flag.
+        
+        Args:
+            dataframe: DataFrame with sequences and original_datetime column
+            **kwargs: Implementation-specific parameters (e.g., validation_mode)
+            
+        Returns:
+            DataFrame with quality flags updated for calibration periods
+        """
+        pass
     
     # ===== STAGE 4: Postprocessing (Unified Operations) =====
     
+    @classmethod
     @abstractmethod
-    def synchronize_timestamps(self, dataframe: UnifiedFormat) -> UnifiedFormat:
+    def detect_and_assign_sequences(
+        cls,
+        dataframe: UnifiedFormat,
+        **kwargs
+    ) -> UnifiedFormat:
+        """Detect large gaps and assign sequence_id column (lossless annotation).
+        
+        This is a final parsing step that splits data into continuous sequences
+        based on time gaps. It's a lossless operation that only adds metadata.
+        
+        **Separation of Concerns:**
+        - This method is called automatically at the end of parse_to_unified()
+        - Can also be called standalone for re-detecting sequences on existing data
+        - Ensures sequence_id is always present in parsed data
+        
+        Large gaps (> large_gap_threshold_minutes) create new sequences.
+        This method is idempotent - if sequence_id already exists, it validates
+        and potentially splits sequences with internal large gaps.
+        
+        Args:
+            dataframe: DataFrame in unified format (may or may not have sequence_id)
+            expected_interval_minutes: Expected data collection interval (default: 5)
+            large_gap_threshold_minutes: Threshold for creating new sequences (default: 15)
+            
+        Returns:
+            DataFrame with sequence_id column assigned
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def synchronize_timestamps(
+        cls,
+        dataframe: UnifiedFormat,
+        **kwargs
+    ) -> UnifiedFormat:
         """Align timestamps to minute boundaries.
         
         Args:
             dataframe: DataFrame in unified format
+            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes, validation_mode)
             
         Returns:
             DataFrame with synchronized timestamps
         """
         pass
     
+    @classmethod
     @abstractmethod
-    def interpolate_gaps(self, dataframe: UnifiedFormat) -> UnifiedFormat:
+    def interpolate_gaps(
+        cls,
+        dataframe: UnifiedFormat,
+        **kwargs
+    ) -> UnifiedFormat:
         """Fill gaps in continuous data with imputed values.
         
         Adds rows with Quality.IMPUTATION flag for missing data points.
-        Updates ProcessingWarning.IMPUTATION flag if gaps were filled.
         
         Args:
             dataframe: DataFrame with potential gaps
+            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes, small_gap_max_minutes, snap_to_grid, validation_mode)
             
         Returns:
-            DataFrame with interpolated values marked with IMPUTATION quality flag
+            DataFrame with interpolated values
+        """
+        pass
+    
+    @classmethod
+    @abstractmethod
+    def get_sequence_grid_start(
+        cls,
+        seq_data: UnifiedFormat,
+        **kwargs
+    ) -> datetime:
+        """Determine the grid start time for a sequence.
+        
+        Args:
+            seq_data: Sequence data
+            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes)
+            
+        Returns:
+            Grid start timestamp (rounded to nearest minute)
+        """
+        pass
+    
+    @classmethod
+    @abstractmethod
+    def calculate_grid_point(
+        cls,
+        timestamp: datetime,
+        grid_start: datetime,
+        **kwargs
+    ) -> datetime:
+        """Calculate the nearest grid point for a given timestamp.
+        
+        Args:
+            timestamp: Timestamp to align to grid
+            grid_start: Start of the grid
+            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes, round_direction)
+            
+        Returns:
+            Timestamp aligned to grid
         """
         pass
     
     # ===== STAGE 5: Inference Preprocessing =====
     
+    @classmethod
     @abstractmethod
     def prepare_for_inference(
-        self,
+        cls,
         dataframe: UnifiedFormat,
         minimum_duration_minutes: int = MINIMUM_DURATION_MINUTES,
         maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES,
-        glucose_only: bool = False,
-        drop_duplicates: bool = False
+        **kwargs
     ) -> InferenceResult:
         """Prepare data for inference with full UnifiedFormat and warning flags.
         
         Operations performed:
-        - Filter to glucose-only events if requested (drops non-EGV events)
+        - Keep only the last (latest) sequence based on most recent timestamps
         - Truncate sequences exceeding maximum_wanted_duration
-        - Drop duplicate timestamps if requested
-        - Raise global output warning flags based on individual row quality
-        - Check minimum duration requirements
+        - Collect warnings based on data quality:
+          - TOO_SHORT: sequence duration < minimum_duration_minutes
+          - CALIBRATION: contains calibration events
+          - OUT_OF_RANGE: contains OUT_OF_RANGE quality flags
+          - IMPUTATION: contains imputed data
+          - TIME_DUPLICATES: contains non-unique time entries
         
         Returns full UnifiedFormat with all columns (sequence_id, event_type, quality, etc).
         Use to_data_only_df() to strip service columns if needed for ML models.
@@ -464,8 +542,7 @@ class CGMProcessor(ABC):
             dataframe: Fully processed DataFrame in unified format
             minimum_duration_minutes: Minimum required sequence duration
             maximum_wanted_duration: Maximum desired sequence duration (truncates if exceeded)
-            glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
-            drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
+            **kwargs: Implementation-specific parameters (e.g., validation_mode)
             
         Returns:
             Tuple of (unified_format_dataframe, warnings)
@@ -474,6 +551,51 @@ class CGMProcessor(ABC):
             ZeroValidInputError: If there are no valid data points
         """
         pass
+    
+    # ===== Data Transformation Utilities =====
+    
+    @classmethod
+    @abstractmethod
+    def to_data_only_df(
+        cls,
+        unified_df: UnifiedFormat,
+        drop_service_columns: bool = True,
+        drop_duplicates: bool = False,
+        glucose_only: bool = False,
+        **kwargs
+    ) -> pl.DataFrame:
+        """Strip service columns from UnifiedFormat, keeping only data columns.
+        
+        Args:
+            unified_df: DataFrame in UnifiedFormat with all columns
+            drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
+            drop_duplicates: If True, drop duplicate timestamps
+            glucose_only: If True, drop non-EGV events
+            **kwargs: Implementation-specific parameters (e.g., validation_mode)
+            
+        Returns:
+            DataFrame with only data columns (no service/metadata columns)
+        """
+        pass
+    
+    @classmethod
+    @abstractmethod
+    def split_glucose_events(
+        cls,
+        unified_df: UnifiedFormat,
+        **kwargs
+    ) -> Tuple[UnifiedFormat, UnifiedFormat]:
+        """Split UnifiedFormat DataFrame into glucose readings and other events.
+        
+        Args:
+            unified_df: DataFrame in UnifiedFormat with mixed event types
+            **kwargs: Implementation-specific parameters (e.g., validation_mode)
+            
+        Returns:
+            Tuple of (glucose_df, events_df)
+        """
+        pass
+    
     
 # ============================================================================
 # Compatibility Layer: Output Adapters

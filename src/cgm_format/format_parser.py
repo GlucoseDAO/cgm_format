@@ -1,6 +1,6 @@
 """Format converter for CGM vendor formats working on text data."""
 
-from typing import Dict, List, Union, ClassVar
+from typing import Dict, List, Union, ClassVar, Optional
 from io import StringIO
 from typing import Union
 import polars as pl
@@ -16,9 +16,10 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     ZeroValidInputError,
     ValidationMethod,
-    EXPECTED_INTERVAL_MINUTES,
-    SMALL_GAP_MAX_MINUTES,
+    truncate_error_message,
 )
+
+
 
 # Import detection patterns from format modules
 from cgm_format.formats.unified import (
@@ -26,7 +27,8 @@ from cgm_format.formats.unified import (
     UnifiedEventType, 
     Quality, 
     UNIFIED_TIMESTAMP_FORMATS,
-    CGM_SCHEMA
+    CGM_SCHEMA,
+    UNIFIED_DATA_START_LINE,
 )
 from cgm_format.formats.dexcom import (
     DEXCOM_DETECTION_PATTERNS, 
@@ -61,14 +63,7 @@ ENCODING_ARTIFACTS = {
     b'\x22\xef\xbb\xbf\x22': UTF8_BOM,
 }
 
-# CSV format detection patterns (checks first N lines of file)
-CGM_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
-    SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
-    SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
-    SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
-}
 
-DETECTION_LINE_COUNT = 15  # lines to check
 
 class FormatParser(CGMParser):
     """Main format parser implementing the CGMParser interface.
@@ -80,7 +75,12 @@ class FormatParser(CGMParser):
     """
     
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT
-
+    detection_line_count: ClassVar[int] = max(DEXCOM_DATA_START_LINE, LIBRE_DATA_START_LINE, UNIFIED_DATA_START_LINE)*2
+    cgm_detection_patterns: ClassVar[Dict[SupportedCGMFormat, List[str]]] = {
+        SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
+        SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
+        SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
+    }
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
@@ -135,14 +135,34 @@ class FormatParser(CGMParser):
         """
 
         # Check first N lines for format indicators
-        lines = text_data.split('\n',DETECTION_LINE_COUNT+1)[:DETECTION_LINE_COUNT]
+        lines = text_data.split('\n',cls.detection_line_count+1)[:cls.detection_line_count]
         
         # Check each CGM type's patterns
-        for cgm_type, patterns in CGM_DETECTION_PATTERNS.items():
+        for cgm_type, patterns in cls.cgm_detection_patterns.items():
             if any(pattern in line for line in lines for pattern in patterns):
                 return cgm_type
         
-        raise UnknownFormatError(f"Unknown CGM data format. Sample lines: {lines[:3]}")
+        error_msg = f"Unknown CGM data format. Sample lines: {lines[:3]}"
+        raise UnknownFormatError(cls._truncate_error_message(error_msg))
+
+    @classmethod
+    def format_supported(cls, raw_data: Union[bytes, str]) -> bool:
+        """Check if the library can parse the given data format.
+        
+        Uses the detector to determine if the format is supported without parsing the data.
+        
+        Args:
+            raw_data: Raw file contents (bytes or string)
+            
+        Returns:
+            True if format is supported and can be parsed, False otherwise
+        """
+        try:
+            text_data = cls.decode_raw_data(raw_data)
+            cls.detect_format(text_data)
+            return True
+        except (UnknownFormatError, MalformedDataError, Exception):
+            return False
 
 
     # ===== STAGE 3: Device-Specific Parsing to Unified Format =====
@@ -189,7 +209,22 @@ class FormatParser(CGMParser):
 
     
     # ===== Private: Format-Specific Processing Methods =====
-    
+    @classmethod
+    def _truncate_error_message(cls, message: str, max_length: Optional[int] = None) -> str:
+        """Truncate error message to prevent huge CSV dumps in logs.
+        
+        Args:
+            message: Original error message
+            max_length: Maximum length in bytes (default 8192)
+            
+        Returns:
+            Truncated error message with indicator if truncated
+        """
+        if max_length is None:
+            return truncate_error_message(message)
+        else:
+            return truncate_error_message(message, max_length)
+
 
     @classmethod
     def _postprocess_unified(cls, unified_df: UnifiedFormat) -> UnifiedFormat:
@@ -215,15 +250,18 @@ class FormatParser(CGMParser):
         # Part of the processing pipline, not affected by validation mode!!!!
         unified_df = CGM_SCHEMA.validate_dataframe(unified_df, enforce=True)
         
-        # Mark duplicate timestamps
-        #unified_df = cls.mark_time_duplicates(unified_df) # moved to processor
-
-        #Final step: Detect and assign sequences (lossless annotation)
-        unified_df = cls.detect_and_assign_sequences(unified_df)
+        # Mark duplicate timestamps - moved to processor
+        # Detect and assign sequences - moved to processor (requires gap size knowledge)
+        # Initialize sequence_id column to 0 (unassigned) for processor to fill in
+        if 'sequence_id' not in unified_df.columns:
+            unified_df = unified_df.with_columns([
+                pl.lit(0).alias('sequence_id')
+            ])
 
         return unified_df
     
-    def _probe_timestamp_format(df: pl.DataFrame, column_name: str, formats: tuple) -> str:
+    @classmethod
+    def _probe_timestamp_format(cls, df: pl.DataFrame, column_name: str, formats: tuple) -> str:
         """Probe which timestamp format works for this file.
         
         Args:
@@ -250,7 +288,8 @@ class FormatParser(CGMParser):
             except:
                 continue  # Try next format
         
-        raise MalformedDataError(f"Could not parse timestamps with any known format: {formats}")
+        error_msg = f"Could not parse timestamps with any known format: {formats}"
+        raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     
     @classmethod
@@ -294,7 +333,8 @@ class FormatParser(CGMParser):
             return cls._postprocess_unified(df)
             
         except pl.exceptions.PolarsError as e:
-            raise MalformedDataError(f"Failed to parse unified format CSV: {e}")
+            error_msg = f"Failed to parse unified format CSV: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     @classmethod
     def _process_dexcom(
@@ -468,7 +508,8 @@ class FormatParser(CGMParser):
             return cls._postprocess_unified(unified)
             
         except pl.exceptions.PolarsError as e:
-            raise MalformedDataError(f"Failed to parse Dexcom CSV: {e}")
+            error_msg = f"Failed to parse Dexcom CSV: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     @classmethod
     def _process_libre(cls, text_data: str) -> UnifiedFormat:
@@ -568,7 +609,8 @@ class FormatParser(CGMParser):
             return cls._postprocess_unified(unified)
             
         except pl.exceptions.PolarsError as e:
-            raise MalformedDataError(f"Failed to parse Libre CSV: {e}")
+            error_msg = f"Failed to parse Libre CSV: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     # ===== Serialization Methods =====
     
@@ -599,381 +641,5 @@ class FormatParser(CGMParser):
         if FormatParser.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
             CGM_SCHEMA.validate_dataframe(dataframe, enforce=FormatParser.validation_mode & ValidationMethod.INPUT_FORCED)   
         dataframe.write_csv(file_path)
-    
-    # ===== Convenience Methods =====
-    
-    @classmethod
-    def parse_from_file(cls, file_path: str) -> UnifiedFormat:
-        """Convenience method to parse a CGM file directly to unified format.
-        
-        This method chains all stages together:
-        1. Read file
-        2. Decode raw data
-        3. Detect format
-        4. Parse to unified format
-        
-        Args:
-            file_path: Path to CGM data file
-            
-        Returns:
-            DataFrame in unified format
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """
-        # Read file as bytes
-        with open(file_path, 'rb') as f:
-            raw_data = f.read()
-        
-        # Chain all stages
-        text_data = cls.decode_raw_data(raw_data)
-        format_type = cls.detect_format(text_data)
-        return cls.parse_to_unified(text_data, format_type)
-    
-    @classmethod
-    def parse_from_bytes(cls, raw_data: bytes) -> UnifiedFormat:
-        """Convenience method to parse raw bytes directly to unified format.
-        
-        This method chains all stages together:
-        1. Decode raw data
-        2. Detect format
-        3. Parse to unified format
-        4. Detect and assign sequences (lossless annotation)
-        
-        Args:
-            raw_data: Raw file contents as bytes
-            
-        Returns:
-            DataFrame in unified format with sequence_id assigned
-            
-        Raises:
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """
-        text_data = cls.decode_raw_data(raw_data)
-        format_type = cls.detect_format(text_data)
-        return cls.parse_to_unified(text_data, format_type)
-    
-    @classmethod
-    def parse_from_string(cls, text_data: str) -> UnifiedFormat:
-        """Convenience method to parse cleaned string directly to unified format.
-        
-        This method assumes data is already decoded and chains:
-        1. Detect format
-        2. Parse to unified format
-        3. Detect and assign sequences (lossless annotation)
-        
-        Args:
-            text_data: Cleaned CSV string
-            
-        Returns:
-            DataFrame in unified format with sequence_id assigned
-            
-        Raises:
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """
-        format_type = cls.detect_format(text_data)
-        return cls.parse_to_unified(text_data, format_type)
-        
-    
-    @classmethod
-    def parse_file(cls, file_path: Union[str, Path]) -> UnifiedFormat:
-        """Parse CGM data from file path.
-        
-        Convenience method that reads file and parses to unified format.
-        Automatically detects format and handles encoding.
-        
-        Args:
-            file_path: Path to CGM data file (CSV format)
-            
-        Returns:
-            DataFrame in unified format
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """
-        
-        file_path = Path(file_path)
-        with open(file_path, 'rb') as f:
-            raw_data = f.read()
-        
-        return cls.parse_from_bytes(raw_data)
-    
-    @classmethod
-    def parse_base64(cls, base64_data: str) -> UnifiedFormat:
-        """Parse CGM data from base64 encoded string.
-        
-        Useful for web API endpoints that receive base64 encoded CSV data.
-        Automatically decodes base64, detects format, and parses to unified format.
-        
-        Args:
-            base64_data: Base64 encoded CSV data string
-            
-        Returns:
-            DataFrame in unified format
-            
-        Raises:
-            ValueError: If base64 decoding fails
-            UnknownFormatError: If format cannot be determined
-            MalformedDataError: If data cannot be parsed
-        """        
-        try:
-            raw_data = b64decode(base64_data)
-        except Exception as e:
-            raise ValueError(f"Failed to decode base64 data: {e}")
-        
-        return cls.parse_from_bytes(raw_data)
-    
-    # ===== STAGE 4: Sequence Detection (Lossless Annotation) =====
-    
-    @classmethod
-    def detect_and_assign_sequences(
-        cls, 
-        dataframe: UnifiedFormat,
-        expected_interval_minutes: int = EXPECTED_INTERVAL_MINUTES,
-        large_gap_threshold_minutes: int = SMALL_GAP_MAX_MINUTES
-    ) -> UnifiedFormat:
-        """Detect large gaps and assign sequence_id column (lossless annotation).
-        
-        This is the final step in parsing that splits data into continuous sequences
-        based on time gaps IN GLUCOSE EVENTS ONLY. Non-glucose events are then
-        assigned to the nearest glucose sequence by time.
-        
-        Large gaps (> large_gap_threshold_minutes) between glucose readings create new sequences.
-        sequence_id = 0 means unassigned (no glucose events available for assignment).
-        sequence_id >= 1 means assigned to a glucose sequence.
-        
-        Two-pass approach:
-        1. Detect sequences based on glucose event gaps only
-        2. Assign non-glucose events to nearest glucose sequence by time
-        
-        This prevents non-glucose events from "bridging" glucose gaps and incorrectly
-        keeping discontinuous glucose data in the same sequence.
-        
-        Args:
-            dataframe: DataFrame in unified format (may or may not have sequence_id)
-            expected_interval_minutes: Expected data collection interval (default: 5)
-            large_gap_threshold_minutes: Threshold for creating new sequences (default: 15)
-            
-        Returns:
-            DataFrame with sequence_id column assigned
-        """
-        if len(dataframe) == 0:
-            return dataframe
-        
-        # Verify input dataframe matches schema
-        if cls.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=cls.validation_mode & ValidationMethod.INPUT_FORCED)
-
-        large_gap_threshold_seconds: int = large_gap_threshold_minutes * 60
-        
-        # Get canonical sequence_id dtype from schema
-        sequence_id_dtype = next(
-            col['dtype'] for col in CGM_SCHEMA.service_columns if col['name'] == 'sequence_id'
-        )
-        
-        # Sort by datetime
-        df = dataframe.sort('datetime')
-        
-        # Check if sequence_id exists and has variation
-        has_sequence_id = 'sequence_id' in df.columns
-        
-        if has_sequence_id:
-            unique_seq_ids = df['sequence_id'].n_unique()
-            
-            # If there are multiple sequences, process each separately to detect internal gaps
-            if unique_seq_ids > 1:
-                return cls._split_sequences_with_internal_gaps(
-                    df, large_gap_threshold_seconds, sequence_id_dtype
-                )
-        
-        # Single sequence or no sequence_id: create sequences based on GLUCOSE GAPS ONLY
-        # Pass 1: Filter to glucose events only
-        glucose_events = df.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('datetime')
-        
-        if len(glucose_events) == 0:
-            # No glucose events - all events get sequence_id = 0 (unassigned)
-            return df.with_columns([
-                pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
-            ])
-        
-        # Calculate time differences between glucose events only
-        glucose_events = glucose_events.with_columns([
-            pl.col('datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
-        ])
-        
-        # Mark large gaps (> large_gap_threshold_minutes)
-        # Fill None (first row) with False to avoid issues
-        glucose_events = glucose_events.with_columns([
-            pl.when(pl.col('time_diff_seconds').is_null())
-            .then(pl.lit(False))
-            .otherwise(pl.col('time_diff_seconds') > large_gap_threshold_seconds)
-            .alias('is_gap'),
-        ])
-        
-        # Create sequence IDs based on gaps (starts at 1, not 0)
-        # sequence_id = 0 is reserved for unassigned events
-        glucose_events = glucose_events.with_columns([
-            (pl.col('is_gap').cum_sum() + 1).cast(sequence_id_dtype).alias('sequence_id')
-        ])
-        
-        # Remove temporary columns
-        glucose_events = glucose_events.drop(['time_diff_seconds', 'is_gap'])
-        
-        # Pass 2: Assign non-glucose events to nearest glucose sequence
-        non_glucose_events = df.filter(pl.col('event_type') != UnifiedEventType.GLUCOSE.value)
-        
-        if len(non_glucose_events) == 0:
-            # Only glucose events - we're done
-            result_df = glucose_events
-        else:
-            # For each non-glucose event, find the closest glucose sequence by time
-            # Use join_asof to find nearest glucose event
-            sequence_info = glucose_events.select(['datetime', 'sequence_id'])
-            
-            # Drop sequence_id from non_glucose_events before join to avoid suffix
-            non_glucose_no_seq = non_glucose_events.drop('sequence_id')
-            
-            # Join non-glucose events to nearest glucose event (by time)
-            non_glucose_with_seq = non_glucose_no_seq.join_asof(
-                sequence_info,
-                on='datetime',
-                strategy='nearest'
-            )
-            
-            # If join_asof couldn't find a match (shouldn't happen), set to 0
-            non_glucose_with_seq = non_glucose_with_seq.with_columns([
-                pl.col('sequence_id').fill_null(0).cast(sequence_id_dtype)
-            ])
-            
-            # Combine glucose and non-glucose events
-            result_df = pl.concat([glucose_events, non_glucose_with_seq], how='diagonal')
-            
-            # Reorder columns to match schema (use existing validation method)
-            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
-        
-        # Verify output dataframe matches schema
-        if cls.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=cls.validation_mode & ValidationMethod.OUTPUT_FORCED)
-        
-        return result_df
-    
-    @classmethod
-    def _split_sequences_with_internal_gaps(
-        cls,
-        dataframe: pl.DataFrame,
-        large_gap_threshold_seconds: float,
-        sequence_id_dtype: pl.DataType
-    ) -> pl.DataFrame:
-        """Split existing sequences that have internal large gaps (glucose-only logic).
-        
-        Processes each existing sequence separately and splits it if it contains
-        large gaps IN GLUCOSE EVENTS. Non-glucose events are then reassigned to
-        the nearest glucose sequence.
-        
-        Args:
-            dataframe: DataFrame with existing sequence_id column
-            large_gap_threshold_seconds: Threshold in seconds for splitting sequences
-            sequence_id_dtype: Target dtype for sequence_id column
-            
-        Returns:
-            DataFrame with updated sequence_id column (some sequences may be split)
-        """
-        unique_sequences = dataframe['sequence_id'].unique().sort().to_list()
-        processed_glucose_sequences = []
-        next_sequence_id = max(unique_sequences) + 1
-        
-        # Process each existing sequence, checking for internal glucose gaps
-        for seq_id in unique_sequences:
-            seq_data = dataframe.filter(pl.col('sequence_id') == seq_id).sort('datetime')
-            
-            # Filter to glucose events only for gap detection
-            glucose_seq = seq_data.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('datetime')
-            
-            if len(glucose_seq) < 2:
-                # Single glucose point or no glucose points, keep as is
-                processed_glucose_sequences.append(glucose_seq)
-                continue
-            
-            # Check for internal large gaps in glucose events
-            glucose_seq = glucose_seq.with_columns([
-                pl.col('datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
-            ])
-            
-            # Mark large gaps within this sequence's glucose events
-            glucose_seq = glucose_seq.with_columns([
-                pl.when(pl.col('time_diff_seconds').is_null())
-                .then(pl.lit(False))
-                .otherwise(pl.col('time_diff_seconds') > large_gap_threshold_seconds)
-                .alias('is_gap'),
-            ])
-            
-            # Check if this sequence has any large gaps
-            has_gaps = glucose_seq['is_gap'].sum() > 0
-            
-            if not has_gaps:
-                # No internal gaps, keep sequence as is
-                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
-                processed_glucose_sequences.append(glucose_seq)
-            else:
-                # Split this sequence based on internal glucose gaps
-                # Create sub-sequence IDs
-                glucose_seq = glucose_seq.with_columns([
-                    (pl.col('is_gap').cum_sum() + next_sequence_id).cast(sequence_id_dtype).alias('sequence_id')
-                ])
-                
-                # Remove temporary columns
-                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
-                
-                # Update next_sequence_id for next iteration
-                next_sequence_id = glucose_seq['sequence_id'].max() + 1
-                
-                processed_glucose_sequences.append(glucose_seq)
-        
-        # Combine all processed glucose sequences
-        if len(processed_glucose_sequences) == 0:
-            # No glucose events at all - return original with sequence_id = 0
-            return dataframe.with_columns([
-                pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
-            ])
-        
-        all_glucose = pl.concat(processed_glucose_sequences).sort('datetime')
-        
-        # Now reassign non-glucose events to nearest glucose sequence
-        non_glucose_events = dataframe.filter(pl.col('event_type') != UnifiedEventType.GLUCOSE.value)
-        
-        if len(non_glucose_events) == 0:
-            # Only glucose events
-            result_df = all_glucose
-        else:
-            # Join non-glucose events to nearest glucose sequence
-            sequence_info = all_glucose.select(['datetime', 'sequence_id'])
-            
-            # Drop sequence_id from non_glucose_events before join to avoid suffix
-            non_glucose_no_seq = non_glucose_events.drop('sequence_id')
-            
-            non_glucose_with_seq = non_glucose_no_seq.join_asof(
-                sequence_info,
-                on='datetime',
-                strategy='nearest'
-            )
-            
-            # If join_asof couldn't find a match, set to 0
-            non_glucose_with_seq = non_glucose_with_seq.with_columns([
-                pl.col('sequence_id').fill_null(0).cast(sequence_id_dtype)
-            ])
-            
-            # Combine glucose and non-glucose events
-            result_df = pl.concat([all_glucose, non_glucose_with_seq], how='diagonal')
-            
-            # Reorder columns to match schema (use existing validation method)
-            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
-        
-        return result_df
     
 

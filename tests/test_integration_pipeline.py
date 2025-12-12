@@ -21,29 +21,12 @@ from cgm_format.interface.cgm_interface import (
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
+    ProcessingWarning,
 )
 
 
 # Data directory relative to project root
 DATA_DIR = Path(__file__).parent.parent / "data"
-
-
-def is_medtronic_file(file_path: Path) -> bool:
-    """Check if a file is a Medtronic Guardian Connect file.
-    
-    Args:
-        file_path: Path to the CSV file
-        
-    Returns:
-        True if file is Medtronic format, False otherwise
-    """
-    try:
-        with open(file_path, 'rb') as f:
-            # Check first few lines for Guardian Connect marker
-            header = f.read(500).decode('utf-8', errors='ignore')
-            return "Guardian Connect" in header
-    except Exception:
-        return False
 
 
 def get_test_files() -> List[Path]:
@@ -74,10 +57,11 @@ class TestFullPipelineIntegration:
         Args:
             file_path: Path to the CGM data file to test
         """
-        # Skip unsupported formats (Medtronic Guardian Connect)
-        if is_medtronic_file(file_path):
-            pytest.skip(f"Unsupported format: Medtronic Guardian Connect")
-        
+        # Skip unsupported formats using format_supported
+        with open(file_path, 'rb') as f:
+            if not FormatParser.format_supported(f.read()):
+                pytest.skip(f"Unsupported format: {file_path.name}")
+
         print(f"\n{'='*70}")
         print(f"Testing: {file_path.name}")
         print(f"{'='*70}\n")
@@ -116,13 +100,14 @@ class TestFullPipelineIntegration:
         assert 'glucose' in unified_df.columns, "Missing glucose column"
         
         # Stage 4: Process and prepare for inference
-        processor = FormatProcessor(
+        # FormatProcessor now uses classmethods - no need to instantiate
+        
+        # Interpolate gaps (sequences already created during parsing)
+        interpolated_df = FormatProcessor.interpolate_gaps(
+            unified_df,
             expected_interval_minutes=5,
             small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
         )
-        
-        # Interpolate gaps (sequences already created during parsing)
-        interpolated_df = processor.interpolate_gaps(unified_df)
         interpolated_rows = len(interpolated_df)
         
         assert interpolated_rows >= parsed_rows, "Interpolation should not reduce rows"
@@ -131,10 +116,13 @@ class TestFullPipelineIntegration:
         sequence_count = interpolated_df['sequence_id'].n_unique()
         
         # Synchronize timestamps
-        synchronized_df = processor.synchronize_timestamps(interpolated_df)
+        synchronized_df = FormatProcessor.synchronize_timestamps(
+            interpolated_df,
+            expected_interval_minutes=5
+        )
         
         # Stage 5: Prepare for inference with quality checks
-        inference_df, warning_flags = processor.prepare_for_inference(
+        inference_df, warning_flags = FormatProcessor.prepare_for_inference(
             synchronized_df,
             minimum_duration_minutes=15,  # 15 minutes minimum
             maximum_wanted_duration=24 * 60  # 24 hours maximum (1440 minutes)
@@ -218,12 +206,13 @@ class TestFullPipelineIntegration:
         
         # Process
         print("\n2. Processing with interpolation...")
-        processor = FormatProcessor(
+        # FormatProcessor now uses classmethods
+        
+        interpolated_df = FormatProcessor.interpolate_gaps(
+            unified_df,
             expected_interval_minutes=5,
             small_gap_max_minutes=19  # Default
         )
-        
-        interpolated_df = processor.interpolate_gaps(unified_df)
         print(f"   ✅ Interpolated to {len(interpolated_df)} rows")
         
         sequence_count = interpolated_df['sequence_id'].n_unique()
@@ -239,12 +228,15 @@ class TestFullPipelineIntegration:
         
         # Synchronize
         print("\n3. Synchronizing timestamps...")
-        synchronized_df = processor.synchronize_timestamps(interpolated_df)
+        synchronized_df = FormatProcessor.synchronize_timestamps(
+            interpolated_df,
+            expected_interval_minutes=5
+        )
         print(f"   ✅ Synchronized to {len(synchronized_df)} rows")
         
         # Prepare for inference
         print("\n4. Preparing for inference...")
-        inference_df, warning_flags = processor.prepare_for_inference(
+        inference_df, warning_flags = FormatProcessor.prepare_for_inference(
             synchronized_df,
             minimum_duration_minutes=15,
             maximum_wanted_duration=24 * 60
@@ -252,10 +244,12 @@ class TestFullPipelineIntegration:
         print(f"   ✅ Prepared {len(inference_df)} rows for inference")
         print(f"   Warning flags: {warning_flags.value if warning_flags else 0}")
         
-        if processor.has_warnings():
+        if warning_flags:
             print("   ⚠️  Warnings:")
-            for warning in processor.get_warnings():
-                print(f"      - {warning.name}")
+
+            for warning in ProcessingWarning:
+                if warning_flags & warning:
+                    print(f"      - {warning.name}")
         
         # Convert to data-only
         print("\n5. Converting to data-only format...")
@@ -306,8 +300,6 @@ class TestFullPipelineIntegration:
     
     def test_pipeline_error_handling(self) -> None:
         """Test that pipeline handles various error conditions gracefully."""
-        processor = FormatProcessor()
-        
         # Test with invalid file path
         with pytest.raises(FileNotFoundError):
             FormatParser.parse_file(Path("/nonexistent/file.csv"))
@@ -318,15 +310,16 @@ class TestFullPipelineIntegration:
             'glucose': [],
             'event_type': [],
             'quality': [],
+            'sequence_id': [],
+            'original_datetime': [],
             'carbs': [],
             'insulin_fast': [],
             'insulin_slow': [],
             'exercise': [],
-            'notes': [],
         })
         
         # Empty dataframe should return empty result
-        result = processor.interpolate_gaps(empty_df)
+        result = FormatProcessor.interpolate_gaps(empty_df)
         assert len(result) == 0, "Empty input should produce empty output"
     
     def test_pipeline_data_consistency(self) -> None:
@@ -336,11 +329,10 @@ class TestFullPipelineIntegration:
         
         # Parse and process
         unified_df = FormatParser.parse_file(file_path)
-        processor = FormatProcessor()
         
-        interpolated_df = processor.interpolate_gaps(unified_df)
-        synchronized_df = processor.synchronize_timestamps(interpolated_df)
-        inference_df, _ = processor.prepare_for_inference(synchronized_df)
+        interpolated_df = FormatProcessor.interpolate_gaps(unified_df)
+        synchronized_df = FormatProcessor.synchronize_timestamps(interpolated_df)
+        inference_df, warning_flags = FormatProcessor.prepare_for_inference(synchronized_df)
         
         # Verify timestamps are sorted
         assert inference_df['datetime'].is_sorted(), "Timestamps should be sorted"

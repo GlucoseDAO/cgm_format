@@ -15,6 +15,7 @@ from cgm_format.interface.cgm_interface import (
     ExtraColumnError,
     ColumnOrderError,
     ColumnTypeError,
+    truncate_error_message,
 )
 
 class EnumLiteral(str, Enum):
@@ -289,7 +290,8 @@ class CGMSchemaDefinition:
         expected_columns = self.get_polars_schema(data_only=False)
 
         if len(expected_columns) != len(dataframe.columns) and not enforce:
-            raise MalformedDataError(f"Number of columns in schema and dataframe do not match. Schema has {len(expected_columns)} columns, dataframe has {len(dataframe.columns)} columns.")
+            error_msg = f"Number of columns in schema and dataframe do not match. Schema has {len(expected_columns)} columns, dataframe has {len(dataframe.columns)} columns."
+            raise MalformedDataError(truncate_error_message(error_msg))
 
         for i, col_name in enumerate(expected_columns):
             if col_name not in dataframe.columns:
@@ -385,6 +387,17 @@ class CGMSchemaDefinition:
             dataframe = dataframe.select(cast_exprs)
         
         return dataframe
+    
+    def stable_sort_dataframe(self, dataframe: pl.DataFrame) -> pl.DataFrame:
+        """Stable sort dataframe using the schema's stable sort keys.
+        
+        Args:
+            dataframe: DataFrame to sort
+            
+        Returns:
+            Sorted DataFrame
+        """
+        return dataframe.sort(self.get_stable_sort_keys())
     
     def export_to_json(
         self, 

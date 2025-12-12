@@ -5,7 +5,7 @@ Adapted from glucose_ml_preprocessor.py for single-user unified format processin
 """
 
 import polars as pl
-from typing import Dict, Any, List, Tuple, ClassVar
+from typing import Dict, Any, List, Tuple, ClassVar, Optional
 from datetime import timedelta, datetime
 from cgm_format.interface.cgm_interface import (
     CGMProcessor,
@@ -32,66 +32,29 @@ class FormatProcessor(CGMProcessor):
     - Gap detection and sequence creation
     - Gap interpolation with imputation tracking
     - Inference preparation with duration checks and truncation
-    - Warning collection throughout processing pipeline
+    - Warning collection in prepare_for_inference
     
-    Processing warnings are collected in a list during operations and can be retrieved
-    via get_warnings() or checked via has_warnings().
+    All methods are classmethods - no need to instantiate.
+    Configuration constants can be overridden via optional method parameters.
     """
     
-    validation_mode_default : ClassVar[ValidationMethod] = ValidationMethod.INPUT
-
-    def __init__(
-        self,
-        expected_interval_minutes: int = EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes: int = SMALL_GAP_MAX_MINUTES,
-        snap_to_grid: bool = True,
-        validation_mode: ValidationMethod = validation_mode_default,
-    ):
-        """Initialize the processor.
-        
-        Args:
-            expected_interval_minutes: Expected data collection interval (default: 5 minutes)
-            small_gap_max_minutes: Maximum gap size to interpolate (default: 15 minutes)
-            snap_to_grid: If True, interpolated points are placed on the sequence grid
-                         with SYNCHRONIZATION flag (ensures idempotency with sync).
-                         If False, interpolated points are placed at regular intervals
-                         from the previous timestamp (may not align with grid).
-        """
-        self.expected_interval_minutes = expected_interval_minutes
-        self.small_gap_max_minutes = small_gap_max_minutes
-        self.snap_to_grid = snap_to_grid
-        self.expected_interval_seconds = expected_interval_minutes * 60
-        self.small_gap_max_seconds = small_gap_max_minutes * 60
-        self.validation_mode = validation_mode
-        # Warning collection (list to track multiple instances)
-        self._warnings: List[ProcessingWarning] = []
-    
-    def get_warnings(self) -> List[ProcessingWarning]:
-        """Get collected processing warnings.
-        
-        Returns:
-            List of ProcessingWarning flags collected during processing
-        """
-        return self._warnings.copy()
-    
-    def has_warnings(self) -> bool:
-        """Check if any warnings were collected during processing.
-        
-        Returns:
-            True if any warnings were raised, False otherwise
-        """
-        return len(self._warnings) > 0
-    
-    def _add_warning(self, warning: ProcessingWarning) -> None:
-        """Add a warning to the collected warnings list.
-        
-        Args:
-            warning: ProcessingWarning flag to add
-        """
-        self._warnings.append(warning)
+    # Configuration constants as ClassVars
+    expected_interval_minutes: ClassVar[int] = EXPECTED_INTERVAL_MINUTES
+    small_gap_max_minutes: ClassVar[int] = SMALL_GAP_MAX_MINUTES
+    minimum_duration_minutes: ClassVar[int] = MINIMUM_DURATION_MINUTES
+    maximum_wanted_duration_minutes: ClassVar[int] = MAXIMUM_WANTED_DURATION_MINUTES
+    calibration_gap_threshold: ClassVar[int] = CALIBRATION_GAP_THRESHOLD
+    calibration_period_hours: ClassVar[int] = CALIBRATION_PERIOD_HOURS
+    snap_to_grid: ClassVar[bool] = True
+    validation_mode_default: ClassVar[ValidationMethod] = ValidationMethod.INPUT
 
 
-    def mark_time_duplicates(self, df: UnifiedFormat) -> UnifiedFormat:
+    @classmethod
+    def mark_time_duplicates(
+        cls,
+        df: UnifiedFormat,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> UnifiedFormat:
         """Mark events with duplicate timestamps (keeping first occurrence).
         
         Uses keepfirst logic: the first event at a timestamp is kept clean,
@@ -99,6 +62,7 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             df: DataFrame in unified format (must have 'datetime' and 'quality' columns)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
             DataFrame with TIME_DUPLICATE flag added to quality column for duplicate timestamps
@@ -106,9 +70,12 @@ class FormatProcessor(CGMProcessor):
         if len(df) == 0:
             return df
 
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
         # Validate input if validation mode includes INPUT
-        if self.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df, enforce=self.validation_mode & ValidationMethod.INPUT_FORCED)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # For each datetime, mark which rows are duplicates (all but the first)
         # is_duplicated() returns True for ALL occurrences including the first
@@ -124,12 +91,18 @@ class FormatProcessor(CGMProcessor):
         ])
         
         # Validate output if validation mode includes OUTPUT
-        if self.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df_marked, enforce=self.validation_mode & ValidationMethod.OUTPUT_FORCED)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(df_marked, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df_marked
         
-    def synchronize_timestamps(self, dataframe: UnifiedFormat) -> UnifiedFormat:
+    @classmethod
+    def synchronize_timestamps(
+        cls,
+        dataframe: UnifiedFormat,
+        expected_interval_minutes: Optional[int] = None,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> UnifiedFormat:
         """Align timestamps to minute boundaries and create fixed-frequency data.
         
         This method should be called after interpolate_gaps() when sequences are already
@@ -141,6 +114,8 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             dataframe: DataFrame in unified format (should already have sequences created)
+            expected_interval_minutes: Expected interval in minutes (defaults to cls.expected_interval_minutes)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
             DataFrame with synchronized timestamps at fixed intervals
@@ -151,10 +126,23 @@ class FormatProcessor(CGMProcessor):
         """
         if len(dataframe) == 0:
             raise ZeroValidInputError("Cannot synchronize timestamps on empty dataframe")
+
+        if expected_interval_minutes is None:
+            expected_interval_minutes = cls.expected_interval_minutes
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+        
+        # Ensure sequences are assigned (auto-detect if missing)
+        if not cls.has_sequences(dataframe):
+            dataframe = cls.detect_and_assign_sequences(
+                dataframe,
+                expected_interval_minutes=expected_interval_minutes,
+                validation_mode=validation_mode
+            )
         
         # Verify input dataframe matches schema
-        if self.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=self.validation_mode & ValidationMethod.INPUT_FORCED)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
         # Process each sequence separately
         unique_sequences = dataframe['sequence_id'].unique().to_list()
@@ -173,19 +161,20 @@ class FormatProcessor(CGMProcessor):
                 continue
             
             # Synchronize this sequence
-            synced_seq = self._synchronize_sequence(seq_data, seq_id)
+            synced_seq = cls._synchronize_sequence(seq_data, seq_id, expected_interval_minutes)
             synchronized_sequences.append(synced_seq)
         
         # Combine all sequences with stable sorting from schema definition
         result_df = pl.concat(synchronized_sequences).sort(CGM_SCHEMA.get_stable_sort_keys())
         
         # Verify output dataframe matches schema
-        if self.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=self.validation_mode & ValidationMethod.OUTPUT_FORCED)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return result_df
     
-    def get_sequence_grid_start(self, seq_data: UnifiedFormat) -> datetime:
+    @classmethod
+    def get_sequence_grid_start(cls, seq_data: UnifiedFormat, expected_interval_minutes: Optional[int] = None) -> datetime:
         """Determine the grid start time for a sequence.
         
         The grid start is based on the first original_datetime in the sequence,
@@ -197,10 +186,14 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             seq_data: Sequence data
+            expected_interval_minutes: Expected interval in minutes (defaults to cls.expected_interval_minutes)
             
         Returns:
             Grid start timestamp (rounded to nearest minute)
         """
+        if expected_interval_minutes is None:
+            expected_interval_minutes = cls.expected_interval_minutes
+
         first_timestamp = seq_data['original_datetime'].min()
         
         # Round to nearest minute (same logic as synchronize_timestamps)
@@ -211,10 +204,12 @@ class FormatProcessor(CGMProcessor):
         
         return grid_start
     
+    @classmethod
     def calculate_grid_point(
-        self, 
+        cls,
         timestamp: datetime, 
-        grid_start: datetime, 
+        grid_start: datetime,
+        expected_interval_minutes: Optional[int] = None,
         round_direction: str = 'nearest'
     ) -> datetime:
         """Calculate the nearest grid point for a given timestamp.
@@ -222,13 +217,17 @@ class FormatProcessor(CGMProcessor):
         Args:
             timestamp: Timestamp to align to grid
             grid_start: Start of the grid
+            expected_interval_minutes: Expected interval in minutes (defaults to cls.expected_interval_minutes)
             round_direction: 'nearest', 'up', or 'down'
             
         Returns:
             Timestamp aligned to grid
         """
+        if expected_interval_minutes is None:
+            expected_interval_minutes = cls.expected_interval_minutes
+
         elapsed_seconds = (timestamp - grid_start).total_seconds()
-        interval_seconds = self.expected_interval_minutes * 60
+        interval_seconds = expected_interval_minutes * 60
         
         if round_direction == 'down':
             intervals = int(elapsed_seconds // interval_seconds)
@@ -237,10 +236,11 @@ class FormatProcessor(CGMProcessor):
         else:  # nearest
             intervals = int((elapsed_seconds + interval_seconds / 2) // interval_seconds)
         
-        return grid_start + timedelta(minutes=intervals * self.expected_interval_minutes)
+        return grid_start + timedelta(minutes=intervals * expected_interval_minutes)
     
+    @classmethod
     def _interpolate_glucose_value(
-        self,
+        cls,
         target_time: datetime,
         prev_time: datetime,
         next_time: datetime,
@@ -275,22 +275,25 @@ class FormatProcessor(CGMProcessor):
         
         return prev_glucose + alpha * (next_glucose - prev_glucose)
     
+    @classmethod
     def _synchronize_sequence(
-        self, 
+        cls,
         seq_data: pl.DataFrame, 
-        seq_id: int
+        seq_id: int,
+        expected_interval_minutes: int
     ) -> pl.DataFrame:
         """Synchronize timestamps for a single sequence to fixed frequency.
         
         Args:
             seq_data: Sequence data as Polars DataFrame
             seq_id: Sequence ID
+            expected_interval_minutes: Expected interval in minutes
             
         Returns:
             Sequence with synchronized timestamps at fixed intervals
         """
         # Get grid start using common logic
-        grid_start = self.get_sequence_grid_start(seq_data)
+        grid_start = cls.get_sequence_grid_start(seq_data, expected_interval_minutes)
         
         # For idempotency: determine grid extent based ONLY on non-interpolated data
         # Filter out interpolated points (those with IMPUTATION flag)
@@ -308,11 +311,11 @@ class FormatProcessor(CGMProcessor):
         if total_duration < 0:
             num_intervals = 0
         else:
-            num_intervals = int(total_duration / (self.expected_interval_minutes * 60)) + 1
+            num_intervals = int(total_duration / (expected_interval_minutes * 60)) + 1
         
         # Create fixed-frequency timestamps using the grid
         fixed_timestamps_list = [
-            grid_start + timedelta(minutes=i * self.expected_interval_minutes)
+            grid_start + timedelta(minutes=i * expected_interval_minutes)
             for i in range(num_intervals)
         ]
         
@@ -339,14 +342,16 @@ class FormatProcessor(CGMProcessor):
         ])
         
         # Join with original data to get nearest values
-        result_df = self._join_and_interpolate_values(fixed_df, seq_data)
+        result_df = cls._join_and_interpolate_values(fixed_df, seq_data, expected_interval_minutes)
         
         return result_df
     
+    @classmethod
     def _join_and_interpolate_values(
-        self,
+        cls,
         fixed_df: pl.DataFrame,
-        seq_data: pl.DataFrame
+        seq_data: pl.DataFrame,
+        expected_interval_minutes: int
     ) -> pl.DataFrame:
         """Map original data to fixed grid timestamps.
         
@@ -359,6 +364,7 @@ class FormatProcessor(CGMProcessor):
         Args:
             fixed_df: DataFrame with fixed timestamps (not used in new implementation)
             seq_data: Original sequence data
+            expected_interval_minutes: Expected interval in minutes
             
         Returns:
             DataFrame with datetime values rounded to grid timestamps
@@ -369,7 +375,7 @@ class FormatProcessor(CGMProcessor):
         seq_data_prep = seq_data.sort(['sequence_id', 'original_datetime', 'quality'])
         
         # Get grid start for this sequence
-        grid_start = self.get_sequence_grid_start(seq_data)
+        grid_start = cls.get_sequence_grid_start(seq_data, expected_interval_minutes)
         
         # For each source row, calculate its nearest grid point
         # CRITICAL: Use the same rounding logic as interpolate (round half UP)
@@ -377,13 +383,13 @@ class FormatProcessor(CGMProcessor):
         result = seq_data_prep.with_columns([
             # Calculate which grid point each row should map to
             # Add 0.5 before floor to get "round half up" behavior (same as interpolate)
-            ((pl.col('original_datetime') - pl.lit(grid_start)).dt.total_seconds() / 60.0 / self.expected_interval_minutes + 0.5)
+            ((pl.col('original_datetime') - pl.lit(grid_start)).dt.total_seconds() / 60.0 / expected_interval_minutes + 0.5)
             .floor()
             .cast(pl.Int64)
             .alias('_grid_offset')
         ]).with_columns([
             # Calculate the grid datetime (cast to ms to match schema)
-            (pl.lit(grid_start) + pl.duration(minutes=pl.col('_grid_offset') * self.expected_interval_minutes))
+            (pl.lit(grid_start) + pl.duration(minutes=pl.col('_grid_offset') * expected_interval_minutes))
             .cast(pl.Datetime('ms'))
             .alias('datetime')
         ])
@@ -405,7 +411,15 @@ class FormatProcessor(CGMProcessor):
         
         return result
     
-    def interpolate_gaps(self, dataframe: UnifiedFormat) -> UnifiedFormat:
+    @classmethod
+    def interpolate_gaps(
+        cls,
+        dataframe: UnifiedFormat,
+        expected_interval_minutes: Optional[int] = None,
+        small_gap_max_minutes: Optional[int] = None,
+        snap_to_grid: Optional[bool] = None,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> UnifiedFormat:
         """Fill gaps in continuous data with imputed values.
         
         This method interpolates small gaps (<= small_gap_max_minutes) within existing sequences
@@ -415,16 +429,39 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             dataframe: DataFrame with sequence_id column indicating continuous sequences
+            expected_interval_minutes: Expected interval in minutes (defaults to cls.expected_interval_minutes)
+            small_gap_max_minutes: Maximum gap size to interpolate (defaults to cls.small_gap_max_minutes)
+            snap_to_grid: If True, snap to grid (defaults to cls.snap_to_grid)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
-            DataFrame with interpolated values marked with IMPUTATION flag
+            DataFrame with interpolated values
         """
         if len(dataframe) == 0:
             return dataframe
+
+        if expected_interval_minutes is None:
+            expected_interval_minutes = cls.expected_interval_minutes
+        if small_gap_max_minutes is None:
+            small_gap_max_minutes = cls.small_gap_max_minutes
+        if snap_to_grid is None:
+            snap_to_grid = cls.snap_to_grid
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
+        # Ensure sequences are assigned (auto-detect if missing)
+        # Use small_gap_max_minutes as the gap threshold for sequence detection
+        if not cls.has_sequences(dataframe):
+            dataframe = cls.detect_and_assign_sequences(
+                dataframe,
+                expected_interval_minutes=expected_interval_minutes,
+                large_gap_threshold_minutes=small_gap_max_minutes,
+                validation_mode=validation_mode
+            )
         
         # Verify input dataframe matches schema
-        if self.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=self.validation_mode & ValidationMethod.INPUT_FORCED)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Process each sequence separately for interpolation
         unique_sequences = dataframe['sequence_id'].unique().to_list()
@@ -439,31 +476,28 @@ class FormatProcessor(CGMProcessor):
                 continue
             
             # Interpolate gaps within this sequence
-            interpolated_seq = self._interpolate_sequence(seq_data, seq_id)
+            interpolated_seq = cls._interpolate_sequence(seq_data, seq_id, expected_interval_minutes, small_gap_max_minutes, snap_to_grid)
             processed_sequences.append(interpolated_seq)
         
         # Combine all sequences with stable sorting from schema definition
         result_df = pl.concat(processed_sequences).sort(CGM_SCHEMA.get_stable_sort_keys())
         
-        # Check if any imputation was done (check for IMPUTATION flag)
-        imputed_count = result_df.filter(
-            (pl.col('quality') & Quality.IMPUTATION.value) != 0
-        ).height
-        
-        if imputed_count > 0:
-            self._add_warning(ProcessingWarning.IMPUTATION)
         
         # Verify output dataframe matches schema
-        if self.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=self.validation_mode & ValidationMethod.OUTPUT_FORCED)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return result_df
  
     
+    @classmethod
     def _interpolate_sequence(
-        self, 
+        cls,
         seq_data: pl.DataFrame, 
-        seq_id: int
+        seq_id: int,
+        expected_interval_minutes: int,
+        small_gap_max_minutes: int,
+        snap_to_grid: bool
     ) -> pl.DataFrame:
         """Interpolate missing values for a single sequence.
         
@@ -476,6 +510,9 @@ class FormatProcessor(CGMProcessor):
         Args:
             seq_data: Sequence data as Polars DataFrame
             seq_id: Sequence ID
+            expected_interval_minutes: Expected interval in minutes
+            small_gap_max_minutes: Maximum gap size to interpolate
+            snap_to_grid: If True, snap to grid
             
         Returns:
             Sequence with interpolated values
@@ -489,7 +526,7 @@ class FormatProcessor(CGMProcessor):
             return seq_data
         
         # Get common grid start for this sequence
-        grid_start = self.get_sequence_grid_start(seq_data)
+        grid_start = cls.get_sequence_grid_start(seq_data, expected_interval_minutes)
         
         # Detect if data is already synchronized (has SYNCHRONIZATION flag)
         # If synchronized, use datetime for gap detection; otherwise use original_datetime
@@ -514,7 +551,7 @@ class FormatProcessor(CGMProcessor):
         # Find small gaps to interpolate (now we know consecutive rows are all glucose events)
         small_gaps = []
         for i, diff in enumerate(time_diffs_list):
-            if i > 0 and self.expected_interval_minutes < diff <= self.small_gap_max_minutes:
+            if i > 0 and expected_interval_minutes < diff <= small_gap_max_minutes:
                 prev_row = glucose_list[i - 1]
                 current_row = glucose_list[i]
                 
@@ -537,18 +574,18 @@ class FormatProcessor(CGMProcessor):
             prev_dt = prev_row[timestamp_col]
             current_dt = current_row[timestamp_col]
             
-            if self.snap_to_grid:
+            if snap_to_grid:
                     # Snap to sequence grid: determine ALL grid points that should exist in the gap
                     # CRITICAL: Use the ROUNDED grid positions, not the original timestamps
                     # This ensures we fill gaps between where timestamps WILL BE after rounding
                     
                     # Round both timestamps to their nearest grid points
-                    prev_grid_dt = self.calculate_grid_point(prev_dt, grid_start, 'nearest')
-                    curr_grid_dt = self.calculate_grid_point(current_dt, grid_start, 'nearest')
+                    prev_grid_dt = cls.calculate_grid_point(prev_dt, grid_start, expected_interval_minutes, 'nearest')
+                    curr_grid_dt = cls.calculate_grid_point(current_dt, grid_start, expected_interval_minutes, 'nearest')
                     
                     # Calculate grid positions from rounded timestamps
-                    prev_grid_pos = int((prev_grid_dt - grid_start).total_seconds() / 60.0 / self.expected_interval_minutes)
-                    curr_grid_pos = int((curr_grid_dt - grid_start).total_seconds() / 60.0 / self.expected_interval_minutes)
+                    prev_grid_pos = int((prev_grid_dt - grid_start).total_seconds() / 60.0 / expected_interval_minutes)
+                    curr_grid_pos = int((curr_grid_dt - grid_start).total_seconds() / 60.0 / expected_interval_minutes)
                     
                     # Fill all grid points BETWEEN the rounded positions (exclusive on both ends)
                     first_grid_pos = prev_grid_pos + 1
@@ -556,12 +593,12 @@ class FormatProcessor(CGMProcessor):
                     
                     # Generate ALL missing grid points in the gap
                     for grid_pos in range(first_grid_pos, last_grid_pos):
-                        interpolated_time = grid_start + timedelta(minutes=grid_pos * self.expected_interval_minutes)
+                        interpolated_time = grid_start + timedelta(minutes=grid_pos * expected_interval_minutes)
                         
                         # Interpolate glucose using grid-aligned timestamps for idempotency with sync
                         prev_glucose = prev_row['glucose']
                         curr_glucose = current_row['glucose']
-                        interpolated_glucose = self._interpolate_glucose_value(
+                        interpolated_glucose = cls._interpolate_glucose_value(
                             target_time=interpolated_time,
                             prev_time=prev_grid_dt,
                             next_time=curr_grid_dt,
@@ -593,7 +630,7 @@ class FormatProcessor(CGMProcessor):
             else:
                 # Non-grid logic: place points at regular intervals from previous timestamp
                 # Calculate number of missing points
-                missing_points = int(time_diff_minutes / self.expected_interval_minutes) - 1
+                missing_points = int(time_diff_minutes / expected_interval_minutes) - 1
                 
                 if missing_points > 0:
                     prev_glucose = prev_row['glucose']
@@ -602,11 +639,11 @@ class FormatProcessor(CGMProcessor):
                     # Use the appropriate timestamp column
                     for j in range(1, missing_points + 1):
                         interpolated_time = prev_dt + timedelta(
-                            minutes=self.expected_interval_minutes * j
+                            minutes=expected_interval_minutes * j
                         )
                         
                         # Interpolate glucose using original timestamps (not grid-aligned)
-                        interpolated_glucose = self._interpolate_glucose_value(
+                        interpolated_glucose = cls._interpolate_glucose_value(
                             target_time=interpolated_time,
                             prev_time=prev_dt,
                             next_time=current_dt,
@@ -665,13 +702,18 @@ class FormatProcessor(CGMProcessor):
         
         return result
     
-    def mark_calibration_periods(self, dataframe: UnifiedFormat) -> UnifiedFormat:
+    @classmethod
+    def mark_calibration_periods(
+        cls,
+        dataframe: UnifiedFormat,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> UnifiedFormat:
         """Mark 24-hour periods after calibration gaps as SENSOR_CALIBRATION quality.
         
         According to PIPELINE.md: "In case of large gap more than 2 hours 45 minutes
         mark next 24 hours as ill quality."
         
-        This method detects gaps >= CALIBRATION_GAP_THRESHOLD (2:45:00) using original_datetime
+        This method detects gaps >= calibration_gap_threshold (2:45:00) using original_datetime
         and marks all data points within 24 hours after the gap end as Quality.SENSOR_CALIBRATION.
         
         Uses original_datetime for gap detection to ensure idempotent behavior regardless of
@@ -679,16 +721,20 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             dataframe: DataFrame with sequences and original_datetime column
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
             DataFrame with quality flags updated for calibration periods
         """
         if len(dataframe) == 0:
             return dataframe
+
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
         
         # Validate input if validation mode includes INPUT
-        if self.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=self.validation_mode & ValidationMethod.INPUT_FORCED)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Use original_datetime for gap detection (idempotent regardless of sync)
         timestamp_col = 'original_datetime' #if 'original_datetime' in dataframe.columns else 'datetime'
@@ -705,7 +751,7 @@ class FormatProcessor(CGMProcessor):
         df = df.with_columns([
             pl.when(pl.col('time_diff_seconds').is_null())
             .then(pl.lit(False))
-            .otherwise(pl.col('time_diff_seconds') >= CALIBRATION_GAP_THRESHOLD)
+            .otherwise(pl.col('time_diff_seconds') >= cls.calibration_gap_threshold)
             .alias('is_calibration_gap'),
         ])
         
@@ -730,7 +776,7 @@ class FormatProcessor(CGMProcessor):
             # Create conditions for each calibration period
             conditions = []
             for gap_end_time in calibration_period_starts:
-                calibration_period_end = gap_end_time + timedelta(hours=CALIBRATION_PERIOD_HOURS)
+                calibration_period_end = gap_end_time + timedelta(hours=cls.calibration_period_hours)
                 # Mark all points from gap_end_time (inclusive) for 24 hours
                 conditions.append(
                     (pl.col(timestamp_col) >= gap_end_time) &
@@ -760,16 +806,18 @@ class FormatProcessor(CGMProcessor):
         df = df.drop(['time_diff_seconds', 'is_calibration_gap', 'in_calibration_period'])
         
         # Validate output if validation mode includes OUTPUT
-        if self.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df, enforce=self.validation_mode & ValidationMethod.OUTPUT_FORCED)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df
     
+    @classmethod
     def prepare_for_inference(
-        self,
+        cls,
         dataframe: UnifiedFormat,
-        minimum_duration_minutes: int = MINIMUM_DURATION_MINUTES,
-        maximum_wanted_duration: int = MAXIMUM_WANTED_DURATION_MINUTES,
+        minimum_duration_minutes: Optional[int] = None,
+        maximum_wanted_duration: Optional[int] = None,
+        validation_mode: Optional[ValidationMethod] = None
     ) -> InferenceResult:
         """Prepare data for inference with full UnifiedFormat and warning flags.
         
@@ -791,8 +839,9 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             dataframe: Fully processed DataFrame in unified format
-            minimum_duration_minutes: Minimum required sequence duration
-            maximum_wanted_duration: Maximum desired sequence duration (truncates if exceeded)
+            minimum_duration_minutes: Minimum required sequence duration (defaults to MINIMUM_DURATION_MINUTES)
+            maximum_wanted_duration: Maximum desired sequence duration (defaults to MAXIMUM_WANTED_DURATION_MINUTES)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
             Tuple of (unified_format_dataframe, warnings)
@@ -802,10 +851,20 @@ class FormatProcessor(CGMProcessor):
         """
         if len(dataframe) == 0:
             raise ZeroValidInputError("No data points in the sequence")
+
+        if minimum_duration_minutes is None:
+            minimum_duration_minutes = cls.minimum_duration_minutes
+        if maximum_wanted_duration is None:
+            maximum_wanted_duration = cls.maximum_wanted_duration_minutes
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
+        # Local warning collection
+        warnings: List[ProcessingWarning] = []
         
         # Verify input dataframe matches schema
-        if self.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=self.validation_mode & ValidationMethod.INPUT_FORCED)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Check for valid glucose readings
         valid_glucose_count = dataframe.filter(
@@ -835,14 +894,14 @@ class FormatProcessor(CGMProcessor):
                     continue  # Skip sequences with no glucose data
                 
                 # Try truncating this sequence
-                candidate_truncated = self._truncate_by_duration(
+                candidate_truncated = cls._truncate_by_duration(
                     candidate_df, 
                     maximum_wanted_duration
                 )
                 
                 # Check if truncated sequence meets minimum duration
                 if len(candidate_truncated) > 0:
-                    duration_minutes = self._calculate_duration_minutes(candidate_truncated)
+                    duration_minutes = cls._calculate_duration_minutes(candidate_truncated)
                     if duration_minutes >= minimum_duration_minutes:
                         # Found a valid sequence!
                         df_truncated = candidate_truncated
@@ -856,20 +915,20 @@ class FormatProcessor(CGMProcessor):
                 )
         else:
             # No sequence_id column, process entire dataframe
-            df_truncated = self._truncate_by_duration(
+            df_truncated = cls._truncate_by_duration(
                 dataframe, 
                 maximum_wanted_duration
             )
         
         # NOW calculate warnings on the truncated data
-        df_truncated = self.mark_time_duplicates(df_truncated) #mark time duplicates
-        df_truncated = self.mark_calibration_periods(df_truncated) #mark calibration periods
+        df_truncated = cls.mark_time_duplicates(df_truncated, validation_mode) #mark time duplicates
+        df_truncated = cls.mark_calibration_periods(df_truncated, validation_mode) #mark calibration periods
         
         # Check duration (already verified above, but add warning if close to minimum)
         if len(df_truncated) > 0:
-            duration_minutes = self._calculate_duration_minutes(df_truncated)
+            duration_minutes = cls._calculate_duration_minutes(df_truncated)
             if duration_minutes < minimum_duration_minutes:
-                self._add_warning(ProcessingWarning.TOO_SHORT)
+                warnings.append(ProcessingWarning.TOO_SHORT)
         
         # Check for calibration events or SENSOR_CALIBRATION flag
         calibration_count = df_truncated.filter(
@@ -877,7 +936,7 @@ class FormatProcessor(CGMProcessor):
             ((pl.col('quality') & Quality.SENSOR_CALIBRATION.value) != 0)
         ).height
         if calibration_count > 0:
-            self._add_warning(ProcessingWarning.CALIBRATION)
+            warnings.append(ProcessingWarning.CALIBRATION)
         
         # Check for out-of-range values (OUT_OF_RANGE flag)
         out_of_range_count = df_truncated.filter(
@@ -885,15 +944,15 @@ class FormatProcessor(CGMProcessor):
         ).height
 
         if out_of_range_count > 0:
-            self._add_warning(ProcessingWarning.OUT_OF_RANGE)
+            warnings.append(ProcessingWarning.OUT_OF_RANGE)
         
         # Check for IMPUTATION flag (may have already been added in interpolate_gaps)
         imputed_count = df_truncated.filter(
             (pl.col('quality') & Quality.IMPUTATION.value) != 0
         ).height
-        if imputed_count > 0 and ProcessingWarning.IMPUTATION not in self._warnings:
-            self._add_warning(ProcessingWarning.IMPUTATION)
-        
+        if imputed_count > 0 and ProcessingWarning.IMPUTATION not in warnings:
+            warnings.append(ProcessingWarning.IMPUTATION)
+
         # Check for time duplicates in the final sequence or TIME_DUPLICATE flag
         has_time_duplicates = False
         if len(df_truncated) > 0:
@@ -908,21 +967,22 @@ class FormatProcessor(CGMProcessor):
         ).height
         
         if has_time_duplicates or time_duplicate_flag_count > 0:
-            self._add_warning(ProcessingWarning.TIME_DUPLICATES)
+            warnings.append(ProcessingWarning.TIME_DUPLICATES)
         
         # Return full UnifiedFormat (keep all columns including service columns)
         # Combine warnings into flags for return value (for interface compatibility)
         combined_warnings = ProcessingWarning(0)
-        for warning in self._warnings:
+        for warning in warnings:
             combined_warnings |= warning
         
         # Verify output dataframe matches schema
-        if self.validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df_truncated, enforce=self.validation_mode & ValidationMethod.OUTPUT_FORCED)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(df_truncated, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df_truncated, combined_warnings
     
-    def _calculate_duration_minutes(self, dataframe: pl.DataFrame) -> float:
+    @classmethod
+    def _calculate_duration_minutes(cls, dataframe: pl.DataFrame) -> float:
         """Calculate duration of sequence in minutes.
         
         Args:
@@ -943,8 +1003,9 @@ class FormatProcessor(CGMProcessor):
         duration_seconds = (max_time - min_time).total_seconds()
         return duration_seconds / 60.0
     
+    @classmethod
     def _truncate_by_duration(
-        self, 
+        cls,
         dataframe: pl.DataFrame, 
         max_duration_minutes: int
     ) -> pl.DataFrame:
@@ -975,12 +1036,14 @@ class FormatProcessor(CGMProcessor):
         
         return truncated_df
     
-    @staticmethod
+    @classmethod
     def to_data_only_df(
+            cls,
             unified_df: UnifiedFormat,
             drop_service_columns: bool = True,
             drop_duplicates: bool = False, 
-            glucose_only: bool = False
+            glucose_only: bool = False,
+            validation_mode: Optional[ValidationMethod] = None
         ) -> pl.DataFrame:
         """Strip service columns from UnifiedFormat, keeping only data columns for ML models.
         
@@ -1001,17 +1064,22 @@ class FormatProcessor(CGMProcessor):
             drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
             drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
             glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
 
         Returns:
             DataFrame with only data columns (no service/metadata columns)
             
         """
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
         # Verify input dataframe matches schema
-        CGM_SCHEMA.validate_dataframe(unified_df, enforce=False)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
         # Filter to glucose-only events if requested (before truncation)
         if glucose_only:
-            unified_df, _ = FormatProcessor.split_glucose_events(unified_df)
+            unified_df, _ = cls.split_glucose_events(unified_df, validation_mode)
 
         # Drop duplicate timestamps if requested
         if drop_duplicates:
@@ -1020,11 +1088,15 @@ class FormatProcessor(CGMProcessor):
         if drop_service_columns:
             data_columns = [col['name'] for col in CGM_SCHEMA.data_columns]
             unified_df = unified_df.select(data_columns)
-
+        #no Output validation - is not unified format
         return unified_df
     
-    @staticmethod
-    def split_glucose_events(unified_df: UnifiedFormat) -> Tuple[UnifiedFormat, UnifiedFormat]:
+    @classmethod
+    def split_glucose_events(
+        cls,
+        unified_df: UnifiedFormat,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> Tuple[UnifiedFormat, UnifiedFormat]:
         """Split UnifiedFormat DataFrame into glucose readings and other events.
         
         Divides a single UnifiedFormat DataFrame into two separate UnifiedFormat DataFrames:
@@ -1036,6 +1108,7 @@ class FormatProcessor(CGMProcessor):
         
         Args:
             unified_df: DataFrame in UnifiedFormat with mixed event types
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
             
         Returns:
             Tuple of (glucose_df, events_df) where:
@@ -1049,10 +1122,14 @@ class FormatProcessor(CGMProcessor):
             >>> # Can be chained with other operations
             >>> unified_df = FormatParser.parse_file("data.csv")
             >>> glucose, events = FormatProcessor.split_glucose_events(unified_df)
-            >>> glucose = processor.interpolate_gaps(glucose)
+            >>> glucose, warnings = FormatProcessor.interpolate_gaps(glucose)
         """
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
         # Verify input dataframe matches schema
-        CGM_SCHEMA.validate_dataframe(unified_df, enforce=False)
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Filter for glucose events (GLUCOSE event type)
         glucose_df = unified_df.filter(
@@ -1065,8 +1142,289 @@ class FormatProcessor(CGMProcessor):
         )
         
         # Verify output dataframes match schema
-        CGM_SCHEMA.validate_dataframe(glucose_df, enforce=False)
-        CGM_SCHEMA.validate_dataframe(events_df, enforce=False)
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(glucose_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            CGM_SCHEMA.validate_dataframe(events_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return glucose_df, events_df
+    
+    @classmethod
+    def has_sequences(cls, dataframe: UnifiedFormat) -> bool:
+        """Check if the dataframe has valid sequence_id assignments.
+        
+        A dataframe has sequences if:
+        1. sequence_id column exists
+        2. sequence_id column has no null values
+        3. At least one sequence_id is non-zero (0 means unassigned)
+        
+        Args:
+            dataframe: DataFrame in unified format
+            
+        Returns:
+            True if sequences are present and valid, False otherwise
+        """
+        if len(dataframe) == 0:
+            return False
+        
+        if 'sequence_id' not in dataframe.columns:
+            return False
+        
+        # Check for null values in sequence_id
+        null_count = dataframe['sequence_id'].null_count()
+        if null_count > 0:
+            return False
+        
+        # Check if all values are 0 (unassigned)
+        non_zero_count = dataframe.filter(pl.col('sequence_id') != 0).height
+        if non_zero_count == 0:
+            return False
+        
+        return True
+    
+    @classmethod
+    def detect_and_assign_sequences(
+        cls, 
+        dataframe: UnifiedFormat,
+        expected_interval_minutes: Optional[int] = None,
+        large_gap_threshold_minutes: Optional[int] = None,
+        validation_mode: Optional[ValidationMethod] = None
+    ) -> UnifiedFormat:
+        """Detect large gaps and assign sequence_id column (lossless annotation).
+        
+        This method splits data into continuous sequences based on time gaps IN GLUCOSE EVENTS ONLY.
+        Non-glucose events are then assigned to the nearest glucose sequence by time.
+        
+        Large gaps (> large_gap_threshold_minutes) between glucose readings create new sequences.
+        sequence_id = 0 means unassigned (no glucose events available for assignment).
+        sequence_id >= 1 means assigned to a glucose sequence.
+        
+        Two-pass approach:
+        1. Detect sequences based on glucose event gaps only
+        2. Assign non-glucose events to nearest glucose sequence by time
+        
+        This prevents non-glucose events from "bridging" glucose gaps and incorrectly
+        keeping discontinuous glucose data in the same sequence.
+        
+        **Idempotency**: This method nullifies any existing sequence_id column at the start,
+        ensuring consistent results regardless of whether sequences were previously assigned.
+        
+        Args:
+            dataframe: DataFrame in unified format (may or may not have sequence_id)
+            expected_interval_minutes: Expected data collection interval (defaults to cls.expected_interval_minutes)
+            large_gap_threshold_minutes: Threshold for creating new sequences (defaults to cls.small_gap_max_minutes)
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
+            
+        Returns:
+            DataFrame with sequence_id column assigned
+        """
+        if len(dataframe) == 0:
+            return dataframe
+        
+        if expected_interval_minutes is None:
+            expected_interval_minutes = cls.expected_interval_minutes
+        if large_gap_threshold_minutes is None:
+            large_gap_threshold_minutes = cls.small_gap_max_minutes
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+        
+        # Verify input dataframe matches schema
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
+        # IDEMPOTENCY: Reset existing sequence_id to 0 to ensure consistent results
+        # This allows re-running sequence detection with different gap thresholds
+        # Get canonical sequence_id dtype from schema
+        sequence_id_dtype = next(
+            col['dtype'] for col in CGM_SCHEMA.service_columns if col['name'] == 'sequence_id'
+        )
+        
+        df = dataframe.with_columns([
+            pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
+        ]).sort('original_datetime')     
+
+        large_gap_threshold_seconds: int = large_gap_threshold_minutes * 60
+        
+        # Single sequence or no sequence_id: create sequences based on GLUCOSE GAPS ONLY
+        # Pass 1: Filter to glucose events only
+        glucose_events = df.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('datetime')
+        
+        if len(glucose_events) == 0:
+            # No glucose events - all events get sequence_id = 0 (unassigned)
+            return df.with_columns([
+                pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
+            ])
+        
+        # Calculate time differences between glucose events only using original_datetime
+        glucose_events = glucose_events.with_columns([
+            pl.col('original_datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
+        ])
+        
+        # Mark large gaps (> large_gap_threshold_minutes)
+        # Fill None (first row) with False to avoid issues
+        glucose_events = glucose_events.with_columns([
+            pl.when(pl.col('time_diff_seconds').is_null())
+            .then(pl.lit(False))
+            .otherwise(pl.col('time_diff_seconds') > large_gap_threshold_seconds)
+            .alias('is_gap'),
+        ])
+        
+        # Create sequence IDs based on gaps (starts at 1, not 0)
+        # sequence_id = 0 is reserved for unassigned events
+        glucose_events = glucose_events.with_columns([
+            (pl.col('is_gap').cum_sum() + 1).cast(sequence_id_dtype).alias('sequence_id')
+        ])
+        
+        # Remove temporary columns
+        glucose_events = glucose_events.drop(['time_diff_seconds', 'is_gap'])
+        
+        # Pass 2: Assign non-glucose events to nearest glucose sequence
+        non_glucose_events = df.filter(pl.col('event_type') != UnifiedEventType.GLUCOSE.value)
+        
+        if len(non_glucose_events) == 0:
+            # Only glucose events - we're done
+            result_df = glucose_events
+        else:
+            # For each non-glucose event, find the closest glucose sequence by time using original_datetime
+            # Drop old sequence_id before joining to avoid conflicts
+            non_glucose_no_seq = non_glucose_events.drop('sequence_id')
+            
+            # Use join_asof to find nearest glucose event
+            sequence_info = glucose_events.select(['original_datetime', 'sequence_id'])
+            
+            # Join non-glucose events to nearest glucose event (by time)
+            non_glucose_with_seq = non_glucose_no_seq.join_asof(
+                sequence_info,
+                on='original_datetime',
+                strategy='nearest'
+            )
+            
+            # If join_asof couldn't find a match (shouldn't happen), set to 0
+            non_glucose_with_seq = non_glucose_with_seq.with_columns([
+                pl.col('sequence_id').fill_null(0).cast(sequence_id_dtype)
+            ])
+            
+            # Combine glucose and non-glucose events
+            result_df = pl.concat([glucose_events, non_glucose_with_seq], how='diagonal')
+            
+            # Reorder columns to match schema (use existing validation method)
+            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
+        
+        # Verify output dataframe matches schema
+        if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
+            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+        
+        return result_df
+    
+    @classmethod
+    def _split_sequences_with_internal_gaps(
+        cls,
+        dataframe: pl.DataFrame,
+        large_gap_threshold_seconds: float,
+        sequence_id_dtype: pl.DataType
+    ) -> pl.DataFrame:
+        """Split existing sequences that have internal large gaps (glucose-only logic).
+        
+        Processes each existing sequence separately and splits it if it contains
+        large gaps IN GLUCOSE EVENTS. Non-glucose events are then reassigned to
+        the nearest glucose sequence.
+        
+        Args:
+            dataframe: DataFrame with existing sequence_id column
+            large_gap_threshold_seconds: Threshold in seconds for splitting sequences
+            sequence_id_dtype: Target dtype for sequence_id column
+            
+        Returns:
+            DataFrame with updated sequence_id column (some sequences may be split)
+        """
+        unique_sequences = dataframe['sequence_id'].unique().sort().to_list()
+        processed_glucose_sequences = []
+        next_sequence_id = max(unique_sequences) + 1
+        
+        # Process each existing sequence, checking for internal glucose gaps
+        for seq_id in unique_sequences:
+            seq_data = dataframe.filter(pl.col('sequence_id') == seq_id).sort('original_datetime')
+            
+            # Filter to glucose events only for gap detection
+            glucose_seq = seq_data.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('original_datetime')
+            
+            if len(glucose_seq) < 2:
+                # Single glucose point or no glucose points, keep as is
+                processed_glucose_sequences.append(glucose_seq)
+                continue
+            
+            # Check for internal large gaps in glucose events using original_datetime
+            glucose_seq = glucose_seq.with_columns([
+                pl.col('original_datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
+            ])
+            
+            # Mark large gaps within this sequence's glucose events
+            glucose_seq = glucose_seq.with_columns([
+                pl.when(pl.col('time_diff_seconds').is_null())
+                .then(pl.lit(False))
+                .otherwise(pl.col('time_diff_seconds') > large_gap_threshold_seconds)
+                .alias('is_gap'),
+            ])
+            
+            # Check if this sequence has any large gaps
+            has_gaps = glucose_seq['is_gap'].sum() > 0
+            
+            if not has_gaps:
+                # No internal gaps, keep sequence as is
+                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
+                processed_glucose_sequences.append(glucose_seq)
+            else:
+                # Split this sequence based on internal glucose gaps
+                # Create sub-sequence IDs
+                glucose_seq = glucose_seq.with_columns([
+                    (pl.col('is_gap').cum_sum() + next_sequence_id).cast(sequence_id_dtype).alias('sequence_id')
+                ])
+                
+                # Remove temporary columns
+                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
+                
+                # Update next_sequence_id for next iteration
+                next_sequence_id = glucose_seq['sequence_id'].max() + 1
+                
+                processed_glucose_sequences.append(glucose_seq)
+        
+        # Combine all processed glucose sequences
+        if len(processed_glucose_sequences) == 0:
+            # No glucose events at all - return original with sequence_id = 0
+            return dataframe.with_columns([
+                pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
+            ])
+        
+        all_glucose = pl.concat(processed_glucose_sequences).sort('original_datetime')
+        
+        # Now reassign non-glucose events to nearest glucose sequence
+        non_glucose_events = dataframe.filter(pl.col('event_type') != UnifiedEventType.GLUCOSE.value)
+        
+        if len(non_glucose_events) == 0:
+            # Only glucose events
+            result_df = all_glucose
+        else:
+            # Join non-glucose events to nearest glucose sequence using original_datetime
+            # Drop old sequence_id before joining to avoid conflicts
+            non_glucose_no_seq = non_glucose_events.drop('sequence_id')
+            sequence_info = all_glucose.select(['original_datetime', 'sequence_id'])
+            
+            non_glucose_with_seq = non_glucose_no_seq.join_asof(
+                sequence_info,
+                on='original_datetime',
+                strategy='nearest'
+            )
+            
+            # If join_asof couldn't find a match, set to 0
+            non_glucose_with_seq = non_glucose_with_seq.with_columns([
+                pl.col('sequence_id').fill_null(0).cast(sequence_id_dtype)
+            ])
+            
+            # Combine glucose and non-glucose events
+            result_df = pl.concat([all_glucose, non_glucose_with_seq], how='diagonal')
+            
+            # Reorder columns to match schema (use existing validation method)
+            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
+        
+        return result_df
+
+        

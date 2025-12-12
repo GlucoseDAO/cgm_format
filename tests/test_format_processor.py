@@ -142,18 +142,11 @@ def sample_data_with_quality_issues() -> pl.DataFrame:
 
 
 def test_processor_initialization():
-    """Test processor initialization."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
-    
-    assert processor.expected_interval_minutes == EXPECTED_INTERVAL_MINUTES
-    assert processor.small_gap_max_minutes == SMALL_GAP_MAX_MINUTES
-    assert processor.expected_interval_seconds == EXPECTED_INTERVAL_MINUTES * 60
-    assert processor.small_gap_max_seconds == SMALL_GAP_MAX_MINUTES * 60
-    assert not processor.has_warnings()
-    assert processor.get_warnings() == []
+    """Test processor class configuration."""
+    # FormatProcessor is now all classmethods - no instantiation needed
+    assert FormatProcessor.expected_interval_minutes == EXPECTED_INTERVAL_MINUTES
+    assert FormatProcessor.small_gap_max_minutes == SMALL_GAP_MAX_MINUTES
+
 
 
 def test_constants_match_documentation():
@@ -170,16 +163,12 @@ def test_constants_match_documentation():
 
 def test_synchronize_timestamps_basic(sample_unified_data):
     """Test basic timestamp synchronization."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     # First interpolate gaps to create sequences
-    interpolated = processor.interpolate_gaps(sample_unified_data)
+    interpolated = FormatProcessor.interpolate_gaps(sample_unified_data)
     
     # Then synchronize timestamps
-    result = processor.synchronize_timestamps(interpolated)
+    result = FormatProcessor.synchronize_timestamps(interpolated)
     
     # Check that timestamps are rounded to minutes (seconds = 0)
     for timestamp in result['datetime'].to_list():
@@ -198,12 +187,12 @@ def test_synchronize_timestamps_basic(sample_unified_data):
 
 def test_synchronize_timestamps_empty_dataframe():
     """Test synchronization with empty DataFrame."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     empty_df = create_empty_dataframe()
     
     with pytest.raises(ZeroValidInputError):
-        processor.synchronize_timestamps(empty_df)
+        FormatProcessor.synchronize_timestamps(empty_df)
 
 
 def test_synchronize_timestamps_no_sequence_id():
@@ -213,7 +202,7 @@ def test_synchronize_timestamps_no_sequence_id():
     In normal usage, the parser always generates sequence_id via detect_and_assign_sequences().
     This test ensures validation works if someone calls synchronize_timestamps() directly.
     """
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # Create data without sequence_id - use pl.DataFrame directly to bypass schema validation
     # This simulates calling synchronize_timestamps() directly without going through the parser
@@ -239,16 +228,15 @@ def test_synchronize_timestamps_no_sequence_id():
     # because synchronize_timestamps() validates the schema first
     from cgm_format.interface.cgm_interface import MalformedDataError
     with pytest.raises(MalformedDataError, match="Number of columns in schema and dataframe do not match"):
-        processor.synchronize_timestamps(df)
+        FormatProcessor.synchronize_timestamps(df)
 
 
-@pytest.mark.skip(reason="Large gap validation removed - sequence splitting now done by parser, not synchronize_timestamps")
 def test_synchronize_timestamps_with_large_gap():
-    """Test that synchronize_timestamps raises error if large gaps exist."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
+    """Test that synchronize_timestamps works on sequences with large gaps between them.
+    
+    Note: Large gap handling is now done by detect_and_assign_sequences, not synchronize_timestamps.
+    This test verifies that synchronize_timestamps can handle multiple sequences.
+    """
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -256,7 +244,7 @@ def test_synchronize_timestamps_with_large_gap():
     # Create data with a large gap (20 minutes)
     for i in range(2):
         data.append({
-            'sequence_id': 0,
+            'sequence_id': 1,  # First sequence
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
             'datetime': base_time + timedelta(minutes=5 * i),
@@ -267,9 +255,9 @@ def test_synchronize_timestamps_with_large_gap():
             'exercise': None,
         })
     
-    # Large gap
+    # Large gap - second sequence
     data.append({
-        'sequence_id': 0,
+        'sequence_id': 2,  # Second sequence
         'event_type': UnifiedEventType.GLUCOSE.value,
         'quality': GOOD_QUALITY.value,
         'datetime': base_time + timedelta(minutes=30),
@@ -282,16 +270,19 @@ def test_synchronize_timestamps_with_large_gap():
     
     df = create_test_dataframe(data)
     
-    with pytest.raises(ValueError, match="has gap of.*minutes"):
-        processor.synchronize_timestamps(df)
+    # Synchronize should work fine with multiple sequences
+    result = FormatProcessor.synchronize_timestamps(df)
+    
+    # Should have 2 sequences
+    assert result['sequence_id'].n_unique() == 2
+    
+    # All timestamps should be rounded
+    for timestamp in result['datetime'].to_list():
+        assert timestamp.second == 0
 
 
 def test_synchronize_timestamps_glucose_interpolation():
     """Test that glucose values are interpolated during synchronization."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     # Create data with irregular timestamps
     base_time = datetime(2024, 1, 1, 12, 0, 10)  # Start with 10 seconds
@@ -314,7 +305,7 @@ def test_synchronize_timestamps_glucose_interpolation():
     df = create_test_dataframe(data)
     
     # Synchronize
-    result = processor.synchronize_timestamps(df)
+    result = FormatProcessor.synchronize_timestamps(df)
     
     # Should have glucose values (may be interpolated)
     assert result['glucose'].null_count() < len(result), "Should have glucose values"
@@ -325,10 +316,6 @@ def test_synchronize_timestamps_glucose_interpolation():
 
 def test_synchronize_timestamps_discrete_events_shifted():
     """Test that discrete events (carbs, insulin) are shifted to nearest timestamp."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     # Create data with carbs and insulin at specific times
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -354,7 +341,7 @@ def test_synchronize_timestamps_discrete_events_shifted():
     df = create_test_dataframe(data)
     
     # Synchronize
-    result = processor.synchronize_timestamps(df)
+    result = FormatProcessor.synchronize_timestamps(df)
     
     # Should have at least one carbs entry
     carbs_count = result.filter(pl.col('carbs').is_not_null()).height
@@ -367,10 +354,6 @@ def test_synchronize_timestamps_discrete_events_shifted():
 
 def test_synchronize_timestamps_single_point_sequence():
     """Test synchronization with single-point sequence."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 15)  # 15 seconds
     data = [{
@@ -388,7 +371,7 @@ def test_synchronize_timestamps_single_point_sequence():
     df = create_test_dataframe(data)
     
     # Synchronize
-    result = processor.synchronize_timestamps(df)
+    result = FormatProcessor.synchronize_timestamps(df)
     
     # Should have 1 record with rounded timestamp
     assert len(result) == 1
@@ -397,10 +380,6 @@ def test_synchronize_timestamps_single_point_sequence():
 
 def test_synchronize_timestamps_multiple_sequences():
     """Test synchronization with multiple sequences."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -436,7 +415,7 @@ def test_synchronize_timestamps_multiple_sequences():
     df = create_test_dataframe(data)
     
     # Synchronize
-    result = processor.synchronize_timestamps(df)
+    result = FormatProcessor.synchronize_timestamps(df)
     
     # Should have 2 sequences
     assert result['sequence_id'].n_unique() == 2
@@ -448,16 +427,11 @@ def test_synchronize_timestamps_multiple_sequences():
 
 def test_interpolate_gaps_no_gaps(sample_unified_data):
     """Test interpolation when there are no gaps."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
-    result = processor.interpolate_gaps(sample_unified_data)
+    result = FormatProcessor.interpolate_gaps(sample_unified_data)
     
     # Should have same number of records (no interpolation needed)
     assert len(result) == len(sample_unified_data)
-    assert not processor.has_warnings()
 
 
 def test_interpolate_gaps_with_small_gap(sample_data_with_gaps):
@@ -467,23 +441,13 @@ def test_interpolate_gaps_with_small_gap(sample_data_with_gaps):
     With snap_to_grid=False, interpolated points are placed at regular intervals
     from the previous timestamp.
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-        snap_to_grid=False,
-    )
     
-    result = processor.interpolate_gaps(sample_data_with_gaps)
+    result = FormatProcessor.interpolate_gaps(sample_data_with_gaps)
     
     # interpolate_gaps should interpolate the gap (15 min < 19 min threshold)
     # Expected: 4 original points + 2 interpolated points (at 12:15 and 12:20) = 6 total
     assert len(result) > len(sample_data_with_gaps), \
         f"Expected interpolation to add records, got {len(result)} vs {len(sample_data_with_gaps)}"
-    
-    # Should have imputation warning
-    assert processor.has_warnings()
-    warnings = processor.get_warnings()
-    assert ProcessingWarning.IMPUTATION in warnings
     
     # Check that imputed events were created
     imputed_count = result.filter(
@@ -520,11 +484,6 @@ def test_interpolate_gaps_with_snap_to_grid(start_seconds, gap_minutes):
         start_seconds: Seconds offset for the gap start time (0-300, 10-second steps)
         gap_minutes: Size of the gap in minutes (8, 13, 18, or 23)
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-        snap_to_grid=True,
-    )
     
     # Create test data with specific gap
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -564,11 +523,11 @@ def test_interpolate_gaps_with_snap_to_grid(start_seconds, gap_minutes):
     # This mirrors the interpolation logic: round to nearest grid, count points between
     prev_dt = gap_start_time
     next_dt = gap_start_time + timedelta(minutes=gap_minutes)
-    grid_start = processor.get_sequence_grid_start(df)
+    grid_start = FormatProcessor.get_sequence_grid_start(df)
     
     # Round to nearest grid points (same logic as interpolation)
-    prev_grid_dt = processor.calculate_grid_point(prev_dt, grid_start, 'nearest')
-    curr_grid_dt = processor.calculate_grid_point(next_dt, grid_start, 'nearest')
+    prev_grid_dt = FormatProcessor.calculate_grid_point(prev_dt, grid_start, round_direction='nearest')
+    curr_grid_dt = FormatProcessor.calculate_grid_point(next_dt, grid_start, round_direction='nearest')
     
     # Calculate grid positions
     prev_grid_pos = int((prev_grid_dt - grid_start).total_seconds() / 60.0 / EXPECTED_INTERVAL_MINUTES)
@@ -581,7 +540,7 @@ def test_interpolate_gaps_with_snap_to_grid(start_seconds, gap_minutes):
     else:
         expected_filled = 0
     
-    result = processor.interpolate_gaps(df)
+    result = FormatProcessor.interpolate_gaps(df)
     
     # Check that the expected number of points were filled
     num_filled = len(result) - len(df)
@@ -590,11 +549,6 @@ def test_interpolate_gaps_with_snap_to_grid(start_seconds, gap_minutes):
         f"Expected {expected_filled} interpolated points (grid pos {prev_grid_pos}→{curr_grid_pos}), got {num_filled}"
     
     if expected_filled > 0:
-        # Should have imputation warning
-        assert processor.has_warnings()
-        warnings = processor.get_warnings()
-        assert ProcessingWarning.IMPUTATION in warnings
-        
         # Check that imputed events were created with IMPUTATION + SYNCHRONIZATION flags
         imputed_count = result.filter(
             (pl.col('quality') & Quality.IMPUTATION.value) != 0
@@ -612,16 +566,16 @@ def test_interpolate_gaps_with_snap_to_grid(start_seconds, gap_minutes):
 
 def test_interpolate_gaps_empty_dataframe():
     """Test interpolation with empty DataFrame."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     empty_df = create_empty_dataframe()
     
-    result = processor.interpolate_gaps(empty_df)
+    result = FormatProcessor.interpolate_gaps(empty_df)
     assert len(result) == 0
 
 
 def test_prepare_for_inference_keeps_only_latest_sequence():
     """Test that prepare_for_inference keeps only the last (latest) sequence."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -671,7 +625,7 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
     df = create_test_dataframe(data)
     
     # Prepare for inference
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -688,7 +642,7 @@ def test_prepare_for_inference_keeps_only_latest_sequence():
 
 def test_prepare_for_inference_single_sequence_unchanged():
     """Test that single sequence data is not affected by latest sequence filtering."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -710,7 +664,7 @@ def test_prepare_for_inference_single_sequence_unchanged():
     df = create_test_dataframe(data)
     
     # Prepare for inference
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -722,7 +676,7 @@ def test_prepare_for_inference_single_sequence_unchanged():
 
 def test_prepare_for_inference_latest_sequence_identification():
     """Test that latest sequence is correctly identified by most recent timestamp."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -782,7 +736,7 @@ def test_prepare_for_inference_latest_sequence_identification():
     df = create_test_dataframe(data)
     
     # Prepare for inference
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=300,
@@ -800,9 +754,9 @@ def test_prepare_for_inference_latest_sequence_identification():
 
 def test_prepare_for_inference_success(sample_unified_data):
     """Test successful inference preparation."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         sample_unified_data,
         minimum_duration_minutes=30,
         maximum_wanted_duration=120,
@@ -827,9 +781,9 @@ def test_prepare_for_inference_success(sample_unified_data):
 
 def test_prepare_for_inference_with_quality_issues(sample_data_with_quality_issues):
     """Test inference preparation with quality issues."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         sample_data_with_quality_issues,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -841,7 +795,7 @@ def test_prepare_for_inference_with_quality_issues(sample_data_with_quality_issu
 
 def test_prepare_for_inference_zero_valid_input():
     """Test inference preparation with no valid data."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # Create data with no glucose values
     empty_glucose_data = pl.DataFrame({
@@ -861,26 +815,26 @@ def test_prepare_for_inference_zero_valid_input():
     empty_glucose_data = CGM_SCHEMA.validate_dataframe(empty_glucose_data, enforce=True)
     
     with pytest.raises(ZeroValidInputError):
-        processor.prepare_for_inference(empty_glucose_data)
+        FormatProcessor.prepare_for_inference(empty_glucose_data)
 
 
 def test_prepare_for_inference_empty_dataframe():
     """Test inference preparation with empty DataFrame."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     empty_df = create_empty_dataframe()
     
     with pytest.raises(ZeroValidInputError):
-        processor.prepare_for_inference(empty_df)
+        FormatProcessor.prepare_for_inference(empty_df)
 
 
 def test_prepare_for_inference_truncation(sample_unified_data):
     """Test that sequences are truncated to maximum duration, keeping latest data."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # sample_unified_data has 10 records from 12:00 to 12:45 (5-minute intervals)
     # Set maximum duration to 20 minutes - should keep LATEST 20 minutes
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         sample_unified_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=20,
@@ -902,7 +856,7 @@ def test_prepare_for_inference_truncation(sample_unified_data):
 
 def test_prepare_for_inference_truncation_keeps_latest():
     """Test that truncation keeps the latest (most recent) data, not the oldest."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # Create data spanning 60 minutes (0 to 60 minutes, 13 points)
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -923,7 +877,7 @@ def test_prepare_for_inference_truncation_keeps_latest():
     df = create_test_dataframe(data)
     
     # Truncate to 30 minutes - should keep LATEST 30 minutes (30-60 min range)
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=30,
@@ -960,7 +914,7 @@ def test_prepare_for_inference_truncation_keeps_latest():
 
 def test_prepare_for_inference_with_calibration_events():
     """Test inference preparation with calibration events."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # Create data with calibration event
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -981,20 +935,19 @@ def test_prepare_for_inference_with_calibration_events():
     
     calibration_data = create_test_dataframe(data)
     
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         calibration_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
     
     # Should have CALIBRATION warning
-    assert ProcessingWarning.CALIBRATION in processor.get_warnings()
     assert (warnings & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
 
 
 def test_prepare_for_inference_with_sensor_calibration_quality():
     """Test inference preparation with SENSOR_CALIBRATION quality flag."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     # Create data with sensor calibration quality
     base_time = datetime(2024, 1, 1, 12, 0, 0)
@@ -1015,50 +968,39 @@ def test_prepare_for_inference_with_sensor_calibration_quality():
     
     sensor_calibration_data = create_test_dataframe(data)
     
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         sensor_calibration_data,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
     
     # Should have CALIBRATION warning (SENSOR_CALIBRATION triggers CALIBRATION warning)
-    assert ProcessingWarning.CALIBRATION in processor.get_warnings()
     assert (warnings & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
 
 
 def test_warnings_accumulation():
-    """Test that warnings accumulate correctly in a list."""
-    processor = FormatProcessor()
+    """Test that warnings are returned as flags from methods."""
+    # FormatProcessor uses classmethods that return warnings
+    # Warnings are no longer accumulated in instance state
     
-    # Manually add warnings
-    processor._add_warning(ProcessingWarning.IMPUTATION)
-    assert processor.has_warnings()
-    warnings = processor.get_warnings()
-    assert ProcessingWarning.IMPUTATION in warnings
-    assert len(warnings) == 1
+    # Test that warnings combine correctly using bitwise OR
+    warning1 = ProcessingWarning.CALIBRATION  # Value 2
+    warning2 = ProcessingWarning.OUT_OF_RANGE  # Value 4
     
-    processor._add_warning(ProcessingWarning.QUALITY)
-    warnings = processor.get_warnings()
-    assert ProcessingWarning.IMPUTATION in warnings
-    assert ProcessingWarning.QUALITY in warnings
-    assert len(warnings) == 2
+    combined = warning1 | warning2
     
-    # Can add same warning multiple times
-    processor._add_warning(ProcessingWarning.IMPUTATION)
-    warnings = processor.get_warnings()
-    assert len(warnings) == 3
-    assert warnings.count(ProcessingWarning.IMPUTATION) == 2
+    # Check individual flags are present
+    assert (combined & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
+    assert (combined & ProcessingWarning.OUT_OF_RANGE) == ProcessingWarning.OUT_OF_RANGE
+    
+    # Check that unset flags are not present  
+    assert not (combined & ProcessingWarning.TOO_SHORT)
+    assert not (combined & ProcessingWarning.IMPUTATION)
 
 
-@pytest.mark.skip(reason="Sequence splitting moved to parser, not interpolate_gaps")
 def test_sequence_creation_with_no_sequence_id():
     """Test that sequence_id is created when not present."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
-    # Create data without sequence_id
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
     
@@ -1090,8 +1032,8 @@ def test_sequence_creation_with_no_sequence_id():
     
     df = create_test_dataframe(data)
     
-    # Process - should create sequence_id
-    result = processor.interpolate_gaps(df)
+    # Process - should create sequence_id via detect_and_assign_sequences
+    result = FormatProcessor.detect_and_assign_sequences(df)
     
     # Should have sequence_id column
     assert 'sequence_id' in result.columns
@@ -1100,13 +1042,8 @@ def test_sequence_creation_with_no_sequence_id():
     assert result['sequence_id'].n_unique() == 2
 
 
-@pytest.mark.skip(reason="Sequence splitting moved to parser, not interpolate_gaps")
 def test_large_gap_creates_new_sequence():
     """Test that gaps larger than SMALL_GAP_MAX_MINUTES create new sequences."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1157,19 +1094,18 @@ def test_large_gap_creates_new_sequence():
     
     df = create_test_dataframe(data)
     
-    # Process - should split into 3 sequences
-    result = processor.interpolate_gaps(df)
+    # Process - should split into 3 sequences using detect_and_assign_sequences
+    result = FormatProcessor.detect_and_assign_sequences(df)
     
     # Should have 3 distinct sequences
     unique_sequences = result['sequence_id'].unique().sort().to_list()
     assert len(unique_sequences) == 3, f"Expected 3 sequences, got {len(unique_sequences)}"
     
-    # Verify first sequence has 3 records (no interpolation, all within expected interval)
+    # Verify first sequence has 3 records
     seq_0_data = result.filter(pl.col('sequence_id') == unique_sequences[0])
-    # Could have interpolation if there was a small gap
-    assert len(seq_0_data) >= 3
+    assert len(seq_0_data) == 3
     
-    # Verify no interpolation across large gaps (check event types don't span sequences)
+    # Verify no large gaps within any sequence (check glucose-only gaps)
     for seq_id in unique_sequences:
         seq_data = result.filter(pl.col('sequence_id') == seq_id).sort('datetime')
         # Check that sequence is continuous (no large gaps)
@@ -1179,7 +1115,6 @@ def test_large_gap_creates_new_sequence():
             assert max_gap <= SMALL_GAP_MAX_MINUTES, f"Sequence {seq_id} has gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
 
 
-@pytest.mark.skip(reason="Sequence splitting moved to parser, not interpolate_gaps")
 def test_multiple_existing_sequences_with_internal_gaps():
     """Test that existing multiple sequences with internal large gaps are split correctly.
     
@@ -1187,10 +1122,6 @@ def test_multiple_existing_sequences_with_internal_gaps():
     have large gaps internally that need to be split into new sub-sequences.
     Ensures sequence IDs remain unique and don't conflict.
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1300,8 +1231,8 @@ def test_multiple_existing_sequences_with_internal_gaps():
     
     df = create_test_dataframe(data)
     
-    # Process
-    result = processor.interpolate_gaps(df)
+    # Process using detect_and_assign_sequences
+    result = FormatProcessor.detect_and_assign_sequences(df)
     
     # Expected: 
     # Seq 1 splits into 2 (1 gap) = 2 sequences
@@ -1333,13 +1264,8 @@ def test_multiple_existing_sequences_with_internal_gaps():
     assert total_points >= 19, f"Expected at least 19 points, got {total_points}"
 
 
-@pytest.mark.skip(reason="Sequence splitting moved to parser, not interpolate_gaps")
 def test_small_vs_large_gap_handling():
     """Test that small gaps are interpolated but large gaps create new sequences."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1385,12 +1311,15 @@ def test_small_vs_large_gap_handling():
     
     df = create_test_dataframe(data)
     
-    # Process
-    result = processor.interpolate_gaps(df)
+    # First detect sequences (splits by large gap)
+    df_with_sequences = FormatProcessor.detect_and_assign_sequences(df)
     
     # Should have 2 sequences (split by large gap)
-    unique_sequences = result['sequence_id'].unique().sort().to_list()
+    unique_sequences = df_with_sequences['sequence_id'].unique().sort().to_list()
     assert len(unique_sequences) == 2
+    
+    # Then interpolate small gaps within sequences
+    result = FormatProcessor.interpolate_gaps(df_with_sequences)
     
     # First sequence should have interpolated points
     seq_0_data = result.filter(pl.col('sequence_id') == unique_sequences[0])
@@ -1407,9 +1336,8 @@ def test_small_vs_large_gap_handling():
     seq_1_data = result.filter(pl.col('sequence_id') == unique_sequences[1])
     assert len(seq_1_data) == 1
     
-    # Should have IMPUTATION warning
-    assert processor.has_warnings()
-    assert ProcessingWarning.IMPUTATION in processor.get_warnings()
+    # Should have IMPUTATION warning (returned from interpolate_gaps)
+    # Note: warnings would have been returned from interpolate_gaps call above
 
 def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
     """Test that gaps >= CALIBRATION_GAP_THRESHOLD (2:45:00) mark next 24 hours as SENSOR_CALIBRATION quality.
@@ -1417,10 +1345,6 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
     According to PIPELINE.md: "In case of large gap more than 2 hours 45 minutes 
     mark next 24 hours as ill quality."
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1463,7 +1387,7 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
     df = create_test_dataframe(data)
     
     # Process with mark_calibration_periods (now public method called during prepare_for_inference)
-    result = processor.mark_calibration_periods(df)
+    result = FormatProcessor.mark_calibration_periods(df)
     
     # Find the gap position (between last point before gap and first point after gap)
     # The gap is between index 2 (10 minutes) and index 3 (3 hours later)
@@ -1511,10 +1435,6 @@ def test_calibration_gap_marks_next_24_hours_as_sensor_calibration():
 
 def test_calibration_gap_exactly_at_threshold():
     """Test that gap exactly at CALIBRATION_GAP_THRESHOLD (2:45:00) triggers calibration marking."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1566,7 +1486,7 @@ def test_calibration_gap_exactly_at_threshold():
     df = create_test_dataframe(data)
     
     # Process with mark_calibration_periods
-    result = processor.mark_calibration_periods(df)
+    result = FormatProcessor.mark_calibration_periods(df)
     
     # Points after gap (within 24 hours) should be SENSOR_CALIBRATION
     calibration_period_end = gap_end + timedelta(hours=24)
@@ -1587,10 +1507,6 @@ def test_calibration_gap_exactly_at_threshold():
 
 def test_calibration_gap_below_threshold_no_marking():
     """Test that gaps below CALIBRATION_GAP_THRESHOLD do not trigger calibration marking."""
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1628,7 +1544,7 @@ def test_calibration_gap_below_threshold_no_marking():
     df = create_test_dataframe(data)
     
     # Process with mark_calibration_periods
-    result = processor.mark_calibration_periods(df)
+    result = FormatProcessor.mark_calibration_periods(df)
     
     # Point after gap should remain GOOD quality (not marked as SENSOR_CALIBRATION)
     point_after_gap = result.filter(pl.col('original_datetime') > base_time)
@@ -1649,18 +1565,14 @@ def test_full_pipeline(sample_data_with_gaps):
     Note: sample_data_with_gaps has a 15-minute gap which is less than 
     SMALL_GAP_MAX_MINUTES (19 minutes), so it may be interpolated depending on implementation.
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     # Step 1: Interpolate gaps
-    interpolated = processor.interpolate_gaps(sample_data_with_gaps)
+    interpolated = FormatProcessor.interpolate_gaps(sample_data_with_gaps)
     # Gap behavior depends on implementation - just check we have data
     assert len(interpolated) >= len(sample_data_with_gaps)
     
     # Step 2: Prepare for inference
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         interpolated,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1683,17 +1595,13 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
     Note: sample_data_with_gaps has a 15-minute gap which is less than 
     SMALL_GAP_MAX_MINUTES (19 minutes), so behavior depends on implementation.
     """
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES,
-    )
     
     # Step 1: Interpolate gaps
-    interpolated = processor.interpolate_gaps(sample_data_with_gaps)
+    interpolated = FormatProcessor.interpolate_gaps(sample_data_with_gaps)
     assert len(interpolated) >= len(sample_data_with_gaps)
     
     # Step 2: Synchronize timestamps
-    synchronized = processor.synchronize_timestamps(interpolated)
+    synchronized = FormatProcessor.synchronize_timestamps(interpolated)
     
     # Verify all timestamps are rounded
     for timestamp in synchronized['datetime'].to_list():
@@ -1710,7 +1618,7 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
                     f"Time interval {diff} should be ~{EXPECTED_INTERVAL_MINUTES} minutes in sequence {seq_id}"
     
     # Step 3: Prepare for inference
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         synchronized,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1729,7 +1637,7 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
 
 def test_prepare_for_inference_glucose_only():
     """Test that prepare_for_inference works with mixed event types."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1756,7 +1664,7 @@ def test_prepare_for_inference_glucose_only():
     df = create_test_dataframe(data)
     
     # Prepare for inference (should keep all events for now)
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1770,7 +1678,7 @@ def test_prepare_for_inference_glucose_only():
 
 def test_prepare_for_inference_drop_duplicates():
     """Test that TIME_DUPLICATES warning is raised for duplicate timestamps."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1817,7 +1725,7 @@ def test_prepare_for_inference_drop_duplicates():
     df = create_test_dataframe(data)
     
     # Test with duplicates - should keep duplicates and warn
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
@@ -1831,7 +1739,7 @@ def test_prepare_for_inference_drop_duplicates():
 
 def test_prepare_for_inference_time_duplicates_warning():
     """Test that TIME_DUPLICATES warning is raised for non-unique timestamps."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1865,14 +1773,13 @@ def test_prepare_for_inference_time_duplicates_warning():
     
     df = create_test_dataframe(data)
     
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=120,
     )
     
     # Should have TIME_DUPLICATES warning
-    assert ProcessingWarning.TIME_DUPLICATES in processor.get_warnings()
     assert (warnings & ProcessingWarning.TIME_DUPLICATES) == ProcessingWarning.TIME_DUPLICATES
 
 
@@ -1882,7 +1789,7 @@ def test_prepare_for_inference_warnings_after_truncation():
     This is the key bug fix: warnings should only reflect the data that is actually
     output, not data that was truncated away.
     """
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1909,7 +1816,7 @@ def test_prepare_for_inference_warnings_after_truncation():
     df = create_test_dataframe(data)
     
     # Truncate to last 20 minutes - should remove the calibration and quality issue
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=20,  # Keep only last 20 minutes
@@ -1919,17 +1826,17 @@ def test_prepare_for_inference_warnings_after_truncation():
     assert len(unified_df) <= 5, f"Expected ~5 records for 20 minutes, got {len(unified_df)}"
     
     # Should NOT have CALIBRATION warning (it was truncated away)
-    assert ProcessingWarning.CALIBRATION not in processor.get_warnings(), \
+    assert not (warnings & ProcessingWarning.CALIBRATION), \
         "CALIBRATION warning should not be present after truncation"
     
-    # Should NOT have QUALITY warning (it was truncated away)
-    assert ProcessingWarning.QUALITY not in processor.get_warnings(), \
+    # Should NOT have QUALITY warning (it was truncated away)  
+    assert not (warnings & ProcessingWarning.QUALITY), \
         "QUALITY warning should not be present after truncation"
 
 
 def test_prepare_for_inference_glucose_only_with_truncation():
     """Test truncation and detection of mixed event types."""
-    processor = FormatProcessor()
+    # FormatProcessor uses classmethods - no instantiation needed
     
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     data = []
@@ -1957,7 +1864,7 @@ def test_prepare_for_inference_glucose_only_with_truncation():
     df = create_test_dataframe(data)
     
     # Prepare for inference with truncation
-    unified_df, warnings = processor.prepare_for_inference(
+    unified_df, warnings = FormatProcessor.prepare_for_inference(
         df,
         minimum_duration_minutes=10,
         maximum_wanted_duration=30,
@@ -1990,25 +1897,13 @@ def test_synchronize_timestamps_is_lossless():
     if not csv_files:
         pytest.skip(f"No CSV files found in {data_dir}")
     
-    # Helper to check if file is Medtronic (unsupported)
-    def is_medtronic_file(file_path: Path) -> bool:
-        try:
-            with open(file_path, 'rb') as f:
-                header = f.read(500).decode('utf-8', errors='ignore')
-                return "Guardian Connect" in header
-        except Exception:
-            return False
-    
-    processor = FormatProcessor(
-        expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-        small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-    )
-    
     tested_files = 0
     
     for file_path in csv_files:
-        if is_medtronic_file(file_path):
-            continue
+        # Skip unsupported formats using format_supported
+        with open(file_path, 'rb') as f:
+            if not FormatParser.format_supported(f.read()):
+                continue
         
         try:
             # Parse file
@@ -2016,7 +1911,7 @@ def test_synchronize_timestamps_is_lossless():
             original_row_count = len(unified_df)
             
             # Synchronize timestamps
-            result = processor.synchronize_timestamps(unified_df)
+            result = FormatProcessor.synchronize_timestamps(unified_df)
             
             # ASSERTION 1: Number of rows should not change (lossless, no imputation)
             assert len(result) == original_row_count, (
@@ -2108,6 +2003,371 @@ def test_synchronize_timestamps_is_lossless():
     # Ensure we tested at least some files
     assert tested_files > 0, "No files were tested"
     print(f"\n✅ Successfully tested {tested_files} real dataset files")
+
+
+class TestSequenceDetection:
+    """Test sequence detection logic in processor for edge cases."""
+    
+    @staticmethod
+    def _create_test_df_with_schema(data):
+        """Helper to create test DataFrame with proper schema validation."""
+        df = pl.DataFrame(data)
+        return CGM_SCHEMA.validate_dataframe(df, enforce=True)
+    
+    def test_large_gap_creates_new_sequence(self):
+        """Test that gaps larger than SMALL_GAP_MAX_MINUTES create new sequences (glucose-only logic)."""
+        base_time = datetime(2024, 1, 1, 12, 0, 0)
+        data = []
+        
+        # First sequence: 3 glucose points at 0, 5, 10 minutes
+        for i in range(3):
+            data.append({
+                'sequence_id': 0,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(minutes=5 * i),
+                'datetime': base_time + timedelta(minutes=5 * i),
+                'glucose': 100.0 + i * 2,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Large gap (20 minutes, > SMALL_GAP_MAX_MINUTES threshold)
+        # Second sequence: 3 glucose points at 30, 35, 40 minutes
+        for i in range(3):
+            data.append({
+                'sequence_id': 0,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
+                'datetime': base_time + timedelta(minutes=30 + 5 * i),
+                'glucose': 110.0 + i * 2,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Another large gap (25 minutes)
+        # Third sequence: 2 glucose points at 65, 70 minutes
+        for i in range(2):
+            data.append({
+                'sequence_id': 0,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(minutes=65 + 5 * i),
+                'datetime': base_time + timedelta(minutes=65 + 5 * i),
+                'glucose': 120.0 + i * 2,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        df = self._create_test_df_with_schema(data)
+        
+        # Detect sequences
+        result = FormatProcessor.detect_and_assign_sequences(
+            df,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
+        )
+        
+        # Should have 3 distinct sequences
+        unique_sequences = result['sequence_id'].unique().sort().to_list()
+        assert len(unique_sequences) == 3, f"Expected 3 sequences, got {len(unique_sequences)}"
+        
+        # Verify first sequence has 3 records
+        seq_0_data = result.filter(pl.col('sequence_id') == unique_sequences[0])
+        assert len(seq_0_data) == 3
+        
+        # Verify no large gaps within any sequence (glucose-only check)
+        for seq_id in unique_sequences:
+            seq_glucose = result.filter(
+                (pl.col('sequence_id') == seq_id) &
+                (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+            ).sort('datetime')
+            
+            if len(seq_glucose) > 1:
+                time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
+                max_gap = time_diffs.drop_nulls().max()
+                assert max_gap <= SMALL_GAP_MAX_MINUTES, \
+                    f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
+    
+    def test_multiple_existing_sequences_with_internal_gaps(self):
+        """Test that existing multiple sequences with internal large glucose gaps are split correctly."""
+        base_time = datetime(2024, 1, 1, 12, 0, 0)
+        data = []
+        
+        # Sequence 1: has a large internal glucose gap, should be split
+        # Part A: 0-10 minutes (3 points)
+        for i in range(3):
+            data.append({
+                'sequence_id': 1,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(minutes=5 * i),
+                'datetime': base_time + timedelta(minutes=5 * i),
+                'glucose': 100.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Large gap (20 minutes) within sequence 1
+        # Part B: 30-40 minutes (3 points)
+        for i in range(3):
+            data.append({
+                'sequence_id': 1,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
+                'datetime': base_time + timedelta(minutes=30 + 5 * i),
+                'glucose': 105.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Sequence 2: continuous, no internal gaps (should stay as one sequence)
+        for i in range(4):
+            data.append({
+                'sequence_id': 2,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(hours=2, minutes=5 * i),
+                'datetime': base_time + timedelta(hours=2, minutes=5 * i),
+                'glucose': 110.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Sequence 3: has TWO large internal gaps, should be split into 3 parts
+        # Part A: 0-5 minutes (2 points)
+        for i in range(2):
+            data.append({
+                'sequence_id': 3,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(hours=4, minutes=5 * i),
+                'datetime': base_time + timedelta(hours=4, minutes=5 * i),
+                'glucose': 120.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Large gap (25 minutes)
+        # Part B: 30-35 minutes (2 points)
+        for i in range(2):
+            data.append({
+                'sequence_id': 3,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
+                'datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
+                'glucose': 125.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Another large gap (20 minutes)
+        # Part C: 55-60 minutes (2 points)
+        for i in range(2):
+            data.append({
+                'sequence_id': 3,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
+                'datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
+                'glucose': 130.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        # Sequence 4: continuous, no gaps (should stay as one sequence)
+        for i in range(3):
+            data.append({
+                'sequence_id': 4,
+                'event_type': UnifiedEventType.GLUCOSE.value,
+                'quality': 0,
+                'original_datetime': base_time + timedelta(hours=6, minutes=5 * i),
+                'datetime': base_time + timedelta(hours=6, minutes=5 * i),
+                'glucose': 140.0,
+                'carbs': None,
+                'insulin_slow': None,
+                'insulin_fast': None,
+                'exercise': None,
+            })
+        
+        df = self._create_test_df_with_schema(data)
+        
+        # Process with split_sequences_with_internal_gaps
+        result = FormatProcessor.detect_and_assign_sequences(
+            df,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
+        )
+        
+        # Expected: 
+        # Seq 1 splits into 2 (1 gap) = 2 sequences
+        # Seq 2 stays as 1 = 1 sequence  
+        # Seq 3 splits into 3 (2 gaps) = 3 sequences
+        # Seq 4 stays as 1 = 1 sequence
+        # Total = 7 sequences
+        
+        unique_sequences = result['sequence_id'].unique().sort().to_list()
+        assert len(unique_sequences) == 7, f"Expected 7 sequences, got {len(unique_sequences)}: {unique_sequences}"
+        
+        # Verify all sequence IDs are unique (no duplicates)
+        assert len(unique_sequences) == len(set(unique_sequences)), \
+            "Sequence IDs are not unique!"
+        
+        # Verify no large gaps within any sequence (glucose-only check)
+        for seq_id in unique_sequences:
+            seq_glucose = result.filter(
+                (pl.col('sequence_id') == seq_id) &
+                (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+            ).sort('datetime')
+            
+            if len(seq_glucose) > 1:
+                time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
+                max_gap = time_diffs.drop_nulls().max()
+                assert max_gap <= SMALL_GAP_MAX_MINUTES, \
+                    f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
+        
+        # Verify we have the expected number of data points
+        total_points = len(result)
+        # Original data had 6+4+6+3 = 19 points
+        assert total_points == 19, f"Expected 19 points, got {total_points}"
+    
+    def test_glucose_gap_with_event_bridge(self):
+        """Test that non-glucose events don't bridge glucose gaps.
+        
+        This tests the scenario where:
+        - Two glucose readings are far apart (> threshold)
+        - But non-glucose events (carbs, insulin) occur between them
+        - The glucose readings should be in DIFFERENT sequences
+        - The non-glucose events should be assigned to the nearest glucose sequence
+        """
+        # Create test data with a glucose gap bridged by non-glucose events
+        base_time = datetime(2023, 9, 16, 8, 0)
+        
+        # Schema order: sequence_id, original_datetime, quality, event_type, datetime, glucose, carbs, insulin_slow, insulin_fast, exercise
+        test_data = pl.DataFrame({
+            'sequence_id': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
+            'original_datetime': pl.Series([
+                base_time + timedelta(minutes=0),
+                base_time + timedelta(minutes=5),
+                base_time + timedelta(minutes=10),
+                base_time + timedelta(minutes=12),
+                base_time + timedelta(minutes=26),
+                base_time + timedelta(minutes=27),
+                base_time + timedelta(minutes=28),
+                base_time + timedelta(minutes=32),
+                base_time + timedelta(minutes=37),
+            ], dtype=pl.Datetime('ms')),
+            'quality': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
+            'event_type': pl.Series([
+                UnifiedEventType.GLUCOSE.value,      # 0
+                UnifiedEventType.GLUCOSE.value,      # 5
+                UnifiedEventType.GLUCOSE.value,      # 10
+                UnifiedEventType.GLUCOSE.value,      # 12
+                UnifiedEventType.CARBOHYDRATES.value,# 26
+                UnifiedEventType.INSULIN_SLOW.value, # 27
+                UnifiedEventType.INSULIN_FAST.value, # 28
+                UnifiedEventType.GLUCOSE.value,      # 32 - 20 min gap from previous glucose
+                UnifiedEventType.GLUCOSE.value,      # 37
+            ], dtype=pl.Utf8),
+            'datetime': pl.Series([
+                base_time + timedelta(minutes=0),   # Glucose 1
+                base_time + timedelta(minutes=5),   # Glucose 2
+                base_time + timedelta(minutes=10),  # Glucose 3
+                base_time + timedelta(minutes=12),  # Glucose 4 - LAST in first sequence
+                base_time + timedelta(minutes=26),  # Carbs event - bridges gap (14 min after last glucose)
+                base_time + timedelta(minutes=27),  # Insulin event - bridges gap (1 min after carbs)
+                base_time + timedelta(minutes=28),  # Insulin event - bridges gap (1 min after insulin)
+                base_time + timedelta(minutes=32),  # Glucose 5 - FIRST in second sequence (20 min after glucose 4)
+                base_time + timedelta(minutes=37),  # Glucose 6
+            ], dtype=pl.Datetime('ms')),
+            'glucose': pl.Series([100.0, 105.0, 110.0, 115.0, None, None, None, 120.0, 125.0], dtype=pl.Float64),
+            'carbs': pl.Series([None, None, None, None, 50.0, None, None, None, None], dtype=pl.Float64),
+            'insulin_slow': pl.Series([None, None, None, None, None, 10.0, None, None, None], dtype=pl.Float64),
+            'insulin_fast': pl.Series([None, None, None, None, None, None, 5.0, None, None], dtype=pl.Float64),
+            'exercise': pl.Series([None, None, None, None, None, None, None, None, None], dtype=pl.Int64),
+        })
+        
+        # Run sequence detection with 19-minute threshold (as in the example)
+        result = FormatProcessor.detect_and_assign_sequences(
+            test_data,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=19
+        )
+        
+        # Verify results
+        # Glucose events 0-3 should be in sequence 1
+        glucose_seq_1 = result.filter(
+            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) &
+            (pl.col('datetime') <= base_time + timedelta(minutes=12))
+        )
+        assert glucose_seq_1['sequence_id'].unique().to_list() == [1], \
+            "First glucose group should all be in sequence 1"
+        
+        # Glucose events 4-5 should be in sequence 2 (20 min gap from previous glucose)
+        glucose_seq_2 = result.filter(
+            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) &
+            (pl.col('datetime') >= base_time + timedelta(minutes=32))
+        )
+        assert glucose_seq_2['sequence_id'].unique().to_list() == [2], \
+            "Second glucose group should all be in sequence 2"
+        
+        # Non-glucose events should be assigned to nearest glucose sequence
+        carbs_event = result.filter(pl.col('event_type') == UnifiedEventType.CARBOHYDRATES.value)
+        insulin_events = result.filter(
+            pl.col('event_type').is_in([
+                UnifiedEventType.INSULIN_FAST.value,
+                UnifiedEventType.INSULIN_SLOW.value
+            ])
+        )
+        
+        # Carbs at 26 min is 14 min after last glucose of seq 1 (12 min) and 6 min before first glucose of seq 2 (32 min)
+        # Should be assigned to sequence 2 (closer)
+        assert carbs_event['sequence_id'].to_list()[0] == 2, \
+            "Carbs event should be assigned to sequence 2 (closer to glucose at 32 min)"
+        
+        # Insulin events at 27-28 min should also be assigned to sequence 2
+        for seq_id in insulin_events['sequence_id'].to_list():
+            assert seq_id == 2, \
+                "Insulin events should be assigned to sequence 2 (closer to glucose at 32 min)"
+        
+        print("\n=== Sequence Detection Test Results ===")
+        print(result.select(['datetime', 'sequence_id', 'event_type', 'glucose', 'carbs', 'insulin_fast', 'insulin_slow']))
+        
+        # Calculate glucose-only gaps
+        glucose_only = result.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('datetime')
+        glucose_gaps = glucose_only.with_columns([
+            (pl.col('datetime').diff().dt.total_seconds() / 60.0).alias('gap_from_prev_glucose')
+        ])
+        
+        print("\n=== Glucose-Only Gaps ===")
+        print(glucose_gaps.select(['datetime', 'sequence_id', 'glucose', 'gap_from_prev_glucose']))
+        
+        # Verify the 20-minute gap is detected
+        large_gap = glucose_gaps.filter(pl.col('gap_from_prev_glucose') > 19)
+        assert len(large_gap) > 0, "Should detect at least one large glucose gap"
+        assert large_gap['sequence_id'].to_list()[0] == 2, \
+            "Large gap should mark start of sequence 2"
 
 
 if __name__ == "__main__":

@@ -19,20 +19,11 @@ import pandas as pd
 
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
+from cgm_format.formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
 
 
 # Test data directory
 DATA_DIR = Path(__file__).parent.parent / "data"
-
-
-def is_medtronic_file(file_path: Path) -> bool:
-    """Check if a file is a Medtronic Guardian Connect file."""
-    try:
-        with open(file_path, 'rb') as f:
-            header = f.read(500).decode('utf-8', errors='ignore')
-            return "Guardian Connect" in header
-    except Exception:
-        return False
 
 
 def get_test_files_by_format():
@@ -45,17 +36,22 @@ def get_test_files_by_format():
         pytest.skip(f"Data directory not found: {DATA_DIR}")
     
     csv_files = list(DATA_DIR.glob("*.csv"))
-    csv_files = [f for f in csv_files if "parsed" not in str(f) and not is_medtronic_file(f)]
+    csv_files = [f for f in csv_files if "parsed" not in str(f)]
     
     if not csv_files:
         pytest.skip(f"No CSV files found in {DATA_DIR}")
     
-    # Detect format for each file
+    # Detect format for each file using format_supported
     files_by_format = []
     for csv_file in csv_files:
         try:
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
+            
+            # Skip unsupported formats
+            if not FormatParser.format_supported(raw_data):
+                continue
+                
             text_data = FormatParser.decode_raw_data(raw_data)
             detected_format = FormatParser.detect_format(text_data)
             files_by_format.append((csv_file, detected_format))
@@ -103,9 +99,9 @@ class TestDatetimeRoundtrip:
             f"Schema mismatch:\nOriginal: {df_original.schema}\nRoundtrip: {df_roundtrip.schema}"
         
         # Check DataFrames are equal (Polars)
-        # Sort both by datetime to ensure order matches
-        df_original_sorted = df_original.sort('datetime')
-        df_roundtrip_sorted = df_roundtrip.sort('datetime')
+        # Use stable sort to ensure deterministic ordering even with duplicate timestamps
+        df_original_sorted = UNIFIED_SCHEMA.stable_sort_dataframe(df_original)
+        df_roundtrip_sorted = UNIFIED_SCHEMA.stable_sort_dataframe(df_roundtrip)
         
         try:
             assert df_original_sorted.equals(df_roundtrip_sorted), \
@@ -154,9 +150,11 @@ class TestDatetimeRoundtrip:
             assert df_original_pd[col].dtype == df_roundtrip_pd[col].dtype, \
                 f"Pandas dtype mismatch for column '{col}': {df_original_pd[col].dtype} != {df_roundtrip_pd[col].dtype}"
         
-        # Sort both by datetime
-        df_original_pd_sorted = df_original_pd.sort_values('datetime').reset_index(drop=True)
-        df_roundtrip_pd_sorted = df_roundtrip_pd.sort_values('datetime').reset_index(drop=True)
+        # Sort both by datetime using stable multi-key sort
+        # Use stable sort keys from schema to handle duplicate timestamps deterministically
+        sort_keys = UNIFIED_SCHEMA.get_stable_sort_keys()
+        df_original_pd_sorted = df_original_pd.sort_values(sort_keys).reset_index(drop=True)
+        df_roundtrip_pd_sorted = df_roundtrip_pd.sort_values(sort_keys).reset_index(drop=True)
         
         # Check DataFrames are equal (Pandas)
         try:
@@ -282,8 +280,8 @@ class TestDatetimeRoundtrip:
         # Verify DataFrame equality (Polars)
         # After the fix, schemas must match perfectly for roundtrips
         print(f"\n4. Testing Polars DataFrame equality...")
-        df_original_sorted = df_original.sort('datetime')
-        df_roundtrip_sorted = df_roundtrip.sort('datetime')
+        df_original_sorted = UNIFIED_SCHEMA.stable_sort_dataframe(df_original)
+        df_roundtrip_sorted = UNIFIED_SCHEMA.stable_sort_dataframe(df_roundtrip)
         
         # Check schema equality
         print(f"   Original schema: {df_original_sorted.schema}")

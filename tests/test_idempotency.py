@@ -27,48 +27,13 @@ from cgm_format.formats.unified import CGM_SCHEMA
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
-@pytest.fixture(scope="session")
-def parsed_files_cache() -> Dict[str, pl.DataFrame]:
-    """Parse all test files once and cache them for reuse across tests.
+
+
+def get_supported_test_files() -> List[Path]:
+    """Get only supported CSV files from the data directory.
     
-    This dramatically speeds up tests by avoiding repeated parsing of the same files.
-    Each test gets a clone of the cached dataframe.
+    Uses format_supported to filter out unsupported formats.
     """
-    cache = {}
-    test_files = get_test_files()
-    
-    for file_path in test_files:
-        if is_medtronic_file(file_path):
-            continue  # Skip unsupported formats
-        
-        try:
-            unified_df = FormatParser.parse_file(file_path)
-            cache[file_path.name] = unified_df
-        except Exception as e:
-            print(f"Warning: Failed to parse {file_path.name}: {e}")
-    
-    return cache
-
-
-def is_medtronic_file(file_path: Path) -> bool:
-    """Check if a file is a Medtronic Guardian Connect file.
-    
-    Args:
-        file_path: Path to the CSV file
-        
-    Returns:
-        True if file is Medtronic format, False otherwise
-    """
-    try:
-        with open(file_path, 'rb') as f:
-            header = f.read(500).decode('utf-8', errors='ignore')
-            return "Guardian Connect" in header
-    except Exception:
-        return False
-
-
-def get_test_files() -> List[Path]:
-    """Get all CSV files from the data directory."""
     if not DATA_DIR.exists():
         pytest.skip(f"Data directory not found: {DATA_DIR}")
     
@@ -79,7 +44,37 @@ def get_test_files() -> List[Path]:
     if not csv_files:
         pytest.skip(f"No CSV files found in {DATA_DIR}")
     
-    return csv_files
+    supported_files = []
+    
+    for file_path in csv_files:
+        with open(file_path, 'rb') as f:
+            if FormatParser.format_supported(f.read()):
+                supported_files.append(file_path)
+    
+    if not supported_files:
+        pytest.skip("No supported CSV files found")
+    
+    return supported_files
+
+
+@pytest.fixture(scope="session")
+def parsed_files_cache() -> Dict[str, pl.DataFrame]:
+    """Parse all test files once and cache them for reuse across tests.
+    
+    This dramatically speeds up tests by avoiding repeated parsing of the same files.
+    Each test gets a clone of the cached dataframe.
+    """
+    cache = {}
+    test_files = get_supported_test_files()
+
+    for file_path in test_files:
+        try:
+            unified_df = FormatParser.parse_file(file_path)
+            cache[file_path.name] = unified_df
+        except Exception as e:
+            print(f"Warning: Failed to parse {file_path.name}: {e}")
+    
+    return cache
 
 
 def check_no_large_gaps(df: pl.DataFrame, expected_interval: int, label: str, max_gap_minutes: float | None = None, glucose_only: bool = True) -> None:
@@ -240,14 +235,12 @@ def assert_dataframes_equal(df1: pl.DataFrame, df2: pl.DataFrame, label: str) ->
 class TestProcessingIdempotency:
     """Test idempotency and commutativity of processing operations."""
     
-    @pytest.mark.parametrize("file_path", get_test_files(), ids=lambda p: p.name)
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_triple_sync_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: synchronize_timestamps → synchronize_timestamps → synchronize_timestamps
         
         Applying sync three times should produce the same result as the first application.
         """
-        if is_medtronic_file(file_path):
-            pytest.skip("Unsupported format: Medtronic Guardian Connect")
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -259,19 +252,15 @@ class TestProcessingIdempotency:
         
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        processor = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
         
         # Apply sync three times
-        df1 = processor.synchronize_timestamps(unified_df)
+        df1 = FormatProcessor.synchronize_timestamps(unified_df)
         print(f"After 1st sync: {len(df1)} rows")
         
-        df2 = processor.synchronize_timestamps(df1)
+        df2 = FormatProcessor.synchronize_timestamps(df1)
         print(f"After 2nd sync: {len(df2)} rows")
         
-        df3 = processor.synchronize_timestamps(df2)
+        df3 = FormatProcessor.synchronize_timestamps(df2)
         print(f"After 3rd sync: {len(df3)} rows")
         
         # Assert 1st and 3rd are identical
@@ -285,14 +274,12 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Triple sync is idempotent")
     
-    @pytest.mark.parametrize("file_path", get_test_files(), ids=lambda p: p.name)
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_triple_interpolate_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: interpolate_gaps → interpolate_gaps → interpolate_gaps
         
         Applying interpolate three times should produce the same result as the first application.
         """
-        if is_medtronic_file(file_path):
-            pytest.skip("Unsupported format: Medtronic Guardian Connect")
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -304,19 +291,15 @@ class TestProcessingIdempotency:
         
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        processor = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
         
         # Apply interpolate three times
-        df1 = processor.interpolate_gaps(unified_df)
+        df1 = FormatProcessor.interpolate_gaps(unified_df)
         print(f"After 1st interpolate: {len(df1)} rows")
         
-        df2 = processor.interpolate_gaps(df1)
+        df2 = FormatProcessor.interpolate_gaps(df1)
         print(f"After 2nd interpolate: {len(df2)} rows")
         
-        df3 = processor.interpolate_gaps(df2)
+        df3 = FormatProcessor.interpolate_gaps(df2)
         print(f"After 3rd interpolate: {len(df3)} rows")
         
         # Assert 1st and 3rd are identical
@@ -332,14 +315,12 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Triple interpolate is idempotent")
     
-    @pytest.mark.parametrize("file_path", get_test_files(), ids=lambda p: p.name)
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_interpolate_sync_interpolate_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: interpolate_gaps → synchronize_timestamps → interpolate_gaps
         
         The second interpolate_gaps should not change anything.
         """
-        if is_medtronic_file(file_path):
-            pytest.skip("Unsupported format: Medtronic Guardian Connect")
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -351,21 +332,17 @@ class TestProcessingIdempotency:
         
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        processor = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
         
         # Step 1: interpolate_gaps
-        df1 = processor.interpolate_gaps(unified_df)
+        df1 = FormatProcessor.interpolate_gaps(unified_df)
         print(f"After 1st interpolate_gaps: {len(df1)} rows")
         
         # Step 2: synchronize_timestamps
-        df2 = processor.synchronize_timestamps(df1)
+        df2 = FormatProcessor.synchronize_timestamps(df1)
         print(f"After synchronize_timestamps: {len(df2)} rows")
         
         # Step 3: interpolate_gaps again (should be idempotent)
-        df3 = processor.interpolate_gaps(df2)
+        df3 = FormatProcessor.interpolate_gaps(df2)
         print(f"After 2nd interpolate_gaps: {len(df3)} rows")
         
         # Assert df2 and df3 are identical
@@ -378,14 +355,12 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Second interpolate_gaps was idempotent")
     
-    @pytest.mark.parametrize("file_path", get_test_files(), ids=lambda p: p.name)
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_sync_interpolate_sync_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: synchronize_timestamps → interpolate_gaps → synchronize_timestamps
         
         The second synchronize_timestamps should not change anything.
         """
-        if is_medtronic_file(file_path):
-            pytest.skip("Unsupported format: Medtronic Guardian Connect")
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -397,21 +372,17 @@ class TestProcessingIdempotency:
         
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        processor = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
         
         # Step 1: synchronize_timestamps
-        df1 = processor.synchronize_timestamps(unified_df)
+        df1 = FormatProcessor.synchronize_timestamps(unified_df)
         print(f"After 1st synchronize_timestamps: {len(df1)} rows")
         
         # Step 2: interpolate_gaps
-        df2 = processor.interpolate_gaps(df1)
+        df2 = FormatProcessor.interpolate_gaps(df1)
         print(f"After interpolate_gaps: {len(df2)} rows")
         
         # Step 3: synchronize_timestamps again (should be idempotent)
-        df3 = processor.synchronize_timestamps(df2)
+        df3 = FormatProcessor.synchronize_timestamps(df2)
         print(f"After 2nd synchronize_timestamps: {len(df3)} rows")
         
         # Assert df2 and df3 are identical
@@ -424,7 +395,7 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Second synchronize_timestamps was idempotent")
     
-    @pytest.mark.parametrize("file_path", get_test_files(), ids=lambda p: p.name)
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_processing_commutativity(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test that both processing chains produce identical results.
         
@@ -433,8 +404,6 @@ class TestProcessingIdempotency:
         
         Both should produce the same final result (commutativity).
         """
-        if is_medtronic_file(file_path):
-            pytest.skip("Unsupported format: Medtronic Guardian Connect")
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -448,26 +417,18 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
         
         # Chain A: interpolate → sync → interpolate
-        processor_a = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
-        df_a1 = processor_a.interpolate_gaps(unified_df)
-        df_a2 = processor_a.synchronize_timestamps(df_a1)
-        df_a3 = processor_a.interpolate_gaps(df_a2)
+        df_a1 = FormatProcessor.interpolate_gaps(unified_df)
+        df_a2 = FormatProcessor.synchronize_timestamps(df_a1)
+        df_a3 = FormatProcessor.interpolate_gaps(df_a2)
         print(f"Chain A final: {len(df_a3)} rows")
         check_no_large_gaps(df_a3, EXPECTED_INTERVAL_MINUTES, "Chain A final")
         check_no_null_glucose_egv(df_a3, "Chain A final")
         check_seconds_are_zero(df_a3, "Chain A final")
         
         # Chain B: sync → interpolate → sync
-        processor_b = FormatProcessor(
-            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
-            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
-        )
-        df_b1 = processor_b.synchronize_timestamps(unified_df)
-        df_b2 = processor_b.interpolate_gaps(df_b1)
-        df_b3 = processor_b.synchronize_timestamps(df_b2)
+        df_b1 = FormatProcessor.synchronize_timestamps(unified_df)
+        df_b2 = FormatProcessor.interpolate_gaps(df_b1)
+        df_b3 = FormatProcessor.synchronize_timestamps(df_b2)
         print(f"Chain B final: {len(df_b3)} rows")
         check_no_large_gaps(df_b3, EXPECTED_INTERVAL_MINUTES, "Chain B final")
         check_no_null_glucose_egv(df_b3, "Chain B final")
@@ -476,6 +437,95 @@ class TestProcessingIdempotency:
         # Assert both chains produce identical results
         assert_dataframes_equal(df_a3, df_b3, "Commutativity check")
         print("✅ PASSED: Both processing chains produced identical results")
+    
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
+    def test_triple_sequence_detection_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
+        """Test: detect_and_assign_sequences → detect_and_assign_sequences → detect_and_assign_sequences
+        
+        Applying sequence detection three times should produce the same result as the first application.
+        All sequences should have sequence_id >= 1 (no unassigned sequences with id 0).
+        """
+        
+        # Get cached parsed data
+        if file_path.name not in parsed_files_cache:
+            pytest.skip(f"File not in cache: {file_path.name}")
+        
+        print(f"\n{'='*70}")
+        print(f"Testing triple sequence detection: {file_path.name}")
+        print(f"{'='*70}\n")
+        
+        # Clone the cached dataframe for this test
+        unified_df = parsed_files_cache[file_path.name].clone()
+        
+        # Apply detect_and_assign_sequences three times
+        result1 = FormatProcessor.detect_and_assign_sequences(unified_df)
+        print(f"After 1st detect_and_assign_sequences: {len(result1)} rows")
+        
+        result2 = FormatProcessor.detect_and_assign_sequences(result1)
+        print(f"After 2nd detect_and_assign_sequences: {len(result2)} rows")
+        
+        result3 = FormatProcessor.detect_and_assign_sequences(result2)
+        print(f"After 3rd detect_and_assign_sequences: {len(result3)} rows")
+        
+        # Check that ALL GLUCOSE events have sequence_id >= 1 (assigned)
+        # Non-glucose events should be assigned to nearest glucose sequence if within gap distance
+        # If no glucose sequence is nearby (> gap distance), they remain unassigned (sequence_id = 0)
+        from cgm_format.formats.unified import UnifiedEventType
+        
+        glucose_unassigned_1 = result1.filter(
+            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) & 
+            (pl.col('sequence_id') == 0)
+        ).height
+        glucose_unassigned_2 = result2.filter(
+            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) & 
+            (pl.col('sequence_id') == 0)
+        ).height
+        glucose_unassigned_3 = result3.filter(
+            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) & 
+            (pl.col('sequence_id') == 0)
+        ).height
+        
+        total_unassigned_1 = result1.filter(pl.col('sequence_id') == 0).height
+        total_unassigned_2 = result2.filter(pl.col('sequence_id') == 0).height
+        total_unassigned_3 = result3.filter(pl.col('sequence_id') == 0).height
+        
+        print(f"Run 1: {glucose_unassigned_1} unassigned glucose events, {total_unassigned_1} total unassigned")
+        print(f"Run 2: {glucose_unassigned_2} unassigned glucose events, {total_unassigned_2} total unassigned")
+        print(f"Run 3: {glucose_unassigned_3} unassigned glucose events, {total_unassigned_3} total unassigned")
+        
+        # All glucose events MUST be assigned
+        assert glucose_unassigned_1 == 0, f"Result 1 has {glucose_unassigned_1} unassigned glucose events (should be 0)"
+        assert glucose_unassigned_2 == 0, f"Result 2 has {glucose_unassigned_2} unassigned glucose events (should be 0)"
+        assert glucose_unassigned_3 == 0, f"Result 3 has {glucose_unassigned_3} unassigned glucose events (should be 0)"
+        
+        # Unassigned events should be the same across runs (idempotency)
+        assert total_unassigned_1 == total_unassigned_2 == total_unassigned_3, \
+            f"Unassigned event count differs: run1={total_unassigned_1}, run2={total_unassigned_2}, run3={total_unassigned_3}"
+        
+        # Assert all three runs produce identical results
+        assert_dataframes_equal(result1, result2, "Triple sequence detection idempotency (1st vs 2nd)")
+        assert_dataframes_equal(result2, result3, "Triple sequence detection idempotency (2nd vs 3rd)")
+        assert_dataframes_equal(result1, result3, "Triple sequence detection idempotency (1st vs 3rd)")
+        
+        # Display sequence statistics
+        unique_sequences = result1['sequence_id'].unique().sort()
+        assigned_sequences = result1.filter(pl.col('sequence_id') > 0)['sequence_id'].unique().sort()
+        
+        print(f"Total unique sequence IDs: {len(unique_sequences)} (including 0 for unassigned)")
+        print(f"Total assigned sequences: {len(assigned_sequences)}")
+        
+        if len(assigned_sequences) > 0:
+            print(f"Assigned sequence IDs: {assigned_sequences.to_list()[:10]}{'...' if len(assigned_sequences) > 10 else ''}")
+            print(f"Assigned sequence ID range: {assigned_sequences.min()} to {assigned_sequences.max()}")
+            
+            # Verify assigned sequences start from 1
+            assert assigned_sequences.min() >= 1, "Assigned sequence IDs should start at 1 or higher"
+        
+        # Verify no data loss
+        assert len(result1) == len(unified_df), \
+            f"Row count changed from {len(unified_df)} to {len(result1)}"
+        
+        print("✅ PASSED: Triple sequence detection is idempotent")
 
 
 if __name__ == "__main__":

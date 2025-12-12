@@ -4,6 +4,9 @@ Tests cover:
 1. Format detection for all files in data/
 2. Parsing to unified format
 3. Saving parsed results to data/parsed/
+
+Note: Gap detection and sequence assignment tests are in test_format_processor.py
+since those operations are processor responsibilities.
 """
 
 import pytest
@@ -41,24 +44,6 @@ def setup_parsed_directory():
     # Cleanup is optional - we keep the parsed files for inspection
 
 
-def is_medtronic_file(file_path: Path) -> bool:
-    """Check if a file is a Medtronic Guardian Connect file.
-    
-    Args:
-        file_path: Path to the CSV file
-        
-    Returns:
-        True if file is Medtronic format, False otherwise
-    """
-    try:
-        with open(file_path, 'rb') as f:
-            # Check first few lines for Guardian Connect marker
-            header = f.read(500).decode('utf-8', errors='ignore')
-            return "Guardian Connect" in header
-    except Exception:
-        return False
-
-
 @pytest.fixture(scope="session")
 def all_data_files():
     """Get all CSV files from the data directory."""
@@ -69,8 +54,12 @@ def all_data_files():
 
 @pytest.fixture(scope="session")
 def supported_data_files(all_data_files):
-    """Get CSV files excluding unsupported formats (Medtronic for now)."""
-    supported_files = [f for f in all_data_files if not is_medtronic_file(f)]
+    """Get CSV files excluding unsupported formats using format_supported method."""
+    supported_files = []
+    for f in all_data_files:
+        with open(f, 'rb') as file:
+            if FormatParser.format_supported(file.read()):
+                supported_files.append(f)
     assert len(supported_files) > 0, f"No supported CSV files found"
     return supported_files
 
@@ -146,6 +135,64 @@ class TestFormatDetection:
             format_counts.get(SupportedCGMFormat.LIBRE, 0) > 0
         )
         assert has_dexcom_or_libre, "Expected at least one Dexcom or Libre file"
+
+    def test_format_supported(self, all_data_files, supported_data_files):
+        """Test format_supported method correctly identifies supported formats."""
+        correct_positives = 0
+        correct_negatives = 0
+        false_positives = []
+        false_negatives = []
+        
+        for csv_file in all_data_files:
+            with open(csv_file, 'rb') as f:
+                raw_data = f.read()
+            
+            is_supported = FormatParser.format_supported(raw_data)
+            should_be_supported = csv_file in supported_data_files
+            
+            if is_supported and should_be_supported:
+                correct_positives += 1
+            elif not is_supported and not should_be_supported:
+                correct_negatives += 1
+            elif is_supported and not should_be_supported:
+                false_positives.append(csv_file.name)
+            else:  # not is_supported and should_be_supported
+                false_negatives.append(csv_file.name)
+        
+        print(f"\n\n=== format_supported() Test Results ===")
+        print(f"Total files tested: {len(all_data_files)}")
+        print(f"Correct positives (supported & detected): {correct_positives}")
+        print(f"Correct negatives (unsupported & rejected): {correct_negatives}")
+        print(f"False positives (unsupported but detected): {len(false_positives)}")
+        print(f"False negatives (supported but rejected): {len(false_negatives)}")
+        
+        if false_positives:
+            print(f"\nFalse positives:")
+            for fname in false_positives:
+                print(f"  {fname}")
+        
+        if false_negatives:
+            print(f"\nFalse negatives:")
+            for fname in false_negatives:
+                print(f"  {fname}")
+        
+        # Assert no false negatives (all supported files should be detected)
+        assert len(false_negatives) == 0, \
+            f"format_supported() failed to detect {len(false_negatives)} supported files"
+        
+        # Test with string input
+        csv_file = supported_data_files[0]
+        with open(csv_file, 'rb') as f:
+            raw_data = f.read()
+        text_data = FormatParser.decode_raw_data(raw_data)
+        
+        # format_supported should work with both bytes and strings
+        assert FormatParser.format_supported(raw_data) == True
+        assert FormatParser.format_supported(text_data) == True
+        
+        # Test with invalid data
+        assert FormatParser.format_supported(b"not a cgm file") == False
+        assert FormatParser.format_supported("not a cgm file") == False
 
 
 class TestUnifiedParsing:
@@ -270,7 +317,7 @@ class TestSaveToDirectory:
         for csv_file in supported_data_files:
             try:
                 # Parse to unified
-                unified_df = FormatParser.parse_from_file(str(csv_file))
+                unified_df = FormatParser.parse_file(str(csv_file))
                 
                 # Generate output filename
                 output_filename = f"{csv_file.stem}_unified.csv"
@@ -320,7 +367,7 @@ class TestSaveToDirectory:
         for csv_file in supported_data_files[:5]:  # Test first 5 supported files for performance
             try:
                 # Parse and save file
-                original_df = FormatParser.parse_from_file(str(csv_file))
+                original_df = FormatParser.parse_file(str(csv_file))
                 
                 output_filename = f"{csv_file.stem}_unified.csv"
                 output_path = PARSED_DIR / output_filename
@@ -378,11 +425,11 @@ class TestConvenienceMethods:
     """Test convenience parsing methods."""
     
     def test_parse_from_file(self, supported_data_files):
-        """Test parse_from_file convenience method."""
+        """Test parse_file convenience method."""
         csv_file = supported_data_files[0]
         
         # Test convenience method
-        unified_df = FormatParser.parse_from_file(str(csv_file))
+        unified_df = FormatParser.parse_file(str(csv_file))
         
         assert isinstance(unified_df, pl.DataFrame)
         assert len(unified_df) > 0
@@ -446,6 +493,30 @@ class TestErrorHandling:
         """Test that empty string raises appropriate error."""
         with pytest.raises(UnknownFormatError):
             FormatParser.detect_format("")
+    
+    def test_error_message_truncation(self):
+        """Test that error messages with huge data are truncated to prevent log overflow."""
+        # Create a massive CSV that will fail to parse
+        # The Polars error will include the CSV data, which could be megabytes
+        huge_header = "Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype\n"
+        # Add 20KB of invalid data that looks like Dexcom format
+        huge_data = huge_header + ("invalid,malformed,data,row\n" * 1000)
+        
+        detected_format = FormatParser.detect_format(huge_data)
+        
+        try:
+            FormatParser.parse_to_unified(huge_data, detected_format)
+            assert False, "Should have raised MalformedDataError"
+        except MalformedDataError as e:
+            error_msg = str(e)
+            # Error message should be truncated to around 8192 bytes plus truncation notice
+            # Allow some buffer for the truncation notice text
+            assert len(error_msg) < 10000, f"Error message too long: {len(error_msg)} bytes"
+            
+            # If the original error was long enough, it should include truncation notice
+            if len(huge_data) > 8192:
+                assert "TRUNCATED" in error_msg or len(error_msg) < 1000, \
+                    "Long error messages should either be truncated or short"
 
 
 class TestEndToEndPipeline:
@@ -595,381 +666,6 @@ class TestInputHelpers:
         assert df1.select('datetime', 'glucose').equals(df2.select('datetime', 'glucose'))
 
 
-class TestSequenceDetection:
-    """Test sequence detection logic for edge cases."""
-    
-    @staticmethod
-    def _create_test_df_with_schema(data):
-        """Helper to create test DataFrame with proper schema validation."""
-        from cgm_format.formats.unified import CGM_SCHEMA
-        df = pl.DataFrame(data)
-        return CGM_SCHEMA.validate_dataframe(df, enforce=True)
-    
-    def test_large_gap_creates_new_sequence(self):
-        """Test that gaps larger than SMALL_GAP_MAX_MINUTES create new sequences (glucose-only logic)."""
-        from cgm_format.formats.unified import UnifiedEventType
-        from cgm_format.interface.cgm_interface import SMALL_GAP_MAX_MINUTES
-        from datetime import datetime, timedelta
-        
-        base_time = datetime(2024, 1, 1, 12, 0, 0)
-        data = []
-        
-        # First sequence: 3 glucose points at 0, 5, 10 minutes
-        for i in range(3):
-            data.append({
-                'sequence_id': 0,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(minutes=5 * i),
-                'datetime': base_time + timedelta(minutes=5 * i),
-                'glucose': 100.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Large gap (20 minutes, > SMALL_GAP_MAX_MINUTES threshold)
-        # Second sequence: 3 glucose points at 30, 35, 40 minutes
-        for i in range(3):
-            data.append({
-                'sequence_id': 0,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
-                'datetime': base_time + timedelta(minutes=30 + 5 * i),
-                'glucose': 110.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Another large gap (25 minutes)
-        # Third sequence: 2 glucose points at 65, 70 minutes
-        for i in range(2):
-            data.append({
-                'sequence_id': 0,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(minutes=65 + 5 * i),
-                'datetime': base_time + timedelta(minutes=65 + 5 * i),
-                'glucose': 120.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        df = self._create_test_df_with_schema(data)
-        
-        # Detect sequences
-        result = FormatParser.detect_and_assign_sequences(
-            df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
-        )
-        
-        # Should have 3 distinct sequences
-        unique_sequences = result['sequence_id'].unique().sort().to_list()
-        assert len(unique_sequences) == 3, f"Expected 3 sequences, got {len(unique_sequences)}"
-        
-        # Verify first sequence has 3 records
-        seq_0_data = result.filter(pl.col('sequence_id') == unique_sequences[0])
-        assert len(seq_0_data) == 3
-        
-        # Verify no large gaps within any sequence (glucose-only check)
-        for seq_id in unique_sequences:
-            seq_glucose = result.filter(
-                (pl.col('sequence_id') == seq_id) &
-                (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
-            ).sort('datetime')
-            
-            if len(seq_glucose) > 1:
-                time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
-                max_gap = time_diffs.drop_nulls().max()
-                assert max_gap <= SMALL_GAP_MAX_MINUTES, \
-                    f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
-    
-    def test_multiple_existing_sequences_with_internal_gaps(self):
-        """Test that existing multiple sequences with internal large glucose gaps are split correctly."""
-        from cgm_format.formats.unified import UnifiedEventType
-        from cgm_format.interface.cgm_interface import SMALL_GAP_MAX_MINUTES
-        from datetime import datetime, timedelta
-        
-        base_time = datetime(2024, 1, 1, 12, 0, 0)
-        data = []
-        
-        # Sequence 1: has a large internal glucose gap, should be split
-        # Part A: 0-10 minutes (3 points)
-        for i in range(3):
-            data.append({
-                'sequence_id': 1,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(minutes=5 * i),
-                'datetime': base_time + timedelta(minutes=5 * i),
-                'glucose': 100.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Large gap (20 minutes) within sequence 1
-        # Part B: 30-40 minutes (3 points)
-        for i in range(3):
-            data.append({
-                'sequence_id': 1,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
-                'datetime': base_time + timedelta(minutes=30 + 5 * i),
-                'glucose': 105.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Sequence 2: continuous, no internal gaps (should stay as one sequence)
-        for i in range(4):
-            data.append({
-                'sequence_id': 2,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(hours=2, minutes=5 * i),
-                'datetime': base_time + timedelta(hours=2, minutes=5 * i),
-                'glucose': 110.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Sequence 3: has TWO large internal gaps, should be split into 3 parts
-        # Part A: 0-5 minutes (2 points)
-        for i in range(2):
-            data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(hours=4, minutes=5 * i),
-                'datetime': base_time + timedelta(hours=4, minutes=5 * i),
-                'glucose': 120.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Large gap (25 minutes)
-        # Part B: 30-35 minutes (2 points)
-        for i in range(2):
-            data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
-                'datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
-                'glucose': 125.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Another large gap (20 minutes)
-        # Part C: 55-60 minutes (2 points)
-        for i in range(2):
-            data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
-                'datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
-                'glucose': 130.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        # Sequence 4: continuous, no gaps (should stay as one sequence)
-        for i in range(3):
-            data.append({
-                'sequence_id': 4,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
-                'original_datetime': base_time + timedelta(hours=6, minutes=5 * i),
-                'datetime': base_time + timedelta(hours=6, minutes=5 * i),
-                'glucose': 140.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
-            })
-        
-        df = self._create_test_df_with_schema(data)
-        
-        # Process with split_sequences_with_internal_gaps
-        result = FormatParser.detect_and_assign_sequences(
-            df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
-        )
-        
-        # Expected: 
-        # Seq 1 splits into 2 (1 gap) = 2 sequences
-        # Seq 2 stays as 1 = 1 sequence  
-        # Seq 3 splits into 3 (2 gaps) = 3 sequences
-        # Seq 4 stays as 1 = 1 sequence
-        # Total = 7 sequences
-        
-        unique_sequences = result['sequence_id'].unique().sort().to_list()
-        assert len(unique_sequences) == 7, f"Expected 7 sequences, got {len(unique_sequences)}: {unique_sequences}"
-        
-        # Verify all sequence IDs are unique (no duplicates)
-        assert len(unique_sequences) == len(set(unique_sequences)), \
-            "Sequence IDs are not unique!"
-        
-        # Verify no large gaps within any sequence (glucose-only check)
-        for seq_id in unique_sequences:
-            seq_glucose = result.filter(
-                (pl.col('sequence_id') == seq_id) &
-                (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
-            ).sort('datetime')
-            
-            if len(seq_glucose) > 1:
-                time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
-                max_gap = time_diffs.drop_nulls().max()
-                assert max_gap <= SMALL_GAP_MAX_MINUTES, \
-                    f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
-        
-        # Verify we have the expected number of data points
-        total_points = len(result)
-        # Original data had 6+4+6+3 = 19 points
-        assert total_points == 19, f"Expected 19 points, got {total_points}"
-    
-    def test_glucose_gap_with_event_bridge(self):
-        """Test that non-glucose events don't bridge glucose gaps.
-        
-        This tests the scenario where:
-        - Two glucose readings are far apart (> threshold)
-        - But non-glucose events (carbs, insulin) occur between them
-        - The glucose readings should be in DIFFERENT sequences
-        - The non-glucose events should be assigned to the nearest glucose sequence
-        """
-        from cgm_format.formats.unified import UnifiedEventType
-        from datetime import datetime, timedelta
-        
-        # Create test data with a glucose gap bridged by non-glucose events
-        base_time = datetime(2023, 9, 16, 8, 0)
-        
-        # Schema order: sequence_id, original_datetime, quality, event_type, datetime, glucose, carbs, insulin_slow, insulin_fast, exercise
-        test_data = pl.DataFrame({
-            'sequence_id': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
-            'original_datetime': pl.Series([
-                base_time + timedelta(minutes=0),
-                base_time + timedelta(minutes=5),
-                base_time + timedelta(minutes=10),
-                base_time + timedelta(minutes=12),
-                base_time + timedelta(minutes=26),
-                base_time + timedelta(minutes=27),
-                base_time + timedelta(minutes=28),
-                base_time + timedelta(minutes=32),
-                base_time + timedelta(minutes=37),
-            ], dtype=pl.Datetime('ms')),
-            'quality': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
-            'event_type': pl.Series([
-                UnifiedEventType.GLUCOSE.value,      # 0
-                UnifiedEventType.GLUCOSE.value,      # 5
-                UnifiedEventType.GLUCOSE.value,      # 10
-                UnifiedEventType.GLUCOSE.value,      # 12
-                UnifiedEventType.CARBOHYDRATES.value,# 26
-                UnifiedEventType.INSULIN_SLOW.value, # 27
-                UnifiedEventType.INSULIN_FAST.value, # 28
-                UnifiedEventType.GLUCOSE.value,      # 32 - 20 min gap from previous glucose
-                UnifiedEventType.GLUCOSE.value,      # 37
-            ], dtype=pl.Utf8),
-            'datetime': pl.Series([
-                base_time + timedelta(minutes=0),   # Glucose 1
-                base_time + timedelta(minutes=5),   # Glucose 2
-                base_time + timedelta(minutes=10),  # Glucose 3
-                base_time + timedelta(minutes=12),  # Glucose 4 - LAST in first sequence
-                base_time + timedelta(minutes=26),  # Carbs event - bridges gap (14 min after last glucose)
-                base_time + timedelta(minutes=27),  # Insulin event - bridges gap (1 min after carbs)
-                base_time + timedelta(minutes=28),  # Insulin event - bridges gap (1 min after insulin)
-                base_time + timedelta(minutes=32),  # Glucose 5 - FIRST in second sequence (20 min after glucose 4)
-                base_time + timedelta(minutes=37),  # Glucose 6
-            ], dtype=pl.Datetime('ms')),
-            'glucose': pl.Series([100.0, 105.0, 110.0, 115.0, None, None, None, 120.0, 125.0], dtype=pl.Float64),
-            'carbs': pl.Series([None, None, None, None, 50.0, None, None, None, None], dtype=pl.Float64),
-            'insulin_slow': pl.Series([None, None, None, None, None, 10.0, None, None, None], dtype=pl.Float64),
-            'insulin_fast': pl.Series([None, None, None, None, None, None, 5.0, None, None], dtype=pl.Float64),
-            'exercise': pl.Series([None, None, None, None, None, None, None, None, None], dtype=pl.Int64),
-        })
-        
-        # Run sequence detection with 19-minute threshold (as in the example)
-        result = FormatParser.detect_and_assign_sequences(
-            test_data,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=19
-        )
-        
-        # Verify results
-        # Glucose events 0-3 should be in sequence 1
-        glucose_seq_1 = result.filter(
-            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) &
-            (pl.col('datetime') <= base_time + timedelta(minutes=12))
-        )
-        assert glucose_seq_1['sequence_id'].unique().to_list() == [1], \
-            "First glucose group should all be in sequence 1"
-        
-        # Glucose events 4-5 should be in sequence 2 (20 min gap from previous glucose)
-        glucose_seq_2 = result.filter(
-            (pl.col('event_type') == UnifiedEventType.GLUCOSE.value) &
-            (pl.col('datetime') >= base_time + timedelta(minutes=32))
-        )
-        assert glucose_seq_2['sequence_id'].unique().to_list() == [2], \
-            "Second glucose group should all be in sequence 2"
-        
-        # Non-glucose events should be assigned to nearest glucose sequence
-        carbs_event = result.filter(pl.col('event_type') == UnifiedEventType.CARBOHYDRATES.value)
-        insulin_events = result.filter(
-            pl.col('event_type').is_in([
-                UnifiedEventType.INSULIN_FAST.value,
-                UnifiedEventType.INSULIN_SLOW.value
-            ])
-        )
-        
-        # Carbs at 26 min is 14 min after last glucose of seq 1 (12 min) and 6 min before first glucose of seq 2 (32 min)
-        # Should be assigned to sequence 2 (closer)
-        assert carbs_event['sequence_id'].to_list()[0] == 2, \
-            "Carbs event should be assigned to sequence 2 (closer to glucose at 32 min)"
-        
-        # Insulin events at 27-28 min should also be assigned to sequence 2
-        for seq_id in insulin_events['sequence_id'].to_list():
-            assert seq_id == 2, \
-                "Insulin events should be assigned to sequence 2 (closer to glucose at 32 min)"
-        
-        print("\n=== Sequence Detection Test Results ===")
-        print(result.select(['datetime', 'sequence_id', 'event_type', 'glucose', 'carbs', 'insulin_fast', 'insulin_slow']))
-        
-        # Calculate glucose-only gaps
-        glucose_only = result.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('datetime')
-        glucose_gaps = glucose_only.with_columns([
-            (pl.col('datetime').diff().dt.total_seconds() / 60.0).alias('gap_from_prev_glucose')
-        ])
-        
-        print("\n=== Glucose-Only Gaps ===")
-        print(glucose_gaps.select(['datetime', 'sequence_id', 'glucose', 'gap_from_prev_glucose']))
-        
-        # Verify the 20-minute gap is detected
-        large_gap = glucose_gaps.filter(pl.col('gap_from_prev_glucose') > 19)
-        assert len(large_gap) > 0, "Should detect at least one large glucose gap"
-        assert large_gap['sequence_id'].to_list()[0] == 2, \
-            "Large gap should mark start of sequence 2"
 
 
 if __name__ == "__main__":
