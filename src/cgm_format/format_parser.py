@@ -7,7 +7,7 @@ import polars as pl
 from pathlib import Path
 from base64 import b64decode   
 
-
+from cgm_format.formats.supported import FORMAT_DETECTION_PATTERNS, DETECTION_LINE_COUNT
 from cgm_format.interface.cgm_interface import (
     CGMParser,
     SupportedCGMFormat,
@@ -19,34 +19,24 @@ from cgm_format.interface.cgm_interface import (
     truncate_error_message,
 )
 
-
-
 # Import detection patterns from format modules
 from cgm_format.formats.unified import (
-    UNIFIED_DETECTION_PATTERNS, 
     UnifiedEventType, 
     Quality, 
     UNIFIED_TIMESTAMP_FORMATS,
     CGM_SCHEMA,
-    UNIFIED_DATA_START_LINE,
 )
 from cgm_format.formats.dexcom import (
-    DEXCOM_DETECTION_PATTERNS, 
     DexcomColumn, 
-    DEXCOM_HEADER_LINE,
-    DEXCOM_DATA_START_LINE,
     DEXCOM_METADATA_LINES,
     DEXCOM_TIMESTAMP_FORMATS,
     DEXCOM_HIGH_GLUCOSE_DEFAULT,
     DEXCOM_LOW_GLUCOSE_DEFAULT,
 )
 from cgm_format.formats.libre import (
-    LIBRE_DETECTION_PATTERNS,
     LibreColumn, 
     LibreRecordType, 
     LIBRE_HEADER_LINE,
-    LIBRE_DATA_START_LINE,
-    LIBRE_METADATA_LINES,
     LIBRE_TIMESTAMP_FORMATS
 )
 
@@ -75,12 +65,8 @@ class FormatParser(CGMParser):
     """
     
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT
-    detection_line_count: ClassVar[int] = max(DEXCOM_DATA_START_LINE, LIBRE_DATA_START_LINE, UNIFIED_DATA_START_LINE)*2
-    cgm_detection_patterns: ClassVar[Dict[SupportedCGMFormat, List[str]]] = {
-        SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
-        SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
-        SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
-    }
+    detection_line_count: ClassVar[int] = DETECTION_LINE_COUNT
+    cgm_detection_patterns: ClassVar[Dict[SupportedCGMFormat, List[str]]] = FORMAT_DETECTION_PATTERNS
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod

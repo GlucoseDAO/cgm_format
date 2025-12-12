@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cgm-format"
-version = "0.7.0"
+version = "0.7.2"
 description = "Unified CGM data format converter for ML training and inference"
 authors = [
     {name = "Newton Winter", email = "isoutthere@gmail.com"},
@@ -28,12 +28,24 @@ extra = [
     "pyarrow>=21.0.0",
     "frictionless>=5.18.1",
 ]
+cli = [
+    "typer>=0.20.0",
+    "rich>=13.0.0",
+    "pandas>=2.3.3",
+    "pyarrow>=21.0.0",
+    "frictionless>=5.18.1",
+]
 dev = [
     "pandas>=2.3.3",
     "pyarrow>=21.0.0",
     "frictionless>=5.18.1",
     "pytest>=8.0.0",
+    "typer>=0.20.0",
+    "rich>=13.0.0",
 ]
+
+[project.scripts]
+cgm-cli = "cgm_format.cgm_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cgm_format"]

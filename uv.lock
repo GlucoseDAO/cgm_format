@@ -36,18 +36,27 @@ wheels = [
 
 [[package]]
 name = "cgm-format"
-version = "0.7.0"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
 ]
 
 [package.optional-dependencies]
+cli = [
+    { name = "frictionless" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "rich" },
+    { name = "typer" },
+]
 dev = [
     { name = "frictionless" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pytest" },
+    { name = "rich" },
+    { name = "typer" },
 ]
 extra = [
     { name = "frictionless" },
@@ -57,16 +66,23 @@ extra = [
 
 [package.metadata]
 requires-dist = [
+    { name = "frictionless", marker = "extra == 'cli'", specifier = ">=5.18.1" },
     { name = "frictionless", marker = "extra == 'dev'", specifier = ">=5.18.1" },
     { name = "frictionless", marker = "extra == 'extra'", specifier = ">=5.18.1" },
+    { name = "pandas", marker = "extra == 'cli'", specifier = ">=2.3.3" },
     { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.3.3" },
     { name = "pandas", marker = "extra == 'extra'", specifier = ">=2.3.3" },
     { name = "polars", specifier = ">=1.34.0" },
+    { name = "pyarrow", marker = "extra == 'cli'", specifier = ">=21.0.0" },
     { name = "pyarrow", marker = "extra == 'dev'", specifier = ">=21.0.0" },
     { name = "pyarrow", marker = "extra == 'extra'", specifier = ">=21.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0.0" },
+    { name = "rich", marker = "extra == 'dev'", specifier = ">=13.0.0" },
+    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.20.0" },
+    { name = "typer", marker = "extra == 'dev'", specifier = ">=0.20.0" },
 ]
-provides-extras = ["extra", "dev"]
+provides-extras = ["extra", "cli", "dev"]
 
 [[package]]
 name = "chardet"

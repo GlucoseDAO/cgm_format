@@ -14,9 +14,7 @@ from typing import Any
 
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
-from cgm_format.formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
-from cgm_format.formats.dexcom import DEXCOM_SCHEMA
-from cgm_format.formats.libre import LIBRE_SCHEMA
+from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
 
 # Optional: Use frictionless library if available
 try:
@@ -28,34 +26,6 @@ except ImportError:
 
 # Test data directory
 DATA_DIR = Path(__file__).parent.parent / "data"
-
-
-# Map format types to their schemas
-SCHEMA_MAP = {
-    SupportedCGMFormat.UNIFIED_CGM: UNIFIED_SCHEMA,
-    SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
-    SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
-}
-
-
-# Known issues to suppress per format (can't fix vendor CSV format issues)
-KNOWN_ISSUES_TO_SUPPRESS = {
-    SupportedCGMFormat.DEXCOM: [
-        # Dexcom exports have variable-length rows - non-EGV events don't include
-        # trailing Transmitter Time/ID columns (missing cells, not just empty values)
-        ('missing-cell', 'Transmitter ID', None),
-        ('missing-cell', 'Transmitter Time (Long Integer)', None),
-        # Dexcom uses "Low" (<50 mg/dL) and "High" (>400 mg/dL) text markers 
-        # instead of numeric values for out-of-range glucose readings
-        ('type-error', 'Glucose Value (mg/dL)', 'Low'),
-        ('type-error', 'Glucose Value (mg/dL)', 'High'),
-        # Some Dexcom exports include UTF-8 BOM marker in header
-        ('incorrect-label', 'Index', None),
-    ],
-    SupportedCGMFormat.UNIFIED_CGM: [],  # this is ours, none should be suppressed, fix instead
-    SupportedCGMFormat.LIBRE: [],
-}
-
 
 def is_medtronic_file(file_path: Path) -> bool:
     """Check if a file is a Medtronic Guardian Connect file."""

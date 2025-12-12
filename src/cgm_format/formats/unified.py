@@ -118,7 +118,7 @@ CGM_SCHEMA = CGMSchemaDefinition(
             "description": "Data quality indicator (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION)",
             "constraints": {
                 "required": True,
-                "enum": [e.value for e in Quality]
+                "enum": [0] + [e.value for e in Quality]  # Include 0 for GOOD_QUALITY
             }
         },
         {

@@ -1,5 +1,7 @@
 # Tests
 
+[![Tests](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml/badge.svg)](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml)
+
 This directory contains pytest tests for the cgm_format package. All tests are designed to work with real data files and validate the complete processing pipeline.
 
 ## Test Organization

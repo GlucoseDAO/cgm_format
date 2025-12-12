@@ -2,6 +2,8 @@
 
 Python library for converting vendor-specific Continuous Glucose Monitoring (CGM) data (Dexcom, Libre) into a standardized unified format for ML training and inference.
 
+[![Tests](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml/badge.svg)](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml)
+
 ## Features
 
 - **Vendor format detection**: Automatic detection of Dexcom, Libre, and Unified formats
@@ -25,8 +27,59 @@ pip3 install -e .
 
 # Optional dependencies
 uv pip install -e ".[extra]"  # pandas, pyarrow, frictionless
-uv pip install -e ".[dev]"    # pytest
+uv pip install -e ".[cli]"    # typer, rich (for cgm-cli tool)
+uv pip install -e ".[dev]"    # pytest + all extras
 ```
+
+## CLI Tool
+
+The package includes a comprehensive CLI tool for CGM data processing with 8 commands:
+
+**Commands:**
+- `detect` - Format detection
+- `parse` - Parse to unified format  
+- `validate` - Schema validation (single file)
+- `report` - Comprehensive validation report with Frictionless (directory)
+- `process` - Interpolation & synchronization
+- `pipeline` - Full 6-stage processing pipeline
+- `info` - File information & statistics
+- `batch` - Batch process directories
+
+**Installation:**
+```bash
+# Install with CLI support
+uv pip install -e ".[cli]"  # Adds typer + rich dependencies
+
+# Verify installation
+cgm-cli --help
+```
+
+**Usage:**
+```bash
+# Three ways to run
+cgm-cli <command>                        # Installed command
+python -m cgm_format.cgm_cli <command>   # Module execution  
+python scripts/cgm_cli.py <command>      # Direct script
+
+# Examples
+cgm-cli detect data/patient.csv                    # Detect format
+cgm-cli parse data/dexcom.csv -o unified.csv       # Parse to unified
+cgm-cli pipeline data/libre.csv -o output.csv      # Full pipeline
+cgm-cli report data/ -o report.txt --frictionless  # Validation report
+cgm-cli batch data/raw/ -o data/processed/         # Batch process
+
+# Run interactive example
+uv run python examples/example_cli_usage.py --skip-slow
+```
+
+**Key Features:**
+- Rich terminal output (colors, progress bars, formatted tables)
+- Frictionless validation with automatic suppression of known vendor quirks
+- Comprehensive statistics (glucose, quality flags, event counts)
+- Processing warnings and quality issue detection
+- Batch validation reports for entire directories
+
+See [scripts/README.md](scripts/README.md) for complete command reference.
 
 ## Quick Start
 

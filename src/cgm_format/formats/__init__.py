@@ -46,6 +46,15 @@ from cgm_format.formats.libre import (
     LIBRE_TIMESTAMP_FORMATS,
 )
 
+# Supported format
+from cgm_format.formats.supported import (
+    SCHEMA_MAP,
+    KNOWN_ISSUES_TO_SUPPRESS,
+    FORMAT_DETECTION_PATTERNS,
+    FORMAT_DETECTION_LINE_COUNT,
+    DETECTION_LINE_COUNT,
+)
+
 # Backward compatibility aliases (deprecated)
 UNIFIED_HEADER_LINES = UNIFIED_HEADER_LINE
 DEXCOM_HEADER_LINES = DEXCOM_HEADER_LINE
@@ -86,6 +95,13 @@ __all__ = [
     "LIBRE_DATA_START_LINE",
     "LIBRE_METADATA_LINES",
     "LIBRE_TIMESTAMP_FORMATS",
+    
+    # Supported format
+    "SCHEMA_MAP",
+    "KNOWN_ISSUES_TO_SUPPRESS",
+    "FORMAT_DETECTION_PATTERNS",
+    "FORMAT_DETECTION_LINE_COUNT",
+    "DETECTION_LINE_COUNT",
     
     # Backward compatibility (deprecated)
     "UNIFIED_HEADER_LINES",
