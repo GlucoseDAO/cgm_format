@@ -14,6 +14,8 @@ Vendor CSV → Parse → Unified Format → Interpolate → Synchronize → Infe
             (Stage 1-3)              (Stage 4)     (Stage 5)
 ```
 
+**Note**: `FormatProcessor` uses classmethods only - no need to instantiate. Call methods directly on the class.
+
 ## Quick Start: End-to-End Inference Pipeline
 
 ```python
@@ -22,20 +24,29 @@ from cgm_format import FormatParser, FormatProcessor
 # Stage 1-3: Parse vendor format to unified
 unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 
-# Stage 4-5: Process for inference
-processor = FormatProcessor(
-    expected_interval_minutes=5,    # CGM reads every 5 minutes
-    small_gap_max_minutes=19        # Interpolate gaps up to 19 minutes (default: 3 intervals + 80% tolerance)
+# Stage 4a: Detect and assign sequences based on gaps
+# FormatProcessor uses classmethods - call directly on class
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
 )
 
-# Stage 4a: Fill gaps and create sequences
-unified_df = processor.interpolate_gaps(unified_df)
+# Stage 4b: Interpolate gaps within sequences
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,    # CGM reads every 5 minutes
+    small_gap_max_minutes=19        # Interpolate gaps up to 19 min (default: 3 intervals + 80% tolerance)
+)
 
 # Stage 4b: Align to fixed-frequency timestamps (optional but recommended)
-unified_df = processor.synchronize_timestamps(unified_df)
+unified_df = FormatProcessor.synchronize_timestamps(
+    unified_df,
+    expected_interval_minutes=5
+)
 
-# Stage 5: Prepare final inference data with quality checks
-inference_df, warning_flags = processor.prepare_for_inference(
+# Stage 5: Prepare for inference with quality checks
+inference_df, warning_flags = FormatProcessor.prepare_for_inference(
     unified_df,
     minimum_duration_minutes=15,       # 15 minutes minimum (default: 60)
     maximum_wanted_duration=24 * 60    # 24 hours maximum (1440 minutes, default: 480)
@@ -77,11 +88,22 @@ print(f"Parsed {len(unified_df)} data points")
 print(unified_df.head())
 ```
 
+#### Check Format Support
+
+```python
+# Check if a file format is supported before parsing
+with open("unknown_file.csv", 'rb') as f:
+    raw_data = f.read()
+    
+if FormatParser.format_supported(raw_data):
+    unified_df = FormatParser.parse_from_bytes(raw_data)
+else:
+    print("Unsupported format - skipping file")
+```
+
 #### Parse from Base64 (Web APIs)
 
 ```python
-from cgm_format import FormatParser
-
 # Useful for web applications that receive base64-encoded CSV uploads
 base64_data = request.form['cgm_file']  # Base64 string from web form
 unified_df = FormatParser.parse_base64(base64_data)
@@ -96,7 +118,6 @@ if data_uri.startswith("data:"):
 #### Parse with Manual Stages (Advanced)
 
 ```python
-from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
 
 # Read raw file
@@ -117,7 +138,6 @@ unified_df = FormatParser.parse_to_unified(text_data, format_type)
 #### Handle Dexcom High/Low Values
 
 ```python
-from cgm_format import FormatParser
 from cgm_format.formats.unified import Quality
 import polars as pl
 
@@ -135,96 +155,73 @@ out_of_range_count = unified_df.filter(
 print(f"Found {out_of_range_count} out-of-range readings")
 ```
 
-### Splitting Glucose and Events
+### Stage 4: Gap Interpolation and Sequence Creation
 
-For workflows that need to process glucose readings separately from other events (insulin, carbs, exercise):
+The processing workflow starts with sequence detection, followed by gap interpolation.
 
-```python
-from cgm_format import FormatParser, FormatProcessor
+#### Step 1: Detect and Assign Sequences
 
-# Parse data with multiple event types
-unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
+**Note**: `FormatProcessor` uses classmethods - no need to instantiate. Call methods directly on the class.
 
-# Split into glucose readings and other events
-glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
-
-# glucose_df contains: EGV_READ events (including interpolated ones marked with IMPUTATION quality flag)
-# events_df contains: INSULIN_FAST, INSULIN_SLOW, CARBS, EXERCISE, CALIBRATION, etc.
-
-# Process glucose data for inference
-processor = FormatProcessor()
-glucose_df = processor.interpolate_gaps(glucose_df)
-unified_df, warnings = processor.prepare_for_inference(glucose_df)
-
-# Strip service columns if needed for ML
-inference_df = FormatProcessor.to_data_only_df(unified_df)
-
-# Analyze events separately
-import polars as pl
-insulin_doses = events_df.filter(
-    pl.col('event_type').str.contains('INSULIN')
-).select(['datetime', 'insulin_fast', 'insulin_slow'])
-
-carb_intake = events_df.filter(
-    pl.col('event_type') == 'CARBS'
-).select(['datetime', 'carbs'])
-```
-
-**When to use:**
-- Separate analysis of glucose trends vs. event correlations
-- Models that process glucose and events in different pathways
-- Research workflows requiring independent glucose/event statistics
-
-### Stage 4: Gap Interpolation
-
-The `interpolate_gaps()` method fills small gaps with interpolated glucose values.
-
-**Note**: Sequences are automatically created during parsing (Stage 1-3), based on large gaps 
-between glucose readings. The parser assigns `sequence_id` to all data points.
-
-**Snap-to-Grid Mode** (`snap_to_grid=True`, default):
-- Interpolated points are placed on the sequence grid (same grid as `synchronize_timestamps`)
-- Ensures idempotency: `interpolate → sync` and `sync → interpolate` produce equivalent results
-- Adds both `Quality.IMPUTATION` and `Quality.SYNCHRONIZATION` flags to interpolated points
-
-**Non-Grid Mode** (`snap_to_grid=False`):
-- Interpolated points placed at regular intervals from previous timestamp
-- Only adds `Quality.IMPUTATION` flag (no SYNCHRONIZATION)
-- May not align with synchronization grid
+First, explicitly detect sequences based on large gaps in glucose data:
 
 ```python
-from cgm_format import FormatProcessor
-
-processor = FormatProcessor(
-    expected_interval_minutes=5,    # Normal CGM interval
-    small_gap_max_minutes=19,       # Max gap to interpolate (default: 19 min = 3 intervals + 80% tolerance)
-    snap_to_grid=True               # Align interpolated points to grid (default, ensures idempotency with sync)
+# Detect and assign sequences based on gaps in glucose readings
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,       # Normal CGM interval
+    large_gap_threshold_minutes=19     # Gaps > 19 min create new sequences (default)
 )
 
-# Fills small gaps within existing sequences
-processed_df = processor.interpolate_gaps(unified_df)
+# Check sequences created
+sequence_count = unified_df['sequence_id'].n_unique()
+print(f"Created {sequence_count} sequence(s)")
+```
 
-# Sequences are already assigned during parsing
-sequence_count = processed_df['sequence_id'].n_unique()
-print(f"Data contains {sequence_count} sequences")
+**Note**: This method is automatically called by `interpolate_gaps()` if sequences aren't assigned yet, but it's best practice to call it explicitly for clarity.
+
+#### Step 2: Interpolate Small Gaps
+
+After sequences are assigned, interpolate small gaps within each sequence:
+
+```python
+# FormatProcessor uses classmethods - no need to instantiate
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,    # Normal CGM interval
+    small_gap_max_minutes=19,       # Max gap to interpolate (default)
+    snap_to_grid=True               # Align interpolated points to grid (default, ensures idempotency)
+)
 
 # Check if imputation occurred
-if processor.has_warnings():
-    from cgm_format.interface.cgm_interface import ProcessingWarning
-    if ProcessingWarning.IMPUTATION in processor.get_warnings():
-        print("Data contains interpolated values")
+from cgm_format.formats.unified import Quality
+
+imputed_count = unified_df.filter(
+    (pl.col('quality') & Quality.IMPUTATION.value) != 0
+).height
+
+if imputed_count > 0:
+    print(f"Data contains {imputed_count} interpolated values")
 ```
 
 #### Understanding Sequences
 
-Sequences are created during **parsing** (not processing) based on large gaps in glucose readings.
-By default, gaps >19 minutes create new sequences (configurable via parser, uses same default as processor):
+Data is split into sequences when gaps exceed `large_gap_threshold_minutes` (default 19 minutes).
+
+**Best Practice**: Explicitly call `detect_and_assign_sequences()` before other processing steps:
 
 ```python
 import polars as pl
 
-# Analyze sequences
-sequence_info = processed_df.group_by('sequence_id').agg([
+# Step 1: Detect sequences
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19
+)
+
+# Step 2: Analyze sequences
+sequence_info = unified_df.group_by('sequence_id').agg([
     pl.col('datetime').min().alias('start_time'),
     pl.col('datetime').max().alias('end_time'),
     pl.col('datetime').count().alias('num_points'),
@@ -236,77 +233,52 @@ for row in sequence_info.iter_rows(named=True):
           f"{duration:.1f} hours, {row['num_points']} points")
 ```
 
-#### Calibration Period Marking
+#### Snap-to-Grid Mode
 
-After large gaps (≥2h 45min), the next 24 hours are marked with the `SENSOR_CALIBRATION` quality flag.
+**Snap-to-Grid Mode** (`snap_to_grid=True`, default):
+- Interpolated points are placed on the sequence grid (same grid as `synchronize_timestamps`)
+- Ensures idempotency: `interpolate → sync` and `sync → interpolate` produce equivalent results
+- Adds both `Quality.IMPUTATION` and `Quality.SYNCHRONIZATION` flags to interpolated points
 
-**Note**: Calibration periods are automatically marked during `prepare_for_inference()`, not during 
-gap interpolation. This ensures the quality flags are only applied to the final inference data.
+**Non-Grid Mode** (`snap_to_grid=False`):
+- Interpolated points placed at regular intervals from previous timestamp
+- Only adds `Quality.IMPUTATION` flag (no SYNCHRONIZATION)
+- May not align with synchronization grid
 
-```python
-from cgm_format.formats.unified import Quality
+### Stage 5: Timestamp Synchronization (Optional)
 
-# Calibration marking happens in prepare_for_inference()
-inference_df, warnings = processor.prepare_for_inference(processed_df)
-
-# Check for calibration periods
-calibration_points = inference_df.filter(
-    (pl.col('quality') & Quality.SENSOR_CALIBRATION.value) != 0
-).height
-
-print(f"Calibration period points: {calibration_points}")
-```
-
-### Stage 5: Timestamp Synchronization (Recommended)
-
-Aligns timestamps to exact minute boundaries with fixed intervals. **Recommended to call before `prepare_for_inference()`**.
+Aligns timestamps to exact minute boundaries with fixed intervals.
 
 **Lossless Operation**: Synchronization keeps ALL source rows and only rounds their timestamps to the grid.
-Each row is independently mapped to its nearest grid point - no data is removed.
 
-**Note**: `synchronize_timestamps()` and `interpolate_gaps()` are **idempotent** and can be called in any order:
+**Idempotency**: `synchronize_timestamps()` and `interpolate_gaps()` can be called in any order:
 - Both use the same grid alignment based on the first timestamp in each sequence
 - You can safely call: sync→interpolate OR interpolate→sync (results are equivalent)
 - Calling the same operation twice has no additional effect
-- All rows are marked with `Quality.SYNCHRONIZATION` flag
 
 ```python
-# After parsing, you can synchronize and/or interpolate in any order
-unified_df = FormatParser.parse_file(file_path)
-
 # Option 1: Interpolate then synchronize (recommended)
-unified_df = processor.interpolate_gaps(unified_df)
-synchronized_df = processor.synchronize_timestamps(unified_df)
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
+synchronized_df = FormatProcessor.synchronize_timestamps(
+    unified_df,
+    expected_interval_minutes=5
+)
 
-# Option 2: Synchronize then interpolate (also works)
-# synchronized_df = processor.synchronize_timestamps(unified_df)
-# synchronized_df = processor.interpolate_gaps(synchronized_df)
+# Option 2: Synchronize then interpolate (also works - produces same result)
+# synchronized_df = FormatProcessor.synchronize_timestamps(unified_df, expected_interval_minutes=5)
+# synchronized_df = FormatProcessor.interpolate_gaps(synchronized_df, expected_interval_minutes=5, small_gap_max_minutes=19)
 
-# Option 2: Synchronize then interpolate (also works)
-# synchronized_df = processor.synchronize_timestamps(unified_df)
-# synchronized_df = processor.interpolate_gaps(synchronized_df)
-
-# Now all timestamps are at exact 5-minute intervals
-# Example: 10:00:00, 10:05:00, 10:10:00, etc.
+# All timestamps are now at exact 5-minute intervals
 print(synchronized_df['datetime'].head(10))
-
-# Then prepare for inference (also marks time duplicates and calibration periods)
-inference_df, warnings = processor.prepare_for_inference(synchronized_df)
 ```
 
-**When to use:**
-- ML models expecting fixed-frequency time series (most common)
-- Time-series forecasting with regular intervals
-- Simplifying temporal feature engineering
-- Before calling `prepare_for_inference()` (recommended workflow)
+### Stage 6: Inference Preparation
 
-**When to skip:**
-- Models handling irregular timestamps
-- Preserving original measurement times is critical
-
-### Stage 6: Inference Preparation and Data Filtering
-
-The `prepare_for_inference()` method performs final QA and returns full UnifiedFormat:
+The `prepare_for_inference()` method performs final QA and returns full UnifiedFormat.
 
 **Operations performed**:
 1. Validation: Checks for zero valid data points (raises `ZeroValidInputError`)
@@ -316,11 +288,10 @@ The `prepare_for_inference()` method performs final QA and returns full UnifiedF
 5. Duration Check: Warns if sequence < minimum_duration_minutes
 6. Quality Checks: Collects warnings for calibration, quality issues, imputation
 7. Truncation: Keeps last N minutes if exceeding maximum_wanted_duration
-8. Returns: Full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns)
+8. Returns: Full UnifiedFormat with all columns
 
 ```python
-# Prepare data for ML model (returns full UnifiedFormat)
-inference_df, warning_flags = processor.prepare_for_inference(
+inference_df, warning_flags = FormatProcessor.prepare_for_inference(
     synchronized_df,
     minimum_duration_minutes=15,       # 15 minutes minimum (default: 60)
     maximum_wanted_duration=24 * 60    # 24 hours maximum (1440 minutes, default: 480)
@@ -334,7 +305,7 @@ glucose_only_df = FormatProcessor.to_data_only_df(
     glucose_only=True            # Filter to glucose readings only (EGV_READ events)
 )
 
-# warning_flags is a ProcessingWarning flags enum (or None)
+# Check warnings
 from cgm_format.interface.cgm_interface import ProcessingWarning
 
 if warning_flags:
@@ -349,6 +320,9 @@ if warning_flags:
     
     if warning_flags & ProcessingWarning.CALIBRATION:
         print("Warning: Data contains calibration events")
+    
+    if warning_flags & ProcessingWarning.TIME_DUPLICATES:
+        print("Warning: Data contains duplicate timestamps")
 ```
 
 #### Inference DataFrame Structure
@@ -395,18 +369,29 @@ from pathlib import Path
 file_path = Path("cgm_data.csv")
 unified_df = FormatParser.parse_file(file_path)
 
-# Process
-processor = FormatProcessor(
+# Process - all methods are classmethods
+# Step 1: Detect and assign sequences
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19  # Default
+    large_gap_threshold_minutes=19
 )
 
-# Interpolate gaps and synchronize timestamps
-unified_df = processor.interpolate_gaps(unified_df)
-unified_df = processor.synchronize_timestamps(unified_df)
+# Step 2: Interpolate small gaps within sequences
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
+
+# Step 3: Synchronize timestamps to fixed grid
+unified_df = FormatProcessor.synchronize_timestamps(
+    unified_df,
+    expected_interval_minutes=5
+)
 
 # Prepare for inference
-inference_df, warning_flags = processor.prepare_for_inference(
+inference_df, warning_flags = FormatProcessor.prepare_for_inference(
     unified_df,
     minimum_duration_minutes=15,
     maximum_wanted_duration=24 * 60
@@ -437,22 +422,41 @@ from cgm_format import FormatParser, FormatProcessor
 import polars as pl
 
 data_dir = Path("data/exports")
-processor = FormatProcessor(
-    expected_interval_minutes=5,
-    small_gap_max_minutes=19  # Default
-)
-
 results = []
 
 for csv_file in data_dir.glob("*.csv"):
     try:
+        # Check if format is supported
+        with open(csv_file, 'rb') as f:
+            if not FormatParser.format_supported(f.read()):
+                print(f"✗ {csv_file.name}: Unsupported format")
+                continue
+        
         # Parse and process
         unified_df = FormatParser.parse_file(csv_file)
-        unified_df = processor.interpolate_gaps(unified_df)
-        unified_df = processor.synchronize_timestamps(unified_df)
+        
+        # Step 1: Detect sequences
+        unified_df = FormatProcessor.detect_and_assign_sequences(
+            unified_df,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=19
+        )
+        
+        # Step 2: Interpolate gaps
+        unified_df = FormatProcessor.interpolate_gaps(
+            unified_df,
+            expected_interval_minutes=5,
+            small_gap_max_minutes=19
+        )
+        
+        # Step 3: Synchronize timestamps
+        unified_df = FormatProcessor.synchronize_timestamps(
+            unified_df,
+            expected_interval_minutes=5
+        )
         
         # Prepare for inference
-        inference_df, warning_flags = processor.prepare_for_inference(
+        inference_df, warning_flags = FormatProcessor.prepare_for_inference(
             unified_df,
             minimum_duration_minutes=15,
             maximum_wanted_duration=24 * 60
@@ -485,34 +489,40 @@ all_data = pl.concat(results)
 ### Workflow 3: Custom Preprocessing for Research
 
 ```python
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
+from cgm_format import FormatParser, FormatProcessor
+from cgm_format.formats.unified import Quality
 import polars as pl
 
 # Parse
 unified_df = FormatParser.parse_file("research_data.csv")
 
-# Custom gap handling: stricter interpolation
-processor = FormatProcessor(
+# Step 1: Detect sequences with custom threshold
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=10  # Stricter sequence splitting
+)
+
+# Step 2: Custom gap handling - only interpolate very small gaps
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
     expected_interval_minutes=5,
     small_gap_max_minutes=10  # Only interpolate very small gaps
 )
 
-# Process with strict quality control
-processed_df = processor.interpolate_gaps(unified_df)
-
 # Filter out any imputed or calibration data using quality flags
-from cgm_format.formats.unified import Quality
-
-high_quality_df = processed_df.filter(
+high_quality_df = unified_df.filter(
     (pl.col('quality') & (Quality.IMPUTATION.value | Quality.SENSOR_CALIBRATION.value)) == 0
 )
 
 # Synchronize to exact intervals
-synchronized_df = processor.synchronize_timestamps(high_quality_df)
+synchronized_df = FormatProcessor.synchronize_timestamps(
+    high_quality_df,
+    expected_interval_minutes=5
+)
 
-# Prepare for inference without warnings
-inference_df, warnings = processor.prepare_for_inference(
+# Prepare with strict duration requirements
+inference_df, warnings = FormatProcessor.prepare_for_inference(
     synchronized_df,
     minimum_duration_minutes=360,  # Require 6 hours
     maximum_wanted_duration=2880   # Allow 48 hours
@@ -522,73 +532,53 @@ if warnings:
     print("Warning: Data may not meet research quality standards")
 ```
 
-### Workflow 4: Real-Time Inference (Streaming)
+### Workflow 4: Splitting Glucose and Events
+
+For workflows that need to process glucose readings separately from other events:
 
 ```python
-from cgm_format import FormatParser, FormatProcessor
+# Parse data with multiple event types
+unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
 
-class CGMInferenceService:
-    def __init__(self):
-        self.processor = FormatProcessor()
-    
-    def process_new_data(self, csv_bytes: bytes):
-        """Process incoming CGM export for immediate inference."""
-        try:
-            # Parse from bytes
-            unified_df = FormatParser.parse_from_bytes(csv_bytes)
-            
-            # Process
-            processed_df = self.processor.interpolate_gaps(unified_df)
-            inference_df, warnings = self.processor.prepare_for_inference(
-                processed_df,
-                minimum_duration_minutes=60,  # Need 1 hour minimum
-                maximum_wanted_duration=180   # Use last 3 hours
-            )
-            
-            # Return inference-ready data with quality info
-            return {
-                'data': inference_df,
-                'warnings': warnings,
-                'num_points': len(inference_df),
-                'has_quality_issues': bool(warnings)
-            }
-            
-        except Exception as e:
-            return {'error': str(e)}
-    
-    def process_base64_data(self, base64_data: str):
-        """Process base64-encoded CGM data (web upload)."""
-        try:
-            # Parse from base64
-            unified_df = FormatParser.parse_base64(base64_data)
-            
-            # Process
-            processed_df = self.processor.interpolate_gaps(unified_df)
-            inference_df, warnings = self.processor.prepare_for_inference(
-                processed_df,
-                minimum_duration_minutes=60,
-                maximum_wanted_duration=180
-            )
-            
-            return {
-                'data': inference_df,
-                'warnings': warnings,
-                'num_points': len(inference_df),
-                'has_quality_issues': bool(warnings)
-            }
-            
-        except Exception as e:
-            return {'error': str(e)}
+# Split into glucose readings and other events
+glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
 
-# Usage with file bytes
-service = CGMInferenceService()
-result = service.process_new_data(uploaded_file_bytes)
+# glucose_df contains: EGV_READ events (including interpolated ones marked with IMPUTATION quality flag)
+# events_df contains: INSULIN_FAST, INSULIN_SLOW, CARBS, EXERCISE, CALIBRATION, etc.
 
-# Usage with base64
-result = service.process_base64_data(base64_encoded_csv)
+# Process glucose data for inference
+# Step 1: Detect sequences
+glucose_df = FormatProcessor.detect_and_assign_sequences(
+    glucose_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19
+)
 
-if 'error' not in result:
-    predictions = model.predict(result['data'])
+# Step 2: Interpolate gaps
+glucose_df = FormatProcessor.interpolate_gaps(
+    glucose_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
+
+# Step 3: Prepare for inference
+inference_df, warnings = FormatProcessor.prepare_for_inference(
+    glucose_df,
+    minimum_duration_minutes=60,
+    maximum_wanted_duration=480
+)
+
+# Strip service columns if needed for ML
+glucose_only_df = FormatProcessor.to_data_only_df(inference_df)
+
+# Analyze events separately
+insulin_doses = events_df.filter(
+    pl.col('event_type').str.contains('INSULIN')
+).select(['datetime', 'insulin_fast', 'insulin_slow'])
+
+carb_intake = events_df.filter(
+    pl.col('event_type') == 'CARBS_IN'
+).select(['datetime', 'carbs'])
 ```
 
 ## Error Handling
@@ -617,9 +607,8 @@ except FileNotFoundError as e:
     print(f"File not found: {e}")
 
 try:
-    processor = FormatProcessor()
-    processed_df = processor.interpolate_gaps(unified_df)
-    inference_df, warnings = processor.prepare_for_inference(processed_df)
+    unified_df = FormatProcessor.interpolate_gaps(unified_df)
+    inference_df, warnings = FormatProcessor.prepare_for_inference(unified_df)
     
 except ZeroValidInputError as e:
     print(f"No valid data: {e}")
@@ -628,24 +617,46 @@ except ZeroValidInputError as e:
 
 ## Processing Configuration
 
-### Tuning FormatProcessor Parameters
+### Tuning Parameters
 
 ```python
 # Conservative: strict quality, minimal imputation
-strict_processor = FormatProcessor(
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=10  # Stricter - split at smaller gaps
+)
+
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
     expected_interval_minutes=5,
     small_gap_max_minutes=10  # Small interpolation window
 )
 
 # Lenient: more gap filling for sparse data
-lenient_processor = FormatProcessor(
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=30  # More lenient sequence grouping
+)
+
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
     expected_interval_minutes=5,
     small_gap_max_minutes=30  # Larger interpolation window
 )
 
 # Match your CGM device specifications
-libre_processor = FormatProcessor(
-    expected_interval_minutes=15,  # Libre scans every 15 min
+# Libre scans every 15 minutes
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=15,
+    large_gap_threshold_minutes=45
+)
+
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=15,
     small_gap_max_minutes=45
 )
 ```
@@ -654,14 +665,14 @@ libre_processor = FormatProcessor(
 
 ```python
 # Short-term prediction (next 30 minutes)
-unified_df, warnings = processor.prepare_for_inference(
+inference_df, warnings = FormatProcessor.prepare_for_inference(
     processed_df,
     minimum_duration_minutes=60,   # Need 1 hour history (default: 60)
     maximum_wanted_duration=180    # Use last 3 hours (default: 480)
 )
 
 # Long-term analysis (daily patterns)
-unified_df, warnings = processor.prepare_for_inference(
+inference_df, warnings = FormatProcessor.prepare_for_inference(
     processed_df,
     minimum_duration_minutes=720,   # Need 12 hours minimum
     maximum_wanted_duration=10080   # Use last 7 days
@@ -709,13 +720,20 @@ print(quality_counts)
 ```python
 from cgm_format.formats.unified import Quality
 
-processor = FormatProcessor()
-
 # Before processing
 print(f"Original records: {len(unified_df)}")
 
+# Detect sequences
+unified_df = FormatProcessor.detect_and_assign_sequences(unified_df)
+sequence_count = unified_df['sequence_id'].n_unique()
+print(f"Created {sequence_count} sequence(s)")
+
 # After interpolation
-processed_df = processor.interpolate_gaps(unified_df)
+processed_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
 print(f"After interpolation: {len(processed_df)}")
 
 imputed_count = processed_df.filter(
@@ -724,7 +742,11 @@ imputed_count = processed_df.filter(
 print(f"Imputed records: {imputed_count}")
 
 # After inference prep
-inference_df, warnings = processor.prepare_for_inference(processed_df)
+inference_df, warnings = FormatProcessor.prepare_for_inference(
+    processed_df,
+    minimum_duration_minutes=60,
+    maximum_wanted_duration=480
+)
 print(f"Final inference records: {len(inference_df)}")
 ```
 
@@ -733,15 +755,10 @@ print(f"Final inference records: {len(inference_df)}")
 ### scikit-learn Compatible
 
 ```python
-from cgm_format import FormatParser
-from cgm_format import FormatProcessor
-import polars as pl
-
 # Prepare data
 unified_df = FormatParser.parse_file("training_data.csv")
-processor = FormatProcessor()
-processed_df = processor.interpolate_gaps(unified_df)
-inference_df, warnings = processor.prepare_for_inference(processed_df)
+unified_df = FormatProcessor.interpolate_gaps(unified_df)
+inference_df, warnings = FormatProcessor.prepare_for_inference(unified_df)
 
 # Convert to numpy for sklearn
 X = inference_df.select(['glucose', 'carbs', 'insulin_fast', 'exercise']).to_numpy()
@@ -780,21 +797,34 @@ loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
 ## Best Practices
 
-### 1. Always Check Warnings
+### 1. Always Check Format Support
 
 ```python
-inference_df, warnings = processor.prepare_for_inference(processed_df)
+# Check before parsing to skip unsupported files
+with open(file_path, 'rb') as f:
+    raw_data = f.read()
+    if FormatParser.format_supported(raw_data):
+        unified_df = FormatParser.parse_from_bytes(raw_data)
+    else:
+        print(f"Skipping unsupported format: {file_path}")
+```
+
+### 2. Always Check Warnings
+
+```python
+inference_df, warnings = FormatProcessor.prepare_for_inference(processed_df)
 
 if warnings:
     # Log warnings for later analysis
     logger.warning(f"Data quality issues: {warnings}")
     
     # Decide on action based on warning severity
-    if ProcessingWarning.TOO_SHORT in processor.get_warnings():
+    from cgm_format.interface.cgm_interface import ProcessingWarning
+    if warnings & ProcessingWarning.TOO_SHORT:
         raise ValueError("Insufficient data for inference")
 ```
 
-### 2. Handle Multiple Sequences
+### 3. Handle Multiple Sequences
 
 ```python
 # prepare_for_inference() automatically selects the LATEST sequence
@@ -805,15 +835,18 @@ unique_sequences = processed_df['sequence_id'].unique()
 for seq_id in unique_sequences:
     seq_df = processed_df.filter(pl.col('sequence_id') == seq_id)
     
-    # Create new processor for each sequence (clean warnings)
-    seq_processor = FormatProcessor()
-    inference_df, warnings = seq_processor.prepare_for_inference(seq_df)
+    # Process each sequence individually
+    inference_df, warnings = FormatProcessor.prepare_for_inference(
+        seq_df,
+        minimum_duration_minutes=60,
+        maximum_wanted_duration=480
+    )
     
     # Process this sequence
     predictions = model.predict(inference_df)
 ```
 
-### 3. Preserve Raw Data
+### 4. Preserve Raw Data
 
 ```python
 # Keep original unified format for auditing
@@ -821,12 +854,11 @@ unified_df = FormatParser.parse_file("patient_123.csv")
 FormatParser.to_csv_file(unified_df, "archive/patient_123_unified.csv")
 
 # Then process for inference
-processor = FormatProcessor()
-processed_df = processor.interpolate_gaps(unified_df)
-inference_df, warnings = processor.prepare_for_inference(processed_df)
+processed_df = FormatProcessor.interpolate_gaps(unified_df)
+inference_df, warnings = FormatProcessor.prepare_for_inference(processed_df)
 ```
 
-### 4. Version Your Pipeline
+### 5. Version Your Pipeline
 
 ```python
 PIPELINE_VERSION = "1.0.0"
@@ -851,5 +883,5 @@ metadata = {
 - [README.md](README.md) - Project overview and installation
 - [src/cgm_format/interface/PIPELINE.md](src/cgm_format/interface/PIPELINE.md) - Complete pipeline documentation
 - [src/cgm_format/formats/UNIFIED_FORMAT.md](src/cgm_format/formats/UNIFIED_FORMAT.md) - Unified schema specification
-- [examples/example_schema_usage.py](examples/example_schema_usage.py) - Schema validation examples
+- [examples/usage_example.py](examples/usage_example.py) - Complete usage examples
 - [tests/README.md](tests/README.md) - Test suite documentation

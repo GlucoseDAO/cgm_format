@@ -44,22 +44,34 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     
     # Stage 4-5: Process for inference
     print("\n2. Processing data for inference...")
-    processor = FormatProcessor(
+    # FormatProcessor uses classmethods - no need to instantiate
+    
+    # Step 1: Detect and assign sequences based on gaps
+    unified_df = FormatProcessor.detect_and_assign_sequences(
+        unified_df,
+        expected_interval_minutes=5,
+        large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
+    )
+    sequence_count = unified_df['sequence_id'].n_unique()
+    print(f"   ✓ Created {sequence_count} sequence(s)")
+    
+    # Step 2: Fill gaps within sequences
+    unified_df = FormatProcessor.interpolate_gaps(
+        unified_df,
         expected_interval_minutes=5,
         small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
     )
+    print(f"   ✓ Interpolated gaps within sequences")
     
-    # Fill gaps within existing sequences (sequences created during parsing)
-    unified_df = processor.interpolate_gaps(unified_df)
-    sequence_count = unified_df['sequence_id'].n_unique()
-    print(f"   ✓ Data contains {sequence_count} sequence(s)")
-    
-    # Synchronize timestamps to fixed intervals
-    unified_df = processor.synchronize_timestamps(unified_df)
+    # Step 3: Synchronize timestamps to fixed intervals
+    unified_df = FormatProcessor.synchronize_timestamps(
+        unified_df,
+        expected_interval_minutes=5
+    )
     print(f"   ✓ Synchronized timestamps to 5-minute intervals")
     
-    # Prepare final inference data
-    inference_df, warning_flags = processor.prepare_for_inference(
+    # Step 4: Prepare final inference data
+    inference_df, warning_flags = FormatProcessor.prepare_for_inference(
         unified_df,
         minimum_duration_minutes=15,        # 15 minutes minimum
         maximum_wanted_duration=24 * 60     # 24 hours maximum (1440 minutes)
@@ -149,8 +161,18 @@ def example_2_quality_inspection(file_path: Path) -> None:
     
     # Process and check impact
     print("\n4. Processing Impact:")
-    processor = FormatProcessor()
-    processed_df = processor.interpolate_gaps(unified_df)
+    
+    # Detect sequences
+    unified_df = FormatProcessor.detect_and_assign_sequences(unified_df)
+    sequence_count = unified_df['sequence_id'].n_unique()
+    print(f"   Sequences: {sequence_count}")
+    
+    # Interpolate gaps
+    processed_df = FormatProcessor.interpolate_gaps(
+        unified_df,
+        expected_interval_minutes=5,
+        small_gap_max_minutes=19
+    )
     
     imputed_count = processed_df.filter(
         (pl.col('quality') & Quality.IMPUTATION.value) != 0
@@ -185,10 +207,7 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
     
     output_dir.mkdir(exist_ok=True, parents=True)
     
-    processor = FormatProcessor(
-        expected_interval_minutes=5,
-        small_gap_max_minutes=19  # Default
-    )
+    # FormatProcessor uses classmethods - no instantiation needed
     results = []
     
     csv_files = list(data_dir.glob("*.csv"))
@@ -203,11 +222,29 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
         try:
             # Parse and process
             unified_df = FormatParser.parse_file(csv_file)
-            unified_df = processor.interpolate_gaps(unified_df)
-            unified_df = processor.synchronize_timestamps(unified_df)
             
-            # Prepare for inference
-            inference_df, warning_flags = processor.prepare_for_inference(
+            # Step 1: Detect sequences
+            unified_df = FormatProcessor.detect_and_assign_sequences(
+                unified_df,
+                expected_interval_minutes=5,
+                large_gap_threshold_minutes=19
+            )
+            
+            # Step 2: Interpolate gaps
+            unified_df = FormatProcessor.interpolate_gaps(
+                unified_df,
+                expected_interval_minutes=5,
+                small_gap_max_minutes=19
+            )
+            
+            # Step 3: Synchronize timestamps
+            unified_df = FormatProcessor.synchronize_timestamps(
+                unified_df,
+                expected_interval_minutes=5
+            )
+            
+            # Step 4: Prepare for inference
+            inference_df, warning_flags = FormatProcessor.prepare_for_inference(
                 unified_df,
                 minimum_duration_minutes=15,
                 maximum_wanted_duration=24 * 60
@@ -277,12 +314,20 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     
     # Custom gap handling: only interpolate very small gaps
     print("\n2. Processing with strict gap handling...")
-    processor = FormatProcessor(
+    
+    # Step 1: Detect sequences with stricter threshold
+    unified_df = FormatProcessor.detect_and_assign_sequences(
+        unified_df,
+        expected_interval_minutes=5,
+        large_gap_threshold_minutes=10  # Split at smaller gaps
+    )
+    
+    # Step 2: Interpolate only very small gaps
+    unified_df = FormatProcessor.interpolate_gaps(
+        unified_df,
         expected_interval_minutes=5,
         small_gap_max_minutes=10  # Only fill gaps ≤10 minutes
     )
-    
-    unified_df = processor.interpolate_gaps(unified_df)
     
     # Filter out imputed and low-quality data
     print("\n3. Filtering for high quality data...")
@@ -299,12 +344,15 @@ def example_4_custom_processing(file_path: Path) -> pl.DataFrame:
     
     # Synchronize to exact intervals
     print("\n4. Synchronizing timestamps to fixed intervals...")
-    synchronized_df = processor.synchronize_timestamps(high_quality_df)
+    synchronized_df = FormatProcessor.synchronize_timestamps(
+        high_quality_df,
+        expected_interval_minutes=5
+    )
     print(f"   Synchronized: {len(synchronized_df)} records")
     
     # Prepare with strict duration requirements
     print("\n5. Preparing for inference (strict requirements)...")
-    inference_df, warning_flags = processor.prepare_for_inference(
+    inference_df, warning_flags = FormatProcessor.prepare_for_inference(
         synchronized_df,
         minimum_duration_minutes=360,  # Require 6 hours
         maximum_wanted_duration=2880   # Allow up to 48 hours
@@ -410,9 +458,9 @@ def example_6_error_handling() -> None:
             unified_df = FormatParser.parse_file(file_path)
             
             # Process
-            processor = FormatProcessor()
-            processed_df = processor.interpolate_gaps(unified_df)
-            inference_df, warnings = processor.prepare_for_inference(processed_df)
+            unified_df = FormatProcessor.detect_and_assign_sequences(unified_df)
+            processed_df = FormatProcessor.interpolate_gaps(unified_df)
+            inference_df, warnings = FormatProcessor.prepare_for_inference(processed_df)
             
             print(f"  ✓ Success: {len(inference_df)} records")
             
@@ -448,14 +496,35 @@ def example_7_ml_integration(file_path: Path) -> None:
     # Process data
     print("\n1. Processing data...")
     unified_df = FormatParser.parse_file(file_path)
-    processor = FormatProcessor(
+    
+    # Step 1: Detect sequences
+    unified_df = FormatProcessor.detect_and_assign_sequences(
+        unified_df,
+        expected_interval_minutes=5,
+        large_gap_threshold_minutes=19
+    )
+    
+    # Step 2: Interpolate gaps
+    unified_df = FormatProcessor.interpolate_gaps(
+        unified_df,
         expected_interval_minutes=5,
         small_gap_max_minutes=19  # Default
     )
-    unified_df = processor.interpolate_gaps(unified_df)
-    unified_df = processor.synchronize_timestamps(unified_df)
     
-    inference_df, warning_flags = processor.prepare_for_inference(
+    # Step 3: Synchronize timestamps
+    unified_df = FormatProcessor.synchronize_timestamps(
+        unified_df,
+        expected_interval_minutes=5
+    )
+    
+    # Step 4: Prepare for inference
+    inference_df, warning_flags = FormatProcessor.prepare_for_inference(
+        unified_df,
+        minimum_duration_minutes=15,
+        maximum_wanted_duration=24 * 60
+    )
+    
+    inference_df, warning_flags = FormatProcessor.prepare_for_inference(
         unified_df,
         minimum_duration_minutes=15,
         maximum_wanted_duration=24 * 60

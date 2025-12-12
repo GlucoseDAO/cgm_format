@@ -102,9 +102,16 @@ class TestFullPipelineIntegration:
         # Stage 4: Process and prepare for inference
         # FormatProcessor now uses classmethods - no need to instantiate
         
-        # Interpolate gaps (sequences already created during parsing)
-        interpolated_df = FormatProcessor.interpolate_gaps(
+        # Step 1: Detect and assign sequences
+        interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=19
+        )
+        
+        # Step 2: Interpolate gaps (sequences already created during parsing)
+        interpolated_df = FormatProcessor.interpolate_gaps(
+            interpolated_df,
             expected_interval_minutes=5,
             small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
         )
@@ -208,8 +215,16 @@ class TestFullPipelineIntegration:
         print("\n2. Processing with interpolation...")
         # FormatProcessor now uses classmethods
         
-        interpolated_df = FormatProcessor.interpolate_gaps(
+        # Step 1: Detect sequences
+        interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
+            expected_interval_minutes=5,
+            large_gap_threshold_minutes=19
+        )
+        
+        # Step 2: Interpolate gaps
+        interpolated_df = FormatProcessor.interpolate_gaps(
+            interpolated_df,
             expected_interval_minutes=5,
             small_gap_max_minutes=19  # Default
         )
@@ -330,8 +345,16 @@ class TestFullPipelineIntegration:
         # Parse and process
         unified_df = FormatParser.parse_file(file_path)
         
-        interpolated_df = FormatProcessor.interpolate_gaps(unified_df)
+        # Step 1: Detect sequences
+        interpolated_df = FormatProcessor.detect_and_assign_sequences(unified_df)
+        
+        # Step 2: Interpolate gaps
+        interpolated_df = FormatProcessor.interpolate_gaps(interpolated_df)
+        
+        # Step 3: Synchronize timestamps
         synchronized_df = FormatProcessor.synchronize_timestamps(interpolated_df)
+        
+        # Step 4: Prepare for inference
         inference_df, warning_flags = FormatProcessor.prepare_for_inference(synchronized_df)
         
         # Verify timestamps are sorted

@@ -24,14 +24,128 @@ try:
     __version__ = version("cgm-format")
 except Exception:
     # Fallback if package not installed (e.g., during development)
-    __version__ = "0.4.4"  # Keep in sync with pyproject.toml
+    __version__ = "0.7.0"  # Keep in sync with pyproject.toml
 
+# Core classes
 from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 
+# Interface classes and exceptions
+from cgm_format.interface.cgm_interface import (
+    SupportedCGMFormat,
+    ValidationMethod,
+    CGMParser,
+    CGMProcessor,
+    UnknownFormatError,
+    MalformedDataError,
+    MissingColumnError,
+    ExtraColumnError,
+    ColumnOrderError,
+    ColumnTypeError,
+    ZeroValidInputError,
+    ProcessingWarning,
+    NO_WARNING,
+    WarningDescription,
+    InferenceResult,
+    ValidationResult,
+    UnifiedFormat,
+    MINIMUM_DURATION_MINUTES,
+    MAXIMUM_WANTED_DURATION_MINUTES,
+    CALIBRATION_GAP_THRESHOLD,
+    CALIBRATION_PERIOD_HOURS,
+    to_pandas,
+    to_polars,
+)
+
+# Schema infrastructure
+from cgm_format.interface.schema import (
+    EnumLiteral,
+    ColumnSchema,
+    CGMSchemaDefinition,
+)
+
+# Format schemas and enums (commonly used)
+from cgm_format.formats.unified import (
+    CGM_SCHEMA,
+    UnifiedEventType,
+    Quality,
+    GOOD_QUALITY,
+)
+
+from cgm_format.formats.dexcom import (
+    DEXCOM_SCHEMA,
+    DexcomEventType,
+    DexcomEventSubtype,
+    DexcomColumn,
+)
+
+from cgm_format.formats.libre import (
+    LIBRE_SCHEMA,
+    LibreRecordType,
+    LibreColumn,
+)
+
 __all__ = [
+    # Main classes
     "FormatParser",
     "FormatProcessor",
+    
+    # Core interfaces
+    "SupportedCGMFormat",
+    "ValidationMethod",
+    "CGMParser",
+    "CGMProcessor",
+    "UnifiedFormat",
+    
+    # Exceptions
+    "UnknownFormatError",
+    "MalformedDataError",
+    "MissingColumnError",
+    "ExtraColumnError",
+    "ColumnOrderError",
+    "ColumnTypeError",
+    "ZeroValidInputError",
+    
+    # Warnings and results
+    "ProcessingWarning",
+    "NO_WARNING",
+    "WarningDescription",
+    "InferenceResult",
+    "ValidationResult",
+    
+    # Constants
+    "MINIMUM_DURATION_MINUTES",
+    "MAXIMUM_WANTED_DURATION_MINUTES",
+    "CALIBRATION_GAP_THRESHOLD",
+    "CALIBRATION_PERIOD_HOURS",
+    
+    # Utilities
+    "to_pandas",
+    "to_polars",
+    
+    # Schema infrastructure
+    "EnumLiteral",
+    "ColumnSchema",
+    "CGMSchemaDefinition",
+    
+    # Unified format
+    "CGM_SCHEMA",
+    "UnifiedEventType",
+    "Quality",
+    "GOOD_QUALITY",
+    
+    # Dexcom format
+    "DEXCOM_SCHEMA",
+    "DexcomEventType",
+    "DexcomEventSubtype",
+    "DexcomColumn",
+    
+    # Libre format
+    "LIBRE_SCHEMA",
+    "LibreRecordType",
+    "LibreColumn",
+    
+    # Version
     "__version__",
 ]
 

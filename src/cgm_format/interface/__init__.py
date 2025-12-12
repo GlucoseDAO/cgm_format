@@ -10,10 +10,15 @@ from cgm_format.interface.schema import (
 )
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    ValidationMethod,
     CGMParser,
     CGMProcessor,
     UnknownFormatError,
     MalformedDataError,
+    MissingColumnError,
+    ExtraColumnError,
+    ColumnOrderError,
+    ColumnTypeError,
     ZeroValidInputError,
     ProcessingWarning,
     NO_WARNING,
@@ -36,6 +41,7 @@ __all__ = [
     "CGMSchemaDefinition",
     # Core interfaces
     "SupportedCGMFormat",
+    "ValidationMethod",
     "CGMParser",
     "CGMProcessor",
     # Type aliases
@@ -43,6 +49,10 @@ __all__ = [
     # Exceptions
     "UnknownFormatError",
     "MalformedDataError",
+    "MissingColumnError",
+    "ExtraColumnError",
+    "ColumnOrderError",
+    "ColumnTypeError",
     "ZeroValidInputError",
     # Warnings and result types
     "ProcessingWarning",

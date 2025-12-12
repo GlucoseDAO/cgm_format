@@ -11,6 +11,8 @@ The pipeline is separated into two main concerns:
 
 All processing operations are designed to be **idempotent** - applying the same operation multiple times produces the same result as applying it once. This is achieved through the use of `original_datetime` preservation and quality flags.
 
+**Note**: `FormatProcessor` uses classmethods exclusively - no need to instantiate. All configuration parameters are passed as method arguments.
+
 ## Quick Start Example
 
 ```python
@@ -18,17 +20,33 @@ from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 
 # Stage 1-3: Parse vendor-specific data to unified format
-parser = FormatParser()
-unified_df = parser.parse_file("data/dexcom_export.csv")
-# ✓ Sequences automatically detected and assigned
+unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 
 # Stage 4: Process unified format
-processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=19)
-unified_df = processor.interpolate_gaps(unified_df)  # Fill small gaps
-unified_df = processor.synchronize_timestamps(unified_df)  # Align to grid
+# FormatProcessor uses classmethods - call directly on the class
+
+# Step 1: Detect and assign sequences based on gaps
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19
+)
+
+# Step 2: Fill small gaps within sequences
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
+
+# Step 3: Align to grid (optional but recommended)
+unified_df = FormatProcessor.synchronize_timestamps(
+    unified_df,
+    expected_interval_minutes=5
+)
 
 # Stage 5: Prepare for inference
-inference_df, warnings = processor.prepare_for_inference(
+inference_df, warnings = FormatProcessor.prepare_for_inference(
     unified_df,
     minimum_duration_minutes=60,
     maximum_wanted_duration=480
@@ -39,7 +57,6 @@ if warnings:
     print(f"Warnings: {warnings}")
 
 # Optional: Strip service columns for ML model
-from cgm_format.format_processor import FormatProcessor
 data_only = FormatProcessor.to_data_only_df(
     inference_df,
     drop_service_columns=True,
@@ -86,6 +103,10 @@ Identifies the vendor format based on header patterns in the CSV string.
 
 - `UnknownFormatError` - Format cannot be determined
 
+**Convenience Method:** `CGMParser.format_supported(raw_data: Union[bytes, str]) -> bool`
+
+Check if a file format is supported before parsing (returns True/False instead of raising exception).
+
 ### Stage 3: Vendor-Specific Parsing
 
 **Method:** `CGMParser.parse_to_unified(text_data: str, format_type: SupportedCGMFormat) -> UnifiedFormat`
@@ -99,22 +120,45 @@ Converts vendor-specific CSV to unified format. This stage handles:
 - **Creating `original_datetime` column** - Preserves original timestamps before any modifications (essential for idempotency)
 - Out-of-range glucose marking (flags sensor errors like "High"/"Low" readings)
 - Schema enforcement and validation via `CGM_SCHEMA.validate_dataframe()`
-- Sequence detection via `detect_and_assign_sequences()` (see below)
 
 **Input:** Preprocessed string data and detected format type
 
-**Output:** Polars DataFrame in unified format (see `formats/UNIFIED_FORMAT.md`) with `sequence_id` assigned
+**Output:** Polars DataFrame in unified format (see `formats/UNIFIED_FORMAT.md`) with `sequence_id=0` (unassigned)
+
+**Note**: Sequence detection is now handled by `FormatProcessor.detect_and_assign_sequences()` (Stage 4), not during parsing. The parser initializes `sequence_id` to 0 (unassigned) for the processor to fill in.
 
 **Errors:**
 
 - `MalformedDataError` - CSV is unparseable, has zero valid rows, or conversion fails
 - `ZeroValidInputError` - No valid data rows found after processing
 
-#### Sequence Detection (Final Parsing Step)
+### Stage 4: Postprocessing (Unified Operations)
 
-**Method:** `CGMParser.detect_and_assign_sequences(dataframe, expected_interval_minutes=5, large_gap_threshold_minutes=15) -> UnifiedFormat`
+After Stage 3, all vendor-specific processing is complete. The following operations work on unified format data regardless of original vendor. All operations are designed for **idempotency** through the use of `original_datetime` and quality flags.
 
-This is called automatically at the end of `parse_to_unified()` and is the final parsing step. It detects large gaps in **glucose events only** and assigns `sequence_id` values:
+**Important**: All `FormatProcessor` methods are classmethods - no instantiation needed. Configuration parameters are passed as method arguments.
+
+#### Sequence Detection and Assignment
+
+**Method:** `FormatProcessor.detect_and_assign_sequences(dataframe, expected_interval_minutes=5, large_gap_threshold_minutes=19) -> UnifiedFormat`
+
+This method detects large gaps in **glucose events only** and assigns `sequence_id` values. It should be called **explicitly as the first processing step** for clarity and control.
+
+**Best Practice**: Always call this method explicitly before other processing operations:
+
+```python
+# Step 1: Detect sequences (explicit, recommended)
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
+)
+
+# Step 2: Then interpolate, synchronize, etc.
+unified_df = FormatProcessor.interpolate_gaps(unified_df, ...)
+```
+
+**Note**: For backwards compatibility, this method is also automatically called by `interpolate_gaps()` and `synchronize_timestamps()` if sequences aren't assigned yet. However, explicit calls are recommended for clarity.
 
 **Two-pass approach:**
 1. Detect sequences based on glucose event gaps only (non-glucose events don't create sequences)
@@ -129,61 +173,44 @@ This is called automatically at the end of `parse_to_unified()` and is the final
 - `sequence_id >= 1` - Assigned to a glucose sequence
 - `sequence_id = 0` - Unassigned (no glucose events available for assignment)
 
-**Idempotency:** If sequence_id already exists with multiple sequences, this method validates and potentially splits sequences with internal large gaps.
+**Idempotency:** If sequence_id already exists, this method resets all values to 0 and recalculates to ensure consistent results with different gap thresholds.
 
 **Input:** DataFrame in unified format (with or without sequence_id)
 
 **Output:** DataFrame with sequence_id column assigned based on glucose gaps
 
-### Stage 4: Postprocessing (Unified Operations)
-
-After Stage 3, all vendor-specific processing is complete. The following operations work on unified format data regardless of original vendor. All operations are designed for **idempotency** through the use of `original_datetime` and quality flags.
-
-#### Timestamp Synchronization
-
-**Method:** `CGMProcessor.synchronize_timestamps(dataframe: UnifiedFormat) -> UnifiedFormat`
-
-Aligns timestamps to minute boundaries and creates fixed-frequency data with consistent intervals. This is a **lossless operation** - it keeps ALL source rows and only rounds their timestamps to the grid.
-
-**When to call:** Should be called after `interpolate_gaps()` when sequences are created and small gaps are filled.
-
-**Operations:**
-
-1. Rounds timestamps to nearest minute using grid alignment
-2. Each source row independently maps to its nearest grid point
-3. Marks all rows with `Quality.SYNCHRONIZATION` flag
-4. Uses `original_datetime` for grid calculations (ensures idempotency)
-
-**Grid Alignment Logic:**
-- Grid start is based on first `original_datetime` in sequence, rounded to nearest minute
-- All timestamps are rounded to grid points: `grid_start + N * expected_interval_minutes`
-- Uses "round half up" behavior for consistency with interpolation
-
-**Idempotency:** Multiple applications produce identical results because:
-- Grid calculations use `original_datetime` (never modified)
-- Quality flags are additive (SYNCHRONIZATION flag persists)
-- Grid alignment is deterministic based on sequence's first timestamp
-
-**Input:** DataFrame with sequence IDs (preprocessed by `interpolate_gaps()`)
-
-**Output:** DataFrame with synchronized timestamps at fixed intervals, all rows marked with SYNCHRONIZATION flag
-
-**Errors:**
-
-- `ZeroValidInputError` - DataFrame is empty or has no data
-
 #### Gap Interpolation
 
-**Method:** `CGMProcessor.interpolate_gaps(dataframe: UnifiedFormat) -> UnifiedFormat`
+**Method:** `FormatProcessor.interpolate_gaps(dataframe, expected_interval_minutes=5, small_gap_max_minutes=19, snap_to_grid=True) -> UnifiedFormat`
 
-Fills small gaps in continuous glucose data with linearly interpolated values. **Important:** This method expects `sequence_id` to already exist in the dataframe (assigned by parser).
+Fills small gaps in continuous glucose data with linearly interpolated values.
+
+**Best Practice**: Call `detect_and_assign_sequences()` explicitly before this method:
+
+```python
+# Step 1: Detect sequences (explicit)
+unified_df = FormatProcessor.detect_and_assign_sequences(
+    unified_df,
+    expected_interval_minutes=5,
+    large_gap_threshold_minutes=19
+)
+
+# Step 2: Interpolate gaps within sequences
+unified_df = FormatProcessor.interpolate_gaps(
+    unified_df,
+    expected_interval_minutes=5,
+    small_gap_max_minutes=19
+)
+```
+
+**Backwards Compatibility**: If sequences are not yet assigned, this method will automatically call `detect_and_assign_sequences()` using `small_gap_max_minutes` as the gap threshold.
 
 **Operations:**
 
 - Detects gaps between glucose events > `expected_interval_minutes` and <= `small_gap_max_minutes`
+- Creates sequences based on large gaps (>= `small_gap_max_minutes`)
 - Adds rows with `event_type='EGV_READ'` and `Quality.IMPUTATION` flag for missing data points
 - Inherits quality flags from neighboring glucose readings (combines with bitwise OR)
-- Updates `ProcessingWarning.IMPUTATION` in processor's warning list if gaps were filled
 - Only interpolates between valid glucose readings (non-glucose events don't affect gap detection)
 
 **Snap-to-Grid Mode (`snap_to_grid=True`, default):**
@@ -202,31 +229,64 @@ Fills small gaps in continuous glucose data with linearly interpolated values. *
 - In snap-to-grid mode, uses same grid calculation as synchronization
 - Existing imputed points are skipped (already have IMPUTATION flag)
 
-**Input:** DataFrame with potential gaps and sequence_id column
+**Input:** DataFrame with potential gaps (may or may not have sequence_id)
 
-**Output:** DataFrame with interpolated values marked with IMPUTATION (and SYNCHRONIZATION if snap_to_grid) flags
+**Output:** DataFrame with interpolated values marked with IMPUTATION (and SYNCHRONIZATION if snap_to_grid) flags, sequences assigned
 
-#### Calibration Period Marking
+#### Timestamp Synchronization
 
-**Method:** `CGMProcessor.mark_calibration_periods(dataframe: UnifiedFormat) -> UnifiedFormat`
+**Method:** `FormatProcessor.synchronize_timestamps(dataframe, expected_interval_minutes=5) -> UnifiedFormat`
 
-Marks 24-hour periods after large gaps (≥ CALIBRATION_GAP_THRESHOLD = 2:45:00) with `Quality.SENSOR_CALIBRATION` flag. This indicates data quality may be reduced during sensor warm-up/calibration.
+Aligns timestamps to minute boundaries and creates fixed-frequency data with consistent intervals. This is a **lossless operation** - it keeps ALL source rows and only rounds their timestamps to the grid.
+
+**When to call:** Should be called after `interpolate_gaps()` when sequences are created and small gaps are filled.
 
 **Operations:**
 
-1. Detects gaps ≥ 2:45:00 using `original_datetime` (idempotent regardless of sync)
-2. Marks all data points within 24 hours after gap end with SENSOR_CALIBRATION flag
-3. Uses bitwise OR to add flag on top of existing quality flags
+1. Ensures sequences are assigned (auto-calls `detect_and_assign_sequences()` if needed for backwards compatibility)
+2. Rounds timestamps to nearest minute using grid alignment
+3. Each source row independently maps to its nearest grid point
+4. Marks all rows with `Quality.SYNCHRONIZATION` flag
+5. Uses `original_datetime` for grid calculations (ensures idempotency)
 
-**Idempotency:** Uses `original_datetime` for gap detection, ensuring consistent results after synchronization.
+**Best Practice**: Call `detect_and_assign_sequences()` explicitly before this method:
 
-**Input:** DataFrame with sequences and original_datetime column
+```python
+# Step 1: Detect sequences (explicit)
+unified_df = FormatProcessor.detect_and_assign_sequences(unified_df)
 
-**Output:** DataFrame with quality flags updated for calibration periods
+# Step 2: Interpolate gaps
+unified_df = FormatProcessor.interpolate_gaps(unified_df)
+
+# Step 3: Synchronize timestamps
+unified_df = FormatProcessor.synchronize_timestamps(unified_df)
+```
+
+**Grid Alignment Logic:**
+- Grid start is based on first `original_datetime` in sequence, rounded to nearest minute
+- All timestamps are rounded to grid points: `grid_start + N * expected_interval_minutes`
+- Uses "round half up" behavior for consistency with interpolation
+
+**Idempotency:** Multiple applications produce identical results because:
+- Grid calculations use `original_datetime` (never modified)
+- Quality flags are additive (SYNCHRONIZATION flag persists)
+- Grid alignment is deterministic based on sequence's first timestamp
+
+**Order Independence:** Can be called before or after `interpolate_gaps()` with equivalent results:
+- Both use the same grid alignment based on `original_datetime`
+- `interpolate → sync` and `sync → interpolate` produce the same output
+
+**Input:** DataFrame with or without sequences (auto-assigns if needed)
+
+**Output:** DataFrame with synchronized timestamps at fixed intervals, all rows marked with SYNCHRONIZATION flag
+
+**Errors:**
+
+- `ZeroValidInputError` - DataFrame is empty or has no data
 
 #### Time Duplicate Marking
 
-**Method:** `CGMProcessor.mark_time_duplicates(dataframe: UnifiedFormat) -> UnifiedFormat`
+**Method:** `FormatProcessor.mark_time_duplicates(dataframe) -> UnifiedFormat`
 
 Marks events with duplicate timestamps, keeping first occurrence clean.
 
@@ -240,9 +300,29 @@ Marks events with duplicate timestamps, keeping first occurrence clean.
 
 **Output:** DataFrame with TIME_DUPLICATE flag added to duplicate timestamp rows
 
+#### Calibration Period Marking
+
+**Method:** `FormatProcessor.mark_calibration_periods(dataframe) -> UnifiedFormat`
+
+Marks 24-hour periods after large gaps (≥ CALIBRATION_GAP_THRESHOLD = 2:45:00) with `Quality.SENSOR_CALIBRATION` flag. This indicates data quality may be reduced during sensor warm-up/calibration.
+
+**Operations:**
+
+1. Detects gaps ≥ 2:45:00 using `original_datetime` (idempotent regardless of sync)
+2. Marks all data points within 24 hours after gap end with SENSOR_CALIBRATION flag
+3. Uses bitwise OR to add flag on top of existing quality flags
+
+**When called:** Automatically called in `prepare_for_inference()` before warning collection.
+
+**Idempotency:** Uses `original_datetime` for gap detection, ensuring consistent results after synchronization.
+
+**Input:** DataFrame with sequences and original_datetime column
+
+**Output:** DataFrame with quality flags updated for calibration periods
+
 ### Stage 5: Inference Preparation
 
-**Method:** `CGMProcessor.prepare_for_inference(dataframe, minimum_duration_minutes=60, maximum_wanted_duration=480) -> InferenceResult`
+**Method:** `FormatProcessor.prepare_for_inference(dataframe, minimum_duration_minutes=60, maximum_wanted_duration=480) -> InferenceResult`
 
 Prepares processed data for machine learning inference. Returns full UnifiedFormat with all columns (use `to_data_only_df()` to strip service columns if needed).
 
@@ -273,6 +353,7 @@ Prepares processed data for machine learning inference. Returns full UnifiedForm
    - `OUT_OF_RANGE`: contains OUT_OF_RANGE quality flags (sensor errors)
    - `IMPUTATION`: contains IMPUTATION quality flags (imputed/interpolated data)
    - `TIME_DUPLICATES`: contains non-unique timestamps OR TIME_DUPLICATE quality flags
+   - `SYNCHRONIZATION`: contains SYNCHRONIZATION quality flags
 
 #### Output
 
@@ -292,11 +373,14 @@ Warnings are implemented as flags and can be combined:
 - `ProcessingWarning.OUT_OF_RANGE` - Contains sensor out-of-range errors ("High"/"Low" readings)
 - `ProcessingWarning.IMPUTATION` - Contains imputed/interpolated gaps
 - `ProcessingWarning.TIME_DUPLICATES` - Contains non-unique time entries
+- `ProcessingWarning.SYNCHRONIZATION` - Contains synchronized timestamps
+- `ProcessingWarning.QUALITY` - Other quality issues
 
 Example:
 
 ```python
-data, warnings = processor.prepare_for_inference(df)
+data, warnings = FormatProcessor.prepare_for_inference(df)
+
 if warnings & ProcessingWarning.TOO_SHORT:
     print("Warning: Sequence is too short")
 if warnings & ProcessingWarning.IMPUTATION:
@@ -312,13 +396,13 @@ Optional pipeline-terminating function that removes metadata columns for ML mode
 **Operations:**
 - Filter to glucose-only events if `glucose_only=True` (drops non-EGV events)
 - Drop duplicate timestamps if `drop_duplicates=True` (keeps first occurrence)
-- Strip service columns if `drop_service_columns=True`: removes `sequence_id`, `event_type`, `quality`
+- Strip service columns if `drop_service_columns=True`: removes `sequence_id`, `original_datetime`, `event_type`, `quality`
 - Keeps only data columns: `datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise`
 
 **Example:**
 ```python
 # Get full unified format with warnings
-unified_df, warnings = processor.prepare_for_inference(df)
+unified_df, warnings = FormatProcessor.prepare_for_inference(df)
 
 # Strip service columns for ML model
 data_only = FormatProcessor.to_data_only_df(
@@ -344,7 +428,7 @@ data_only = FormatProcessor.to_data_only_df(
 | `MINIMUM_DURATION_MINUTES`        | 60                     | Default minimum sequence duration for inference                 | Stage 5 (Processor) |
 | `MAXIMUM_WANTED_DURATION_MINUTES` | 480                    | Default maximum sequence duration for inference                 | Stage 5 (Processor) |
 
-**Note:** Gap thresholds and calibration marking are applied during processing (Stage 4), not parsing (Stage 3). Parsing only performs sequence detection based on large gaps.
+**Note:** Sequence detection and gap interpolation are performed during processing (Stage 4), not parsing (Stage 3). Parsing initializes `sequence_id` to 0 for the processor to assign.
 
 ## Serialization
 
@@ -398,9 +482,16 @@ Both output DataFrames maintain full UnifiedFormat schema with all columns. This
 **Example:**
 ```python
 glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
+
 # Process glucose and events separately
-glucose_df = processor.interpolate_gaps(glucose_df)
+# Step 1: Detect sequences
+glucose_df = FormatProcessor.detect_and_assign_sequences(glucose_df)
+
+# Step 2: Interpolate gaps
+glucose_df = FormatProcessor.interpolate_gaps(glucose_df)
+
 # Merge back if needed
+from cgm_format.formats.unified import CGM_SCHEMA
 combined = pl.concat([glucose_df, events_df]).sort(CGM_SCHEMA.get_stable_sort_keys())
 ```
 
@@ -448,9 +539,9 @@ The schema system provides two modes:
 
 Default: `ValidationMethod.INPUT` (validate inputs, trust outputs)
 
-**Processor Validation:** `FormatProcessor(validation_mode=...)` (instance parameter)
+**Processor Validation:** Pass `validation_mode` parameter to each method
 - Same flags as parser
-- Default: `ValidationMethod.INPUT`
+- Default: `ValidationMethod.INPUT` (class variable `FormatProcessor.validation_mode_default`)
 
 ### Example Usage
 
@@ -580,7 +671,7 @@ All convenience methods automatically:
 - Detect format (Dexcom, Libre, or Unified)
 - Handle encoding issues and BOM artifacts
 - Parse to unified format
-- Assign sequence_id values
+- Initialize sequence_id to 0 (sequences assigned during processing)
 - Validate schema
 
 ## Design Principles
@@ -593,6 +684,7 @@ All processing operations are idempotent through careful design:
 2. **Grid Calculations**: Synchronization and interpolation use `original_datetime` for grid calculations
 3. **Quality Flags**: Additive quality flags (bitwise OR) preserve operation history
 4. **Deterministic Sorting**: Stable sort keys ensure consistent row ordering
+5. **Sequence Reset**: `detect_and_assign_sequences()` resets existing sequences before reassignment
 
 ### Losslessness
 
@@ -606,7 +698,16 @@ Processing operations preserve all data:
 ### Separation of Concerns
 
 1. **Parser (Stages 1-3)**: Vendor-specific → Unified format
-2. **Processor (Stages 4-5)**: Vendor-agnostic unified operations
+2. **Processor (Stages 4-5)**: Vendor-agnostic unified operations (static methods)
 3. **Schema System**: Centralized validation and enforcement
 4. **Quality Flags**: Fine-grained data quality tracking at row level
 5. **Processing Warnings**: Coarse-grained quality assessment at sequence level
+
+### Static Architecture
+
+`FormatProcessor` uses classmethods exclusively:
+- No state maintained between calls
+- All configuration passed as method parameters
+- Thread-safe by design (no shared mutable state)
+- Simpler API - no need to instantiate
+- Configuration constants available as class variables for reference
