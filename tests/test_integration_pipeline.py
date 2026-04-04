@@ -170,21 +170,6 @@ class TestFullPipelineIntegration:
             'warning_flags': warning_flags.value if warning_flags else 0,
         }
     
-    def test_pipeline_summary(self) -> None:
-        """Generate a summary report of all files in the data directory.
-        
-        This test always passes but provides useful summary statistics.
-        """
-        test_files = get_test_files()
-        
-        print(f"\n{'='*70}")
-        print(f"INTEGRATION TEST SUMMARY REPORT")
-        print(f"{'='*70}\n")
-        print(f"Total files in data directory: {len(test_files)}")
-        print(f"\nTo see individual file results, run:")
-        print(f"  pytest tests/test_integration_pipeline.py::TestFullPipelineIntegration::test_pipeline_single_file -v")
-        print(f"\n{'='*70}\n")
-    
     def test_pipeline_single_file_detailed(self) -> None:
         """Detailed test of pipeline on a single file with extensive validation."""
         test_files = get_test_files()

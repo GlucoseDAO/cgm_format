@@ -39,6 +39,13 @@ from cgm_format.formats.libre import (
     LIBRE_HEADER_LINE,
     LIBRE_TIMESTAMP_FORMATS
 )
+from cgm_format.formats.medtronic import (
+    MedtronicColumn,
+    MEDTRONIC_TIMESTAMP_FORMATS,
+    MEDTRONIC_REQUIRED_HEADERS,
+    MEDTRONIC_CSV_SEPARATOR,
+    MEDTRONIC_SCHEMA_OVERRIDES_UTF8,
+)
 
 # Common encoding artifacts and their fixes 
 UTF8_BOM = b'\xef\xbb\xbf'
@@ -187,6 +194,8 @@ class FormatParser(CGMParser):
             unified_df = cls._process_dexcom(text_data)
         elif format_type == SupportedCGMFormat.LIBRE:
             unified_df = cls._process_libre(text_data)
+        elif format_type == SupportedCGMFormat.MEDTRONIC:
+            unified_df = cls._process_medtronic(text_data)
         else:
             raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
         
@@ -598,6 +607,184 @@ class FormatParser(CGMParser):
             error_msg = f"Failed to parse Libre CSV: {e}"
             raise MalformedDataError(cls._truncate_error_message(error_msg))
     
+    @staticmethod
+    def _euro_number_to_float(expr: pl.Expr) -> pl.Expr:
+        """Convert European-format number expression to Float64.
+
+        Replaces comma decimal separators with periods, then casts.
+        Invalid values (e.g. "-------") become null via strict=False.
+        """
+        return (
+            expr.cast(pl.Utf8, strict=False)
+            .str.replace_all(",", ".")
+            .cast(pl.Float64, strict=False)
+        )
+
+    @classmethod
+    def _find_medtronic_header_line(cls, text_data: str, max_lines: int = 30) -> int:
+        """Find the header row index in a Medtronic CareLink CSV.
+
+        Scans the first *max_lines* lines for a semicolon-separated line
+        containing all of MEDTRONIC_REQUIRED_HEADERS.
+
+        Returns:
+            0-based line index of the header row.
+
+        Raises:
+            MalformedDataError: If no header row is found.
+        """
+        lines = text_data.split("\n", max_lines + 1)[:max_lines]
+        for idx, line in enumerate(lines):
+            stripped = line.strip().lstrip("\ufeff")
+            if not stripped:
+                continue
+            candidates: list[list[str]] = []
+            if ";" in stripped:
+                candidates.append([c.strip().strip('"') for c in stripped.split(";")])
+            if "," in stripped:
+                candidates.append([c.strip().strip('"') for c in stripped.split(",")])
+            for headers in candidates:
+                if all(req in headers for req in MEDTRONIC_REQUIRED_HEADERS):
+                    return idx
+        raise MalformedDataError(
+            "Could not find Medtronic header row containing required columns: "
+            + ", ".join(MEDTRONIC_REQUIRED_HEADERS)
+        )
+
+    @classmethod
+    def _process_medtronic(cls, text_data: str) -> UnifiedFormat:
+        """Process Medtronic Guardian Connect / CareLink CSV to unified format.
+
+        Handles:
+        - Variable metadata rows before the header
+        - Semicolon delimiter with European decimal format
+        - "-------" placeholders in numeric columns
+        - Multiple device sections with repeated header rows
+        - Event Marker free-text parsing for insulin and carbs
+
+        Args:
+            text_data: Medtronic CSV string
+
+        Returns:
+            DataFrame in unified format
+
+        Raises:
+            MalformedDataError: If parsing fails
+        """
+        try:
+            header_line_idx = cls._find_medtronic_header_line(text_data)
+
+            schema_overrides: dict[str, pl.DataType] = {
+                col: pl.Utf8 for col in MEDTRONIC_SCHEMA_OVERRIDES_UTF8
+            }
+
+            df = pl.read_csv(
+                StringIO(text_data),
+                separator=MEDTRONIC_CSV_SEPARATOR,
+                skip_lines=header_line_idx,
+                truncate_ragged_lines=True,
+                infer_schema_length=200,
+                schema_overrides=schema_overrides,
+            )
+
+            # Clean column names (BOM, smart quotes)
+            df = df.rename(
+                {col: col.strip().lstrip("\ufeff").replace("\u201c", '"').replace("\u201d", '"')
+                 for col in df.columns}
+            )
+
+            # Drop repeated header rows and "-------" separator lines
+            df = df.filter(
+                (pl.col(MedtronicColumn.DATE) != MedtronicColumn.DATE.value)
+                & ~pl.col(MedtronicColumn.INDEX).cast(pl.Utf8, strict=False).str.starts_with("-------")
+            )
+
+            # Build combined timestamp column
+            ts_raw = pl.concat_str(
+                [pl.col(MedtronicColumn.DATE), pl.col(MedtronicColumn.TIME)],
+                separator=" ",
+            ).alias("_ts_raw")
+
+            df = df.with_columns([ts_raw])
+
+            timestamp_format = cls._probe_timestamp_format(df, "_ts_raw", MEDTRONIC_TIMESTAMP_FORMATS)
+
+            # Parse Euro-decimal numeric columns
+            sensor_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.SENSOR_GLUCOSE)).alias("_sensor_gl")
+            bg_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.BG_READING)).alias("_bg_gl")
+            bolus_u = cls._euro_number_to_float(pl.col(MedtronicColumn.BOLUS_VOLUME_DELIVERED)).alias("_bolus_u")
+            bwz_carbs = cls._euro_number_to_float(pl.col(MedtronicColumn.BWZ_CARB_INPUT)).alias("_bwz_carbs")
+
+            # Extract insulin/carbs from Event Marker as fallback
+            event_marker_col = pl.col(MedtronicColumn.EVENT_MARKER).cast(pl.Utf8, strict=False).fill_null("")
+            marker_insulin = cls._euro_number_to_float(
+                event_marker_col.str.extract(r"Insulin:\s*([\d,\.]+)", 1)
+            ).alias("_marker_insulin")
+            marker_carbs = cls._euro_number_to_float(
+                event_marker_col.str.extract(r"Meal:\s*([\d,\.]+)\s*grams?", 1)
+            ).alias("_marker_carbs")
+
+            df = df.with_columns([sensor_gl, bg_gl, bolus_u, bwz_carbs, marker_insulin, marker_carbs])
+
+            # Coalesce: structured columns take priority over Event Marker
+            df = df.with_columns([
+                pl.coalesce([pl.col("_sensor_gl"), pl.col("_bg_gl")]).alias("_glucose"),
+                pl.coalesce([pl.col("_bolus_u"), pl.col("_marker_insulin")]).alias("_insulin"),
+                pl.coalesce([pl.col("_bwz_carbs"), pl.col("_marker_carbs")]).alias("_carbs"),
+            ])
+
+            # --- Glucose rows ---
+            glucose_data = (
+                df.filter(pl.col("_glucose").is_not_null())
+                .select([
+                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("_glucose").alias("glucose"),
+                    pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                ])
+            )
+
+            # --- Insulin rows (only rows without glucose to avoid double-counting) ---
+            insulin_data = (
+                df.filter(pl.col("_insulin").is_not_null() & pl.col("_glucose").is_null())
+                .select([
+                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("_insulin").alias("insulin_fast"),
+                    pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                ])
+            )
+
+            # --- Carb rows (only rows without glucose to avoid double-counting) ---
+            carb_data = (
+                df.filter(pl.col("_carbs").is_not_null() & pl.col("_glucose").is_null())
+                .select([
+                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("_carbs").alias("carbs"),
+                    pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                ])
+            )
+
+            # Combine all data types
+            all_data = [glucose_data]
+            if len(insulin_data) > 0:
+                all_data.append(insulin_data)
+            if len(carb_data) > 0:
+                all_data.append(carb_data)
+
+            unified = pl.concat(all_data, how="diagonal")
+
+            unified = unified.with_columns([
+                pl.lit(0).alias("sequence_id")
+            ])
+
+            return cls._postprocess_unified(unified)
+
+        except pl.exceptions.PolarsError as e:
+            error_msg = f"Failed to parse Medtronic CSV: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
+
     # ===== Serialization Methods =====
     
     @staticmethod

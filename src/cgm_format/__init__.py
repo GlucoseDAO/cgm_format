@@ -85,6 +85,11 @@ from cgm_format.formats.libre import (
     LibreColumn,
 )
 
+from cgm_format.formats.medtronic import (
+    MEDTRONIC_SCHEMA,
+    MedtronicColumn,
+)
+
 __all__ = [
     # Main classes
     "FormatParser",
@@ -144,6 +149,10 @@ __all__ = [
     "LIBRE_SCHEMA",
     "LibreRecordType",
     "LibreColumn",
+    
+    # Medtronic format
+    "MEDTRONIC_SCHEMA",
+    "MedtronicColumn",
     
     # Version
     "__version__",

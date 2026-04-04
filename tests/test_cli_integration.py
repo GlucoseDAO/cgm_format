@@ -72,7 +72,7 @@ class TestCLIDetect:
         # Should succeed for supported formats
         if result.returncode == 0:
             assert "Detected format:" in result.stdout
-            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "unified"])
+            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "medtronic", "unified"])
         else:
             # Should fail gracefully for unsupported formats
             assert "Unknown format" in result.stdout or "Error" in result.stdout

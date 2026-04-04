@@ -1,4 +1,4 @@
-# cgm_format
+# cgm-format
 
 Python library for converting vendor-specific Continuous Glucose Monitoring (CGM) data (Dexcom, Libre) into a standardized unified format for ML training and inference.
 
@@ -19,16 +19,15 @@ Python library for converting vendor-specific Continuous Glucose Monitoring (CGM
 ## Installation
 
 ```bash
-# Using uv (recommended)
-uv pip install -e .
+# In your own uv project — add as a dependency
+uv add cgm-format
 
-# Or using pip
-pip3 install -e .
+# With optional extras
+uv add "cgm-format[cli]"    # typer + rich for the cgm-cli tool
+uv add "cgm-format[extra]"  # pandas, pyarrow, frictionless
 
-# Optional dependencies
-uv pip install -e ".[extra]"  # pandas, pyarrow, frictionless
-uv pip install -e ".[cli]"    # typer, rich (for cgm-cli tool)
-uv pip install -e ".[dev]"    # pytest + all extras
+# Working on cgm-format itself — sync the dev environment
+uv sync --extra dev          # pytest + cli + pandas + pyarrow + frictionless
 ```
 
 ## CLI Tool
@@ -47,10 +46,10 @@ The package includes a comprehensive CLI tool for CGM data processing with 8 com
 
 **Installation:**
 ```bash
-# Install with CLI support
-uv pip install -e ".[cli]"  # Adds typer + rich dependencies
+# Sync with CLI extras
+uv sync --extra cli
 
-# Verify installation
+# Verify
 cgm-cli --help
 ```
 
@@ -789,9 +788,14 @@ if processor.has_warnings():
 
 ## Testing
 
-The library has comprehensive test coverage with real data (no mocking):
+The library has comprehensive test coverage with real data (no mocking).
+
+**Important:** Always use `uv run` to execute commands. Running bare `pytest` uses the system Python, which does not have the project or its dependencies installed, and fails with `ModuleNotFoundError`.
 
 ```bash
+# Sync dev dependencies first (only needed once or after pyproject.toml changes)
+uv sync --extra dev
+
 # Run all tests
 uv run pytest tests/
 
@@ -813,7 +817,7 @@ uv run python examples/usage_example.py
 - **test_format_detection_validation.py** - Format detection, Frictionless schema validation
 - **test_integration_pipeline.py** - Full end-to-end pipeline on real data (no mocking)
 - **test_format_processor.py** - Processor implementation: sync, interpolation, inference prep
-- **test_format_converter.py** - Parser: detection, parsing, roundtrip, sequence detection
+- **test_format_parser.py** - Parser: detection, parsing, roundtrip, sequence detection
 - **test_roundtrip_datetime.py** - Datetime type preservation through conversions
 - **test_idempotency.py** - Idempotency and commutativity of operations
 - **test_schema.py** - Schema validation and Frictionless conversion
@@ -826,8 +830,6 @@ All tests verify:
 - Schema compliance
 - Error handling
 
-See [`tests/README.md`](tests/README.md) for detailed test documentation.
-
 ## Development
 
 ### Regenerating Schema JSON Files
@@ -836,13 +838,13 @@ After modifying schema definitions:
 
 ```bash
 # Regenerate unified.json
-python3 -c "from cgm_format.formats.unified import regenerate_schema_json; regenerate_schema_json()"
+uv run python -c "from cgm_format.formats.unified import regenerate_schema_json; regenerate_schema_json()"
 
 # Regenerate dexcom.json
-python3 -c "from cgm_format.formats.dexcom import regenerate_schema_json; regenerate_schema_json()"
+uv run python -c "from cgm_format.formats.dexcom import regenerate_schema_json; regenerate_schema_json()"
 
 # Regenerate libre.json
-python3 -c "from cgm_format.formats.libre import regenerate_schema_json; regenerate_schema_json()"
+uv run python -c "from cgm_format.formats.libre import regenerate_schema_json; regenerate_schema_json()"
 ```
 
 ### Adding New Vendor Formats
