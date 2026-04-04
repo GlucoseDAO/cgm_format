@@ -73,14 +73,14 @@ cgm-cli process unified.csv --output processed.csv \
     [--interpolate/--no-interpolate] \
     [--sync/--no-sync] \
     [--interval 5] \
-    [--max-gap 19]
+    [--max-gap 15]
 ```
 
 **pipeline** - Run the complete processing pipeline
 ```bash
 cgm-cli pipeline input.csv --output final.csv \
     [--interval 5] \
-    [--max-gap 19] \
+    [--max-gap 15] \
     [--min-duration 15] \
     [--max-duration 1440] \
     [--glucose-only] \

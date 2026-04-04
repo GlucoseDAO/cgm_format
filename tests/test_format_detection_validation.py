@@ -49,6 +49,8 @@ def get_all_csv_files():
     csv_files = list(DATA_DIR.glob("*.csv"))
     # Exclude Medtronic files (not yet supported)
     csv_files = [f for f in csv_files if not is_medtronic_file(f)]
+    # Exclude Nightscout treatments — it's a supplementary file, not a standalone format
+    csv_files = [f for f in csv_files if f.name != "nightscout_treatments.csv"]
     
     if not csv_files:
         pytest.skip(f"No CSV files found in {DATA_DIR}")

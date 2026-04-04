@@ -1,12 +1,13 @@
 # cgm-format
 
-Python library for converting vendor-specific Continuous Glucose Monitoring (CGM) data (Dexcom, Libre) into a standardized unified format for ML training and inference.
+Python library for converting vendor-specific Continuous Glucose Monitoring (CGM) data (Dexcom, Libre, Medtronic, Nightscout) into a standardized unified format for ML training and inference.
 
 [![Tests](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml/badge.svg)](https://github.com/GlucoseDAO/cgm_format/actions/workflows/test.yml)
 
 ## Features
 
-- **Vendor format detection**: Automatic detection of Dexcom, Libre, and Unified formats
+- **Vendor format detection**: Automatic detection of Dexcom, Libre, Medtronic, Nightscout, and Unified formats
+- **Nightscout support**: Download and parse CGM data directly from Nightscout instances via REST API (entries + treatments)
 - **Robust parsing**: Handles BOM marks, encoding artifacts, and vendor-specific CSV quirks
 - **Unified schema**: Standardized data format with service columns (metadata) and data columns
 - **Idempotent processing**: All operations are idempotent - applying them multiple times produces the same result
@@ -22,12 +23,11 @@ Python library for converting vendor-specific Continuous Glucose Monitoring (CGM
 # In your own uv project — add as a dependency
 uv add cgm-format
 
-# With optional extras
-uv add "cgm-format[cli]"    # typer + rich for the cgm-cli tool
-uv add "cgm-format[extra]"  # pandas, pyarrow, frictionless
+# With CLI extras (typer, rich, httpx, pandas, pyarrow, frictionless)
+uv add "cgm-format[cli]"
 
 # Working on cgm-format itself — sync the dev environment
-uv sync --extra dev          # pytest + cli + pandas + pyarrow + frictionless
+uv sync --extra dev          # cli + pytest
 ```
 
 ## CLI Tool
@@ -43,6 +43,7 @@ The package includes a comprehensive CLI tool for CGM data processing with 8 com
 - `pipeline` - Full 6-stage processing pipeline
 - `info` - File information & statistics
 - `batch` - Batch process directories
+- `download-nightscout` - Download CGM data from a Nightscout instance
 
 **Installation:**
 ```bash
@@ -112,7 +113,7 @@ unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 # Stage 4-5: Process for inference
 processor = FormatProcessor(
     expected_interval_minutes=5,
-    small_gap_max_minutes=15
+    small_gap_max_minutes=15  # 3 intervals (aligned with glucose_data_processing)
 )
 
 # Fill gaps and create sequences
@@ -155,7 +156,7 @@ inference_df = FormatProcessor.to_data_only_df(unified_df)
 insulin_events = events_df.filter(pl.col('event_type').str.contains('INSULIN'))
 ```
 
-**See [USAGE.md](USAGE.md) for complete inference workflows and [examples/usage_example.py](examples/usage_example.py) for runnable examples.**
+**See [docs/USAGE.md](docs/USAGE.md) for complete inference workflows and [examples/usage_example.py](examples/usage_example.py) for runnable examples.**
 
 ## Unified Format Schema
 
@@ -181,7 +182,7 @@ The library converts all vendor formats to a standardized schema with two types 
 | `insulin_fast` | `Float64` | u | Short-acting insulin dose |
 | `exercise` | `Int64` | seconds | Exercise duration |
 
-See [`formats/UNIFIED_FORMAT.md`](formats/UNIFIED_FORMAT.md) for complete specification and event type enums.
+See [`docs/UNIFIED_FORMAT.md`](docs/UNIFIED_FORMAT.md) for complete specification and event type enums.
 
 ## Processing Pipeline
 
@@ -204,7 +205,7 @@ from cgm_format import FormatParser, FormatProcessor
 unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 
 # Stage 4: Interpolate gaps and mark calibration periods
-processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=19)
+processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=15)
 unified_df = processor.interpolate_gaps(unified_df)
 
 # Optional: Synchronize timestamps to fixed grid
@@ -221,7 +222,7 @@ inference_df, warnings = processor.prepare_for_inference(
 data_only = FormatProcessor.to_data_only_df(inference_df)
 ```
 
-See [`interface/PIPELINE.md`](src/cgm_format/interface/PIPELINE.md) for complete documentation.
+See [`docs/PIPELINE.md`](docs/PIPELINE.md) for complete documentation.
 
 ### Stage 1: Preprocess Raw Data
 
@@ -248,7 +249,7 @@ Parse vendor CSV to unified format, handling vendor-specific quirks and automati
 
 - Dexcom: High/Low glucose markers, variable-length rows, metadata rows
 - Libre: Record type filtering, timestamp format variations
-- **Sequence detection**: Automatically splits data at large gaps (>15 min) in glucose readings
+- **Sequence detection**: Automatically splits data at large gaps (>SMALL_GAP_MAX_MINUTES) in glucose readings
 - **Original timestamp preservation**: Creates `original_datetime` column for idempotency
 
 ```python
@@ -282,7 +283,7 @@ from cgm_format import FormatProcessor
 
 processor = FormatProcessor(
     expected_interval_minutes=5,    # Normal CGM reading interval
-    small_gap_max_minutes=19,       # Max gap size to interpolate (3 intervals + 80% tolerance)
+    small_gap_max_minutes=15,       # Max gap to interpolate (3 intervals, aligned with glucose_data_processing)
     snap_to_grid=True               # Align interpolated points to synchronization grid (default)
 )
 
@@ -293,10 +294,11 @@ processed_df = processor.interpolate_gaps(unified_df)
 **What it does:**
 
 1. **Gap Detection**: Identifies gaps in continuous glucose monitoring data (only glucose events)
-2. **Small Gap Interpolation**: Fills gaps (>5 min, ≤19 min) with linearly interpolated glucose values
+2. **Small Gap Interpolation**: Fills gaps (>5 min, ≤15 min) with linearly interpolated glucose values
 3. **Snap-to-Grid Mode** (default): Interpolated points align with synchronization grid
+   - Uses grid-aligned gap measurement for stable threshold decisions
    - Adds both `IMPUTATION` and `SYNCHRONIZATION` quality flags
-   - Guarantees idempotency: `interpolate → sync` ≡ `sync → interpolate`
+   - Guarantees commutativity: `interpolate → sync` ≡ `sync → interpolate`
 4. **Calibration Period Marking**: Called automatically in `prepare_for_inference()`
    - Marks 24-hour periods after gaps ≥2h45m with `SENSOR_CALIBRATION` quality flag
 5. **Warning Collection**: Tracks imputation events via `ProcessingWarning.IMPUTATION`
@@ -411,8 +413,8 @@ from cgm_format.interface.cgm_interface import MINIMUM_DURATION_MINUTES, MAXIMUM
 # Initialize processor with custom intervals
 processor = FormatProcessor(
     expected_interval_minutes=5,     # CGM reading interval (5 min for Dexcom, 15 min for Libre)
-    small_gap_max_minutes=19,        # Max gap to interpolate (3 intervals + 80% tolerance)
-    snap_to_grid=True                # Align interpolated points to sync grid (default, ensures idempotency)
+    small_gap_max_minutes=15,        # Max gap to interpolate (3 intervals)
+    snap_to_grid=True                # Align interpolated points to sync grid (default, ensures commutativity)
 )
 
 # Stage 4: Fill gaps
@@ -566,7 +568,6 @@ cgm_format/
 │       ├── interface/           # Abstract interfaces and schema infrastructure
 │       │   ├── cgm_interface.py # CGMParser and CGMProcessor interfaces
 │       │   ├── schema.py        # Base schema definition system
-│       │   └── PIPELINE.md      # Pipeline documentation
 │       └── formats/             # Format-specific schemas and definitions
 │           ├── unified.py       # Unified format schema and enums
 │           ├── unified.json     # Frictionless schema export
@@ -574,7 +575,11 @@ cgm_format/
 │           ├── dexcom.json      # Frictionless schema for Dexcom
 │           ├── libre.py         # Libre format schema and constants
 │           ├── libre.json       # Frictionless schema for Libre
-│           └── UNIFIED_FORMAT.md # Unified format specification
+├── docs/                        # Documentation
+│   ├── PHILOSOPHY.md            # Design principles and new sensor guide
+│   ├── USAGE.md                 # Complete usage guide for inference
+│   ├── PIPELINE.md              # Pipeline documentation
+│   └── UNIFIED_FORMAT.md        # Unified format specification
 ├── examples/                    # Example scripts
 │   ├── usage_example.py         # Runnable usage examples
 │   └── example_schema_usage.py  # Format detection & validation examples
@@ -585,7 +590,6 @@ cgm_format/
 ├── data/                        # Test data and parsed outputs
 │   └── parsed/                  # Converted unified format files
 ├── pyproject.toml               # Package configuration (hatchling)
-├── USAGE.md                     # Complete usage guide for inference
 └── README.md                    # This file
 ```
 
@@ -627,8 +631,8 @@ All operations are **idempotent** through `original_datetime` preservation and q
 - Schema validation and enforcement
 
 **Stage 4 (FormatProcessor.interpolate_gaps):**
-- Time difference calculation between consecutive glucose readings
-- Small gap interpolation (> expected_interval, ≤ small_gap_max_minutes)
+- Grid-aligned gap measurement: projects timestamps onto 5-min grid before measuring gaps (when `snap_to_grid=True`), ensuring commutativity with `synchronize_timestamps`
+- Small gap interpolation (> expected_interval, ≤ small_gap_max_minutes on the grid)
 - Linear interpolation with snap-to-grid mode for idempotency
 - Imputation row creation with `Quality.IMPUTATION` + `Quality.SYNCHRONIZATION` flags
 - Warning collection for imputed data
@@ -659,17 +663,17 @@ All operations are **idempotent** through `original_datetime` preservation and q
 | Parameter | Default | Description | Effect |
 |-----------|---------|-------------|--------|
 | `expected_interval_minutes` | 5 | Normal reading interval | Grid spacing for synchronization; gap detection baseline |
-| `small_gap_max_minutes` | 19 | Max gap to interpolate | Gaps > this are not filled; gaps ≤ this are filled with interpolation |
-| `snap_to_grid` | True | Align interpolated points to grid | When True, ensures idempotency between interpolate and sync operations |
+| `small_gap_max_minutes` | 15 | Max gap to interpolate (3 intervals) | Gaps > this create new sequences; gaps ≤ this are filled with interpolation. Must be a multiple of `expected_interval_minutes` for grid-aligned stability. |
+| `snap_to_grid` | True | Align interpolated points to grid | When True, uses grid-aligned gap measurement and ensures commutativity between interpolate and sync operations |
 
 **Common configurations:**
 
 ```python
-# Dexcom G6/G7 (5-minute readings)
-processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=19)
+# Dexcom G6/G7 (5-minute readings) — default
+processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=15)
 
 # FreeStyle Libre (manual scans, typically 15 min)
-processor = FormatProcessor(expected_interval_minutes=15, small_gap_max_minutes=57)  # 3 intervals + 80%
+processor = FormatProcessor(expected_interval_minutes=15, small_gap_max_minutes=45)  # 3 intervals
 
 # Strict quality (minimal imputation)
 processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=10)
@@ -868,11 +872,16 @@ Optional:
 
 ## Documentation
 
-- **[USAGE.md](USAGE.md)** - Complete usage guide for inference workflows
+- **[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)** - Design principles and guidelines for new sensor implementations
+- **[docs/USAGE.md](docs/USAGE.md)** - Complete usage guide for inference workflows
 - **[examples/usage_example.py](examples/usage_example.py)** - Runnable examples with real data
-- **[src/cgm_format/interface/PIPELINE.md](src/cgm_format/interface/PIPELINE.md)** - Detailed pipeline architecture
-- **[src/cgm_format/formats/UNIFIED_FORMAT.md](src/cgm_format/formats/UNIFIED_FORMAT.md)** - Unified schema specification
+- **[docs/PIPELINE.md](docs/PIPELINE.md)** - Detailed pipeline architecture
+- **[docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md)** - Unified schema specification
 - **[examples/example_schema_usage.py](examples/example_schema_usage.py)** - Schema validation examples
+
+## Acknowledgments
+
+- **Iskander Vafin** — for providing Nightscout test data used in integration tests
 
 ## License
 

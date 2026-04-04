@@ -29,14 +29,14 @@ unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
+    large_gap_threshold_minutes=15  # Gaps > 15 min create new sequences
 )
 
 # Stage 4b: Interpolate gaps within sequences
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,    # CGM reads every 5 minutes
-    small_gap_max_minutes=19        # Interpolate gaps up to 19 min (default: 3 intervals + 80% tolerance)
+    small_gap_max_minutes=15        # Interpolate gaps up to 15 min (default: 3 intervals)
 )
 
 # Stage 4b: Align to fixed-frequency timestamps (optional but recommended)
@@ -170,7 +170,7 @@ First, explicitly detect sequences based on large gaps in glucose data:
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,       # Normal CGM interval
-    large_gap_threshold_minutes=19     # Gaps > 19 min create new sequences (default)
+    large_gap_threshold_minutes=15     # Gaps > 15 min create new sequences (default)
 )
 
 # Check sequences created
@@ -189,7 +189,7 @@ After sequences are assigned, interpolate small gaps within each sequence:
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,    # Normal CGM interval
-    small_gap_max_minutes=19,       # Max gap to interpolate (default)
+    small_gap_max_minutes=15,       # Max gap to interpolate (default)
     snap_to_grid=True               # Align interpolated points to grid (default, ensures idempotency)
 )
 
@@ -206,7 +206,7 @@ if imputed_count > 0:
 
 #### Understanding Sequences
 
-Data is split into sequences when gaps exceed `large_gap_threshold_minutes` (default 19 minutes).
+Data is split into sequences when gaps exceed `large_gap_threshold_minutes` (default 15 minutes = 3 intervals).
 
 **Best Practice**: Explicitly call `detect_and_assign_sequences()` before other processing steps:
 
@@ -217,7 +217,7 @@ import polars as pl
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19
+    large_gap_threshold_minutes=15
 )
 
 # Step 2: Analyze sequences
@@ -261,7 +261,7 @@ Aligns timestamps to exact minute boundaries with fixed intervals.
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 synchronized_df = FormatProcessor.synchronize_timestamps(
     unified_df,
@@ -270,7 +270,7 @@ synchronized_df = FormatProcessor.synchronize_timestamps(
 
 # Option 2: Synchronize then interpolate (also works - produces same result)
 # synchronized_df = FormatProcessor.synchronize_timestamps(unified_df, expected_interval_minutes=5)
-# synchronized_df = FormatProcessor.interpolate_gaps(synchronized_df, expected_interval_minutes=5, small_gap_max_minutes=19)
+# synchronized_df = FormatProcessor.interpolate_gaps(synchronized_df, expected_interval_minutes=5, small_gap_max_minutes=15)
 
 # All timestamps are now at exact 5-minute intervals
 print(synchronized_df['datetime'].head(10))
@@ -374,14 +374,14 @@ unified_df = FormatParser.parse_file(file_path)
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19
+    large_gap_threshold_minutes=15
 )
 
 # Step 2: Interpolate small gaps within sequences
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 
 # Step 3: Synchronize timestamps to fixed grid
@@ -439,14 +439,14 @@ for csv_file in data_dir.glob("*.csv"):
         unified_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
             expected_interval_minutes=5,
-            large_gap_threshold_minutes=19
+            large_gap_threshold_minutes=15
         )
         
         # Step 2: Interpolate gaps
         unified_df = FormatProcessor.interpolate_gaps(
             unified_df,
             expected_interval_minutes=5,
-            small_gap_max_minutes=19
+            small_gap_max_minutes=15
         )
         
         # Step 3: Synchronize timestamps
@@ -551,14 +551,14 @@ glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
 glucose_df = FormatProcessor.detect_and_assign_sequences(
     glucose_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19
+    large_gap_threshold_minutes=15
 )
 
 # Step 2: Interpolate gaps
 glucose_df = FormatProcessor.interpolate_gaps(
     glucose_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 
 # Step 3: Prepare for inference
@@ -732,7 +732,7 @@ print(f"Created {sequence_count} sequence(s)")
 processed_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 print(f"After interpolation: {len(processed_df)}")
 
@@ -864,7 +864,7 @@ inference_df, warnings = FormatProcessor.prepare_for_inference(processed_df)
 PIPELINE_VERSION = "1.0.0"
 PROCESSOR_CONFIG = {
     'expected_interval_minutes': 5,      # Default: 5 minutes
-    'small_gap_max_minutes': 19,         # Default: 19 minutes (3 intervals + 80% tolerance)
+    'small_gap_max_minutes': 15,         # Default: 15 minutes (3 intervals)
     'minimum_duration_minutes': 60,      # Default: 60 minutes
     'maximum_wanted_duration': 480,      # Default: 480 minutes (8 hours)
 }
@@ -880,8 +880,9 @@ metadata = {
 
 ## See Also
 
-- [README.md](README.md) - Project overview and installation
-- [src/cgm_format/interface/PIPELINE.md](src/cgm_format/interface/PIPELINE.md) - Complete pipeline documentation
-- [src/cgm_format/formats/UNIFIED_FORMAT.md](src/cgm_format/formats/UNIFIED_FORMAT.md) - Unified schema specification
-- [examples/usage_example.py](examples/usage_example.py) - Complete usage examples
-- [tests/README.md](tests/README.md) - Test suite documentation
+- [README.md](../README.md) - Project overview and installation
+- [PHILOSOPHY.md](PHILOSOPHY.md) - Design principles and new sensor guide
+- [PIPELINE.md](PIPELINE.md) - Complete pipeline documentation
+- [UNIFIED_FORMAT.md](UNIFIED_FORMAT.md) - Unified schema specification
+- [examples/usage_example.py](../examples/usage_example.py) - Complete usage examples
+- [tests/README.md](../tests/README.md) - Test suite documentation

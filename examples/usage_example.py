@@ -50,7 +50,7 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     unified_df = FormatProcessor.detect_and_assign_sequences(
         unified_df,
         expected_interval_minutes=5,
-        large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
+        large_gap_threshold_minutes=15  # Gaps > 15 min create new sequences
     )
     sequence_count = unified_df['sequence_id'].n_unique()
     print(f"   ✓ Created {sequence_count} sequence(s)")
@@ -59,7 +59,7 @@ def example_1_basic_pipeline(file_path: Path) -> pl.DataFrame:
     unified_df = FormatProcessor.interpolate_gaps(
         unified_df,
         expected_interval_minutes=5,
-        small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
+        small_gap_max_minutes=15  # Default: 15 min (3 intervals)
     )
     print(f"   ✓ Interpolated gaps within sequences")
     
@@ -171,7 +171,7 @@ def example_2_quality_inspection(file_path: Path) -> None:
     processed_df = FormatProcessor.interpolate_gaps(
         unified_df,
         expected_interval_minutes=5,
-        small_gap_max_minutes=19
+        small_gap_max_minutes=15
     )
     
     imputed_count = processed_df.filter(
@@ -227,14 +227,14 @@ def example_3_batch_processing(data_dir: Path, output_dir: Path) -> None:
             unified_df = FormatProcessor.detect_and_assign_sequences(
                 unified_df,
                 expected_interval_minutes=5,
-                large_gap_threshold_minutes=19
+                large_gap_threshold_minutes=15
             )
             
             # Step 2: Interpolate gaps
             unified_df = FormatProcessor.interpolate_gaps(
                 unified_df,
                 expected_interval_minutes=5,
-                small_gap_max_minutes=19
+                small_gap_max_minutes=15
             )
             
             # Step 3: Synchronize timestamps
@@ -501,14 +501,14 @@ def example_7_ml_integration(file_path: Path) -> None:
     unified_df = FormatProcessor.detect_and_assign_sequences(
         unified_df,
         expected_interval_minutes=5,
-        large_gap_threshold_minutes=19
+        large_gap_threshold_minutes=15
     )
     
     # Step 2: Interpolate gaps
     unified_df = FormatProcessor.interpolate_gaps(
         unified_df,
         expected_interval_minutes=5,
-        small_gap_max_minutes=19  # Default
+        small_gap_max_minutes=15  # Default
     )
     
     # Step 3: Synchronize timestamps

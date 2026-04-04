@@ -106,14 +106,14 @@ class TestFullPipelineIntegration:
         interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
             expected_interval_minutes=5,
-            large_gap_threshold_minutes=19
+            large_gap_threshold_minutes=15
         )
         
         # Step 2: Interpolate gaps (sequences already created during parsing)
         interpolated_df = FormatProcessor.interpolate_gaps(
             interpolated_df,
             expected_interval_minutes=5,
-            small_gap_max_minutes=19  # Default: 19 min (3 intervals + 80% tolerance)
+            small_gap_max_minutes=15  # Default: 15 min (3 intervals)
         )
         interpolated_rows = len(interpolated_df)
         
@@ -204,14 +204,14 @@ class TestFullPipelineIntegration:
         interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
             expected_interval_minutes=5,
-            large_gap_threshold_minutes=19
+            large_gap_threshold_minutes=15
         )
         
         # Step 2: Interpolate gaps
         interpolated_df = FormatProcessor.interpolate_gaps(
             interpolated_df,
             expected_interval_minutes=5,
-            small_gap_max_minutes=19  # Default
+            small_gap_max_minutes=15  # Default
         )
         print(f"   ✅ Interpolated to {len(interpolated_df)} rows")
         

@@ -72,7 +72,7 @@ class TestCLIDetect:
         # Should succeed for supported formats
         if result.returncode == 0:
             assert "Detected format:" in result.stdout
-            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "medtronic", "unified"])
+            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "medtronic", "nightscout", "unified"])
         else:
             # Should fail gracefully for unsupported formats
             assert "Unknown format" in result.stdout or "Error" in result.stdout
@@ -161,7 +161,7 @@ class TestCLIProcess:
             "--interpolate",
             "--sync",
             "--interval", "5",
-            "--max-gap", "19",
+            "--max-gap", "15",
         ])
         
         if result.returncode == 0:
@@ -193,7 +193,7 @@ class TestCLIPipeline:
             str(file_path),
             "--output", str(output_file),
             "--interval", "5",
-            "--max-gap", "19",
+            "--max-gap", "15",
             "--min-duration", "15",
             "--max-duration", "1440",
             "--drop-duplicates",

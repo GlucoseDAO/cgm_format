@@ -29,12 +29,17 @@ CALIBRATION_PERIOD_HOURS = 24
 
 EXPECTED_INTERVAL_MINUTES = 5
 TOLERANCE_INTERVAL_MINUTES = 1.2*EXPECTED_INTERVAL_MINUTES
-SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 3 + 0.8*EXPECTED_INTERVAL_MINUTES #3 intervals +- 40% tolerance on each side
+# Threshold for small (fillable) gaps: up to 3 intervals (15 min).
+# Must be a multiple of EXPECTED_INTERVAL_MINUTES so that grid-aligned gap
+# measurement (used for commutativity between interpolate_gaps and
+# synchronize_timestamps) produces stable fill/skip decisions.
+# Matches glucose_data_processing's default small_gap_max_minutes=15.
+SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 3
 
-# Expected sequence (- = 1 minue, | = registered value, every 5 minutes):
+# Expected sequence (- = 1 minute, | = registered value, every 5 minutes):
 #|-----|-----|-----|-----|-----|
-#Synchronizeable/fillable gap schema (x - missing value, : - synchronized value, | - registered value):
-#|---|--:-----x-----x-----:--|---|
+# Fillable gap schema (x = missing value, : = synchronized value, | = registered value):
+#|---|--:-----x-----:--|---|
 
 MINIMUM_DURATION_MINUTES = 60 # minimum expected duration of a sequence for inference
 MAXIMUM_WANTED_DURATION_MINUTES = 480 # maximum duration of a sequence to be included in the inference
@@ -48,6 +53,7 @@ class SupportedCGMFormat(Enum):
     DEXCOM = "dexcom"
     LIBRE = "libre"
     MEDTRONIC = "medtronic"
+    NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides
 
 class ValidationMethod(Flag):

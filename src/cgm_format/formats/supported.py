@@ -6,6 +6,7 @@ from cgm_format.formats.unified import CGM_SCHEMA, UNIFIED_DETECTION_PATTERNS, U
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DEXCOM_DETECTION_PATTERNS, DEXCOM_DATA_START_LINE
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
+from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
 
 
 
@@ -15,6 +16,7 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
     SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
+    SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
 }
 
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
@@ -22,6 +24,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
+    SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DETECTION_PATTERNS,
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
@@ -29,6 +32,7 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_DATA_START_LINE,
     SupportedCGMFormat.LIBRE: LIBRE_DATA_START_LINE,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
+    SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
@@ -59,4 +63,5 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         # BOM marker in header
         ('incorrect-label', 'Index', None),
     ],
+    SupportedCGMFormat.NIGHTSCOUT: [],
 }

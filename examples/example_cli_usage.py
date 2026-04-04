@@ -181,7 +181,7 @@ def main(
                 "--interpolate",
                 "--sync",
                 "--interval", "5",
-                "--max-gap", "19",
+                "--max-gap", "15",
                 "--stats"
             ],
             "Process unified file with interpolation and synchronization"
@@ -198,7 +198,7 @@ def main(
             "pipeline", str(test_file),
             "--output", str(pipeline_file),
             "--interval", "5",
-            "--max-gap", "19",
+            "--max-gap", "15",
             "--min-duration", "15",
             "--max-duration", "1440",
             "--drop-duplicates",

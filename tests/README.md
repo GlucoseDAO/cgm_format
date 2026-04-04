@@ -190,7 +190,7 @@ uv run pytest tests/ -k "idempotency"
 
 - **Interpolate Gaps Tests** - Gap detection and interpolation
   - `test_interpolate_gaps_no_gaps()` - Tests no interpolation when no gaps exist
-  - `test_interpolate_gaps_with_small_gap()` - Tests interpolation of gaps < 19 minutes
+  - `test_interpolate_gaps_with_small_gap()` - Tests interpolation of gaps <= SMALL_GAP_MAX_MINUTES
   - `test_interpolate_gaps_with_snap_to_grid()` - **Parametrized:** Tests grid-aligned interpolation with various starting times and gap sizes (8, 13, 18, 23 minutes) and different timestamp offsets (0-300 seconds in 10-second steps)
 
 - **Prepare for Inference Tests** - Sequence selection, truncation, quality checks
@@ -331,7 +331,7 @@ uv run pytest tests/ -k "idempotency"
 
 **Pipeline Stages Tested:**
 1. **Parse:** Vendor CSV → Unified DataFrame
-2. **Interpolate:** Fill small gaps (< 19 minutes) with linear interpolation
+2. **Interpolate:** Fill small gaps (<= 15 minutes) with linear interpolation
 3. **Synchronize:** Round timestamps to nearest 5-minute grid
 4. **Prepare:** Select latest sequence, truncate to max duration, quality checks
 5. **Convert:** Extract data-only columns, remove duplicates

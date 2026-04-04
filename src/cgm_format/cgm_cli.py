@@ -129,7 +129,7 @@ def process(
     interpolate: bool = typer.Option(True, "--interpolate/--no-interpolate", help="Interpolate gaps"),
     synchronize: bool = typer.Option(True, "--sync/--no-sync", help="Synchronize timestamps"),
     interval: int = typer.Option(5, "--interval", "-i", help="Expected interval in minutes"),
-    max_gap: int = typer.Option(19, "--max-gap", help="Maximum gap to interpolate (minutes)"),
+    max_gap: int = typer.Option(15, "--max-gap", help="Maximum gap to interpolate (minutes)"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
 ) -> None:
     """Process unified format data (interpolate gaps, synchronize timestamps)."""
@@ -194,7 +194,7 @@ def pipeline(
     input_file: Path = typer.Argument(..., help="Input CGM data file (any supported format)"),
     output_file: Optional[Path] = typer.Option(None, "--output", "-o", help="Output CSV file"),
     interval: int = typer.Option(5, "--interval", "-i", help="Expected interval in minutes"),
-    max_gap: int = typer.Option(19, "--max-gap", help="Maximum gap to interpolate (minutes)"),
+    max_gap: int = typer.Option(15, "--max-gap", help="Maximum gap to interpolate (minutes)"),
     min_duration: int = typer.Option(15, "--min-duration", help="Minimum sequence duration (minutes)"),
     max_duration: int = typer.Option(1440, "--max-duration", help="Maximum sequence duration (minutes)"),
     glucose_only: bool = typer.Option(False, "--glucose-only", help="Keep only glucose events"),
@@ -597,6 +597,52 @@ def batch(
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
+
+
+# ===== Nightscout Download Command =====
+
+@app.command(name="download-nightscout")
+def download_nightscout_cmd(
+    url: str = typer.Argument(..., help="Nightscout base URL (e.g. https://my-ns.example.com)"),
+    output_dir: Path = typer.Option(Path("."), "--output", "-o", help="Output directory for JSON files"),
+    count: int = typer.Option(10_000, "--count", "-c", help="Maximum entries to fetch"),
+    days: Optional[int] = typer.Option(None, "--days", "-d", help="Only fetch last N days"),
+    token: Optional[str] = typer.Option(None, "--token", "-t", help="API token for authenticated instances"),
+    parse: bool = typer.Option(False, "--parse", "-p", help="Also parse to unified CSV"),
+) -> None:
+    """Download CGM data from a Nightscout instance via its REST API.
+
+    Fetches entries, treatments, and profile JSON from the Nightscout API
+    and saves them to the output directory.
+    """
+    try:
+        from cgm_format.nightscout_downloader import download_nightscout as _download
+    except ImportError:
+        console.print("[red]httpx is required for Nightscout downloads. Install with: uv add httpx[/red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[bold green]Downloading from {url}..."):
+        entries_path, treatments_path, profile_path = _download(
+            base_url=url,
+            output_dir=output_dir,
+            count=count,
+            token=token,
+            days=days,
+        )
+
+    console.print(f"[green]✓[/green] Entries:    {entries_path}")
+    console.print(f"[green]✓[/green] Treatments: {treatments_path}")
+    console.print(f"[green]✓[/green] Profile:    {profile_path}")
+
+    if parse:
+        with console.status("[bold green]Parsing to unified format..."):
+            entries_json = entries_path.read_text()
+            treatments_json = treatments_path.read_text()
+            unified_df = FormatParser.parse_nightscout(entries_json, treatments_json)
+
+        csv_path = output_dir / "nightscout_unified.csv"
+        FormatParser.to_csv_file(unified_df, str(csv_path))
+        console.print(f"[green]✓[/green] Unified CSV: {csv_path} ({len(unified_df)} rows)")
 
 
 # ===== Info & Stats Commands =====
