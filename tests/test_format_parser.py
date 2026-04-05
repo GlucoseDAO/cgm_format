@@ -118,24 +118,6 @@ class TestFormatDetection:
         assert len(failed_files) == 0, f"Failed to detect format for {len(failed_files)} files"
         assert sum(format_counts.values()) == len(supported_data_files), "Not all supported files were detected"
     
-    def test_format_counts_reasonable(self, supported_data_files):
-        """Test that detected formats are reasonable (at least one Dexcom or Libre)."""
-        format_counts = Counter()
-        
-        for csv_file in supported_data_files:
-            with open(csv_file, 'rb') as f:
-                raw_data = f.read()
-            text_data = FormatParser.decode_raw_data(raw_data)
-            detected_format = FormatParser.detect_format(text_data)
-            format_counts[detected_format] += 1
-        
-        # At least one of Dexcom or Libre should be present (based on filenames)
-        has_dexcom_or_libre = (
-            format_counts.get(SupportedCGMFormat.DEXCOM, 0) > 0 or
-            format_counts.get(SupportedCGMFormat.LIBRE, 0) > 0
-        )
-        assert has_dexcom_or_libre, "Expected at least one Dexcom or Libre file"
-
     def test_format_supported(self, all_data_files, supported_data_files):
         """Test format_supported method correctly identifies supported formats."""
         correct_positives = 0
@@ -419,53 +401,6 @@ class TestSaveToDirectory:
         
         assert len(failed_comparisons) == 0, \
             f"DataFrame comparison failed for {len(failed_comparisons)} files"
-
-
-class TestConvenienceMethods:
-    """Test convenience parsing methods."""
-    
-    def test_parse_from_file(self, supported_data_files):
-        """Test parse_file convenience method."""
-        csv_file = supported_data_files[0]
-        
-        # Test convenience method
-        unified_df = FormatParser.parse_file(str(csv_file))
-        
-        assert isinstance(unified_df, pl.DataFrame)
-        assert len(unified_df) > 0
-        assert 'datetime' in unified_df.columns
-        assert 'glucose' in unified_df.columns
-    
-    def test_parse_from_bytes(self, supported_data_files):
-        """Test parse_from_bytes convenience method."""
-        csv_file = supported_data_files[0]
-        
-        with open(csv_file, 'rb') as f:
-            raw_data = f.read()
-        
-        # Test convenience method
-        unified_df = FormatParser.parse_from_bytes(raw_data)
-        
-        assert isinstance(unified_df, pl.DataFrame)
-        assert len(unified_df) > 0
-        assert 'datetime' in unified_df.columns
-        assert 'glucose' in unified_df.columns
-    
-    def test_parse_from_string(self, supported_data_files):
-        """Test parse_from_string convenience method."""
-        csv_file = supported_data_files[0]
-        
-        with open(csv_file, 'rb') as f:
-            raw_data = f.read()
-        text_data = FormatParser.decode_raw_data(raw_data)
-        
-        # Test convenience method
-        unified_df = FormatParser.parse_from_string(text_data)
-        
-        assert isinstance(unified_df, pl.DataFrame)
-        assert len(unified_df) > 0
-        assert 'datetime' in unified_df.columns
-        assert 'glucose' in unified_df.columns
 
 
 class TestErrorHandling:

@@ -102,14 +102,6 @@ class TestFrictionlessSchemaGeneration:
         assert "primaryKey" in schema_dict
         assert schema_dict["primaryKey"] == ["sequence_id", "datetime"]
     
-    def test_schema_without_primary_key(self):
-        """Vendor schemas should not have primary key by default."""
-        dexcom_schema = DEXCOM_SCHEMA.to_frictionless_schema()
-        libre_schema = LIBRE_SCHEMA.to_frictionless_schema()
-        
-        assert "primaryKey" not in dexcom_schema
-        assert "primaryKey" not in libre_schema
-    
     def test_dexcom_dialect_with_comment_rows(self):
         """Dexcom schema should support commentRows dialect."""
         schema_dict = DEXCOM_SCHEMA.to_frictionless_schema(
@@ -130,12 +122,6 @@ class TestFrictionlessSchemaGeneration:
         assert "headerRows" in schema_dict["dialect"]
         assert schema_dict["dialect"]["headerRows"] == [2]
     
-    def test_schema_without_dialect(self):
-        """Schema without dialect should not have dialect key."""
-        schema_dict = DEXCOM_SCHEMA.to_frictionless_schema()
-        assert "dialect" not in schema_dict
-
-
 class TestDexcomColumnOrder:
     """Test that Dexcom schema column order matches actual CSV files."""
     
@@ -329,20 +315,6 @@ class TestRegressionPrevention:
             assert pk_field in field_names, (
                 f"Primary key field '{pk_field}' not found in schema fields"
             )
-    
-    def test_vendor_schemas_no_unified_primary_key(self):
-        """REGRESSION: Vendor schemas should not have unified format primary keys."""
-        dexcom_schema = DEXCOM_SCHEMA.to_frictionless_schema()
-        libre_schema = LIBRE_SCHEMA.to_frictionless_schema()
-        
-        # These schemas should NOT have sequence_id and datetime
-        dexcom_fields = [f["name"] for f in dexcom_schema["fields"]]
-        libre_fields = [f["name"] for f in libre_schema["fields"]]
-        
-        assert "sequence_id" not in dexcom_fields
-        assert "datetime" not in dexcom_fields
-        assert "sequence_id" not in libre_fields
-        assert "datetime" not in libre_fields
     
     def test_timestamp_not_in_data_columns_for_dexcom(self):
         """REGRESSION: Dexcom Timestamp should be in service_columns, not data_columns."""

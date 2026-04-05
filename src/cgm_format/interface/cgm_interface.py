@@ -47,6 +47,7 @@ class SupportedCGMFormat(Enum):
     """Supported CGM vendor formats."""
     DEXCOM = "dexcom"
     LIBRE = "libre"
+    MEDTRONIC = "medtronic"
     UNIFIED_CGM = "unified"  # Format that this library provides
 
 class ValidationMethod(Flag):

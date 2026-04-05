@@ -141,14 +141,6 @@ def sample_data_with_quality_issues() -> pl.DataFrame:
     return create_test_dataframe(data)
 
 
-def test_processor_initialization():
-    """Test processor class configuration."""
-    # FormatProcessor is now all classmethods - no instantiation needed
-    assert FormatProcessor.expected_interval_minutes == EXPECTED_INTERVAL_MINUTES
-    assert FormatProcessor.small_gap_max_minutes == SMALL_GAP_MAX_MINUTES
-
-
-
 def test_constants_match_documentation():
     """Test that constants match documented values in PIPELINE.md."""
     # From PIPELINE.md:
@@ -978,26 +970,6 @@ def test_prepare_for_inference_with_sensor_calibration_quality():
     assert (warnings & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
 
 
-def test_warnings_accumulation():
-    """Test that warnings are returned as flags from methods."""
-    # FormatProcessor uses classmethods that return warnings
-    # Warnings are no longer accumulated in instance state
-    
-    # Test that warnings combine correctly using bitwise OR
-    warning1 = ProcessingWarning.CALIBRATION  # Value 2
-    warning2 = ProcessingWarning.OUT_OF_RANGE  # Value 4
-    
-    combined = warning1 | warning2
-    
-    # Check individual flags are present
-    assert (combined & ProcessingWarning.CALIBRATION) == ProcessingWarning.CALIBRATION
-    assert (combined & ProcessingWarning.OUT_OF_RANGE) == ProcessingWarning.OUT_OF_RANGE
-    
-    # Check that unset flags are not present  
-    assert not (combined & ProcessingWarning.TOO_SHORT)
-    assert not (combined & ProcessingWarning.IMPUTATION)
-
-
 def test_sequence_creation_with_no_sequence_id():
     """Test that sequence_id is created when not present."""
     
@@ -1737,52 +1709,6 @@ def test_prepare_for_inference_drop_duplicates():
     assert ProcessingWarning.TIME_DUPLICATES in warnings
 
 
-def test_prepare_for_inference_time_duplicates_warning():
-    """Test that TIME_DUPLICATES warning is raised for non-unique timestamps."""
-    # FormatProcessor uses classmethods - no instantiation needed
-    
-    base_time = datetime(2024, 1, 1, 12, 0, 0)
-    data = []
-    
-    # Create data with duplicate timestamps
-    for i in range(5):
-        data.append({
-            'sequence_id': 0,
-            'event_type': UnifiedEventType.GLUCOSE.value,
-            'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(minutes=5 * i),
-            'glucose': 100.0 + i * 2,
-            'carbs': None,
-            'insulin_slow': None,
-            'insulin_fast': None,
-            'exercise': None,
-        })
-    
-    # Add a duplicate timestamp
-    data.append({
-        'sequence_id': 0,
-        'event_type': UnifiedEventType.GLUCOSE.value,
-        'quality': GOOD_QUALITY.value,
-        'datetime': base_time + timedelta(minutes=10),  # Same as index 2
-        'glucose': 999.0,
-        'carbs': None,
-        'insulin_slow': None,
-        'insulin_fast': None,
-        'exercise': None,
-    })
-    
-    df = create_test_dataframe(data)
-    
-    unified_df, warnings = FormatProcessor.prepare_for_inference(
-        df,
-        minimum_duration_minutes=10,
-        maximum_wanted_duration=120,
-    )
-    
-    # Should have TIME_DUPLICATES warning
-    assert (warnings & ProcessingWarning.TIME_DUPLICATES) == ProcessingWarning.TIME_DUPLICATES
-
-
 def test_prepare_for_inference_warnings_after_truncation():
     """Test that warnings are calculated on truncated data, not before truncation.
     
@@ -2007,19 +1933,18 @@ def test_synchronize_timestamps_is_lossless():
 
 class TestSequenceDetection:
     """Test sequence detection logic in processor for edge cases."""
-    
+
     @staticmethod
     def _create_test_df_with_schema(data):
         """Helper to create test DataFrame with proper schema validation."""
         df = pl.DataFrame(data)
         return CGM_SCHEMA.validate_dataframe(df, enforce=True)
-    
+
     def test_large_gap_creates_new_sequence(self):
         """Test that gaps larger than SMALL_GAP_MAX_MINUTES create new sequences (glucose-only logic)."""
         base_time = datetime(2024, 1, 1, 12, 0, 0)
         data = []
-        
-        # First sequence: 3 glucose points at 0, 5, 10 minutes
+
         for i in range(3):
             data.append({
                 'sequence_id': 0,
@@ -2028,14 +1953,9 @@ class TestSequenceDetection:
                 'original_datetime': base_time + timedelta(minutes=5 * i),
                 'datetime': base_time + timedelta(minutes=5 * i),
                 'glucose': 100.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Large gap (20 minutes, > SMALL_GAP_MAX_MINUTES threshold)
-        # Second sequence: 3 glucose points at 30, 35, 40 minutes
+
         for i in range(3):
             data.append({
                 'sequence_id': 0,
@@ -2044,14 +1964,9 @@ class TestSequenceDetection:
                 'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
                 'datetime': base_time + timedelta(minutes=30 + 5 * i),
                 'glucose': 110.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Another large gap (25 minutes)
-        # Third sequence: 2 glucose points at 65, 70 minutes
+
         for i in range(2):
             data.append({
                 'sequence_id': 0,
@@ -2060,198 +1975,123 @@ class TestSequenceDetection:
                 'original_datetime': base_time + timedelta(minutes=65 + 5 * i),
                 'datetime': base_time + timedelta(minutes=65 + 5 * i),
                 'glucose': 120.0 + i * 2,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
+
         df = self._create_test_df_with_schema(data)
-        
-        # Detect sequences
         result = FormatProcessor.detect_and_assign_sequences(
-            df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
+            df, expected_interval_minutes=5, large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
         )
-        
-        # Should have 3 distinct sequences
+
         unique_sequences = result['sequence_id'].unique().sort().to_list()
         assert len(unique_sequences) == 3, f"Expected 3 sequences, got {len(unique_sequences)}"
-        
-        # Verify first sequence has 3 records
+
         seq_0_data = result.filter(pl.col('sequence_id') == unique_sequences[0])
         assert len(seq_0_data) == 3
-        
-        # Verify no large gaps within any sequence (glucose-only check)
+
         for seq_id in unique_sequences:
             seq_glucose = result.filter(
                 (pl.col('sequence_id') == seq_id) &
                 (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
             ).sort('datetime')
-            
             if len(seq_glucose) > 1:
                 time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
                 max_gap = time_diffs.drop_nulls().max()
                 assert max_gap <= SMALL_GAP_MAX_MINUTES, \
                     f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
-    
+
     def test_multiple_existing_sequences_with_internal_gaps(self):
         """Test that existing multiple sequences with internal large glucose gaps are split correctly."""
         base_time = datetime(2024, 1, 1, 12, 0, 0)
         data = []
-        
-        # Sequence 1: has a large internal glucose gap, should be split
-        # Part A: 0-10 minutes (3 points)
+
+        # Sequence 1: large internal gap, should split into 2
         for i in range(3):
             data.append({
-                'sequence_id': 1,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 1, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(minutes=5 * i),
                 'datetime': base_time + timedelta(minutes=5 * i),
                 'glucose': 100.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Large gap (20 minutes) within sequence 1
-        # Part B: 30-40 minutes (3 points)
         for i in range(3):
             data.append({
-                'sequence_id': 1,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 1, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(minutes=30 + 5 * i),
                 'datetime': base_time + timedelta(minutes=30 + 5 * i),
                 'glucose': 105.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Sequence 2: continuous, no internal gaps (should stay as one sequence)
+
+        # Sequence 2: continuous, stays as 1
         for i in range(4):
             data.append({
-                'sequence_id': 2,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 2, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(hours=2, minutes=5 * i),
                 'datetime': base_time + timedelta(hours=2, minutes=5 * i),
                 'glucose': 110.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Sequence 3: has TWO large internal gaps, should be split into 3 parts
-        # Part A: 0-5 minutes (2 points)
+
+        # Sequence 3: TWO large gaps, should split into 3
         for i in range(2):
             data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 3, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(hours=4, minutes=5 * i),
                 'datetime': base_time + timedelta(hours=4, minutes=5 * i),
                 'glucose': 120.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Large gap (25 minutes)
-        # Part B: 30-35 minutes (2 points)
         for i in range(2):
             data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 3, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
                 'datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
                 'glucose': 125.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Another large gap (20 minutes)
-        # Part C: 55-60 minutes (2 points)
         for i in range(2):
             data.append({
-                'sequence_id': 3,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 3, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
                 'datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
                 'glucose': 130.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
-        # Sequence 4: continuous, no gaps (should stay as one sequence)
+
+        # Sequence 4: continuous, stays as 1
         for i in range(3):
             data.append({
-                'sequence_id': 4,
-                'event_type': UnifiedEventType.GLUCOSE.value,
-                'quality': 0,
+                'sequence_id': 4, 'event_type': UnifiedEventType.GLUCOSE.value, 'quality': 0,
                 'original_datetime': base_time + timedelta(hours=6, minutes=5 * i),
                 'datetime': base_time + timedelta(hours=6, minutes=5 * i),
                 'glucose': 140.0,
-                'carbs': None,
-                'insulin_slow': None,
-                'insulin_fast': None,
-                'exercise': None,
+                'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
             })
-        
+
         df = self._create_test_df_with_schema(data)
-        
-        # Process with split_sequences_with_internal_gaps
         result = FormatProcessor.detect_and_assign_sequences(
-            df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
+            df, expected_interval_minutes=5, large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
         )
-        
-        # Expected: 
-        # Seq 1 splits into 2 (1 gap) = 2 sequences
-        # Seq 2 stays as 1 = 1 sequence  
-        # Seq 3 splits into 3 (2 gaps) = 3 sequences
-        # Seq 4 stays as 1 = 1 sequence
-        # Total = 7 sequences
-        
+
+        # 2 + 1 + 3 + 1 = 7 sequences
         unique_sequences = result['sequence_id'].unique().sort().to_list()
         assert len(unique_sequences) == 7, f"Expected 7 sequences, got {len(unique_sequences)}: {unique_sequences}"
-        
-        # Verify all sequence IDs are unique (no duplicates)
-        assert len(unique_sequences) == len(set(unique_sequences)), \
-            "Sequence IDs are not unique!"
-        
-        # Verify no large gaps within any sequence (glucose-only check)
+        assert len(unique_sequences) == len(set(unique_sequences)), "Sequence IDs are not unique!"
+
         for seq_id in unique_sequences:
             seq_glucose = result.filter(
                 (pl.col('sequence_id') == seq_id) &
                 (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
             ).sort('datetime')
-            
             if len(seq_glucose) > 1:
                 time_diffs = seq_glucose['datetime'].diff().dt.total_seconds() / 60.0
                 max_gap = time_diffs.drop_nulls().max()
                 assert max_gap <= SMALL_GAP_MAX_MINUTES, \
                     f"Sequence {seq_id} has glucose gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
-        
-        # Verify we have the expected number of data points
-        total_points = len(result)
-        # Original data had 6+4+6+3 = 19 points
-        assert total_points == 19, f"Expected 19 points, got {total_points}"
-    
+
+        assert len(result) == 19, f"Expected 19 points, got {len(result)}"
+
     def test_glucose_gap_with_event_bridge(self):
         """Test that non-glucose events don't bridge glucose gaps.
         

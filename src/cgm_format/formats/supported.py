@@ -5,6 +5,7 @@ from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.formats.unified import CGM_SCHEMA, UNIFIED_DETECTION_PATTERNS, UNIFIED_DATA_START_LINE
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DEXCOM_DETECTION_PATTERNS, DEXCOM_DATA_START_LINE
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
+from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
 
 
 
@@ -13,18 +14,21 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.UNIFIED_CGM: CGM_SCHEMA,
     SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
     SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
+    SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
 }
 
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
+    SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DATA_START_LINE,
     SupportedCGMFormat.DEXCOM: DEXCOM_DATA_START_LINE,
     SupportedCGMFormat.LIBRE: LIBRE_DATA_START_LINE,
+    SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
@@ -45,4 +49,14 @@ KNOWN_ISSUES_TO_SUPPRESS = {
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
     SupportedCGMFormat.LIBRE: [],
+    SupportedCGMFormat.MEDTRONIC: [
+        # Medtronic CareLink exports contain "-------" placeholders in numeric columns,
+        # repeated header rows mid-file, and European decimal format (comma separator)
+        ('type-error', 'Sensor Glucose (mg/dL)', None),
+        ('type-error', 'BG Reading (mg/dL)', None),
+        ('type-error', 'Bolus Volume Delivered (U)', None),
+        ('type-error', 'BWZ Carb Input (grams)', None),
+        # BOM marker in header
+        ('incorrect-label', 'Index', None),
+    ],
 }
