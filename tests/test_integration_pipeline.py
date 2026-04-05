@@ -22,6 +22,8 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     ZeroValidInputError,
     ProcessingWarning,
+    SMALL_GAP_MAX_MINUTES,
+    EXPECTED_INTERVAL_MINUTES,
 )
 
 
@@ -105,33 +107,33 @@ class TestFullPipelineIntegration:
         # Step 1: Detect and assign sequences
         interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=15
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
+            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
         )
-        
+
         # Step 2: Interpolate gaps (sequences already created during parsing)
         interpolated_df = FormatProcessor.interpolate_gaps(
             interpolated_df,
-            expected_interval_minutes=5,
-            small_gap_max_minutes=15  # Default: 15 min (3 intervals)
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
+            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
         )
         interpolated_rows = len(interpolated_df)
-        
+
         assert interpolated_rows >= parsed_rows, "Interpolation should not reduce rows"
         assert 'sequence_id' in interpolated_df.columns, "Missing sequence_id after interpolation"
-        
+
         sequence_count = interpolated_df['sequence_id'].n_unique()
-        
+
         # Synchronize timestamps
         synchronized_df = FormatProcessor.synchronize_timestamps(
             interpolated_df,
-            expected_interval_minutes=5
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES
         )
-        
+
         # Stage 5: Prepare for inference with quality checks
         inference_df, warning_flags = FormatProcessor.prepare_for_inference(
             synchronized_df,
-            minimum_duration_minutes=15,  # 15 minutes minimum
+            minimum_duration_minutes=SMALL_GAP_MAX_MINUTES,
             maximum_wanted_duration=24 * 60  # 24 hours maximum (1440 minutes)
         )
         
@@ -203,21 +205,21 @@ class TestFullPipelineIntegration:
         # Step 1: Detect sequences
         interpolated_df = FormatProcessor.detect_and_assign_sequences(
             unified_df,
-            expected_interval_minutes=5,
-            large_gap_threshold_minutes=15
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
+            large_gap_threshold_minutes=SMALL_GAP_MAX_MINUTES
         )
-        
+
         # Step 2: Interpolate gaps
         interpolated_df = FormatProcessor.interpolate_gaps(
             interpolated_df,
-            expected_interval_minutes=5,
-            small_gap_max_minutes=15  # Default
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES,
+            small_gap_max_minutes=SMALL_GAP_MAX_MINUTES
         )
         print(f"   ✅ Interpolated to {len(interpolated_df)} rows")
-        
+
         sequence_count = interpolated_df['sequence_id'].n_unique()
         print(f"   Data contains {sequence_count} sequence(s)")
-        
+
         # Validate sequences
         sequence_ids = interpolated_df['sequence_id'].unique().sort()
         for seq_id in sequence_ids:
@@ -225,20 +227,20 @@ class TestFullPipelineIntegration:
             seq_len = len(seq_df)
             duration = (seq_df['datetime'].max() - seq_df['datetime'].min()).total_seconds() / 60
             print(f"   Sequence {seq_id}: {seq_len} points, {duration:.1f} minutes")
-        
+
         # Synchronize
         print("\n3. Synchronizing timestamps...")
         synchronized_df = FormatProcessor.synchronize_timestamps(
             interpolated_df,
-            expected_interval_minutes=5
+            expected_interval_minutes=EXPECTED_INTERVAL_MINUTES
         )
         print(f"   ✅ Synchronized to {len(synchronized_df)} rows")
-        
+
         # Prepare for inference
         print("\n4. Preparing for inference...")
         inference_df, warning_flags = FormatProcessor.prepare_for_inference(
             synchronized_df,
-            minimum_duration_minutes=15,
+            minimum_duration_minutes=SMALL_GAP_MAX_MINUTES,
             maximum_wanted_duration=24 * 60
         )
         print(f"   ✅ Prepared {len(inference_df)} rows for inference")

@@ -815,17 +815,23 @@ class FormatParser(CGMParser):
     # ===== Nightscout Processing Methods =====
 
     @classmethod
-    def _is_nightscout_json(cls, data: str) -> bool:
-        """Check if data looks like Nightscout JSON (array of objects)."""
+    def _is_nightscout_entries_json(cls, data: str) -> bool:
+        """Check if data looks like Nightscout entries JSON (array with sgv keys)."""
         stripped = data.strip()
-        return stripped.startswith("[") and ('"sgv"' in stripped[:2000] or '"eventType"' in stripped[:2000])
+        return stripped.startswith("[") and '"sgv"' in stripped[:2000]
+
+    @classmethod
+    def _is_nightscout_treatments_json(cls, data: str) -> bool:
+        """Check if data looks like Nightscout treatments JSON (array with eventType keys)."""
+        stripped = data.strip()
+        return stripped.startswith("[") and '"eventType"' in stripped[:2000]
 
     @classmethod
     def _is_nightscout_treatments(cls, data: str) -> bool:
         """Check if data is Nightscout treatments (CSV or JSON)."""
+        if cls._is_nightscout_treatments_json(data):
+            return True
         stripped = data.strip()
-        if stripped.startswith("["):
-            return '"eventType"' in stripped[:2000]
         first_line = stripped.split("\n", 1)[0]
         return any(p in first_line for p in NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS)
 
@@ -1011,7 +1017,7 @@ class FormatParser(CGMParser):
         For combined entries + treatments parsing, use parse_nightscout().
         """
         try:
-            if cls._is_nightscout_json(text_data):
+            if cls._is_nightscout_entries_json(text_data):
                 entries_df = cls._parse_nightscout_entries_json(text_data)
             else:
                 entries_df = cls._parse_nightscout_entries_csv(text_data)
@@ -1051,7 +1057,7 @@ class FormatParser(CGMParser):
         else:
             entries_text = entries_data
 
-        if cls._is_nightscout_json(entries_text):
+        if cls._is_nightscout_entries_json(entries_text):
             entries_df = cls._parse_nightscout_entries_json(entries_text)
         else:
             entries_df = cls._parse_nightscout_entries_csv(entries_text)
@@ -1066,7 +1072,7 @@ class FormatParser(CGMParser):
             else:
                 treatments_text = treatments_data
 
-            if cls._is_nightscout_json(treatments_text):
+            if cls._is_nightscout_treatments_json(treatments_text):
                 treatments_df = cls._parse_nightscout_treatments_json(treatments_text)
             else:
                 treatments_df = cls._parse_nightscout_treatments_csv(treatments_text)

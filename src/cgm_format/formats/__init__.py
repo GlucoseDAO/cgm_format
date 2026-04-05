@@ -57,6 +57,23 @@ from cgm_format.formats.medtronic import (
     MEDTRONIC_TIMESTAMP_FORMATS,
 )
 
+# Nightscout format
+from cgm_format.formats.nightscout import (
+    NIGHTSCOUT_ENTRIES_SCHEMA,
+    NIGHTSCOUT_TREATMENTS_SCHEMA,
+    NightscoutEntryColumn,
+    NightscoutTreatmentColumn,
+    NightscoutTreatmentEventType,
+    NightscoutDirection,
+    NIGHTSCOUT_DETECTION_PATTERNS,
+    NIGHTSCOUT_ENTRIES_DETECTION_PATTERNS,
+    NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS,
+    NIGHTSCOUT_HEADER_LINE,
+    NIGHTSCOUT_DATA_START_LINE,
+    NIGHTSCOUT_METADATA_LINES,
+    NIGHTSCOUT_TIMESTAMP_FORMATS,
+)
+
 # Supported format
 from cgm_format.formats.supported import (
     SCHEMA_MAP,
@@ -115,6 +132,21 @@ __all__ = [
     "MEDTRONIC_DATA_START_LINE",
     "MEDTRONIC_METADATA_LINES",
     "MEDTRONIC_TIMESTAMP_FORMATS",
+
+    # Nightscout format
+    "NIGHTSCOUT_ENTRIES_SCHEMA",
+    "NIGHTSCOUT_TREATMENTS_SCHEMA",
+    "NightscoutEntryColumn",
+    "NightscoutTreatmentColumn",
+    "NightscoutTreatmentEventType",
+    "NightscoutDirection",
+    "NIGHTSCOUT_DETECTION_PATTERNS",
+    "NIGHTSCOUT_ENTRIES_DETECTION_PATTERNS",
+    "NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS",
+    "NIGHTSCOUT_HEADER_LINE",
+    "NIGHTSCOUT_DATA_START_LINE",
+    "NIGHTSCOUT_METADATA_LINES",
+    "NIGHTSCOUT_TIMESTAMP_FORMATS",
 
     # Supported format
     "SCHEMA_MAP",
