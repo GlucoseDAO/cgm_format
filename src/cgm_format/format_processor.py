@@ -528,51 +528,43 @@ class FormatProcessor(CGMProcessor):
         # Get common grid start for this sequence
         grid_start = cls.get_sequence_grid_start(seq_data, expected_interval_minutes)
         
-        # Detect if data is already synchronized (has SYNCHRONIZATION flag)
-        # If synchronized, use datetime for gap detection; otherwise use original_datetime
-        has_sync_flag = glucose_events.filter(
-            (pl.col('quality') & Quality.SYNCHRONIZATION.value) != 0
-        ).height > 0
-        
-        # Use datetime if already synchronized, original_datetime otherwise
-        # This ensures interpolation aligns with the existing grid after synchronization
-        timestamp_col = 'datetime' if has_sync_flag else 'original_datetime'
-        
-        # Sort glucose events by the appropriate timestamp column
-        glucose_events_sorted = glucose_events.sort(timestamp_col)
-        
-        # Calculate time differences using appropriate timestamp column
-        time_diffs = glucose_events_sorted[timestamp_col].diff().dt.total_seconds() / 60.0
+        # Always use original_datetime for gap detection.
+        # Grid snapping can both inflate and compress gaps (e.g. 19.98 min raw → 15 min
+        # on grid), so only the absolute reference frame gives correct threshold decisions.
+        # The snap_to_grid branch below handles WHERE to place interpolated points.
+        glucose_events_sorted = glucose_events.sort('original_datetime')
+
+        time_diffs = glucose_events_sorted['original_datetime'].diff().dt.total_seconds() / 60.0
         time_diffs_list = time_diffs.to_list()
-        
+
         # Convert to list of dicts for easier row creation
         glucose_list = glucose_events_sorted.to_dicts()
-        
+
         # Find small gaps to interpolate (now we know consecutive rows are all glucose events)
         small_gaps = []
         for i, diff in enumerate(time_diffs_list):
             if i > 0 and expected_interval_minutes < diff <= small_gap_max_minutes:
                 prev_row = glucose_list[i - 1]
                 current_row = glucose_list[i]
-                
+
                 # Check that both have valid glucose values
                 if (prev_row.get('glucose') is not None and
                     current_row.get('glucose') is not None):
                     small_gaps.append((i, diff))
-        
+
         if not small_gaps:
             # No gaps to fill, return original data
             return seq_data
-        
+
         new_rows = []
-        
+
         for gap_idx, time_diff_minutes in small_gaps:
             prev_row = glucose_list[gap_idx - 1]
             current_row = glucose_list[gap_idx]
-            
-            # Use the appropriate timestamp column (datetime if synchronized, original_datetime otherwise)
-            prev_dt = prev_row[timestamp_col]
-            current_dt = current_row[timestamp_col]
+
+            # Always use original_datetime as absolute reference
+            prev_dt = prev_row['original_datetime']
+            current_dt = current_row['original_datetime']
             
             if snap_to_grid:
                     # Snap to sequence grid: determine ALL grid points that should exist in the gap
@@ -1322,109 +1314,12 @@ class FormatProcessor(CGMProcessor):
         large_gap_threshold_seconds: float,
         sequence_id_dtype: pl.DataType
     ) -> pl.DataFrame:
-        """Split existing sequences that have internal large gaps (glucose-only logic).
-        
-        Processes each existing sequence separately and splits it if it contains
-        large gaps IN GLUCOSE EVENTS. Non-glucose events are then reassigned to
-        the nearest glucose sequence.
-        
-        Args:
-            dataframe: DataFrame with existing sequence_id column
-            large_gap_threshold_seconds: Threshold in seconds for splitting sequences
-            sequence_id_dtype: Target dtype for sequence_id column
-            
-        Returns:
-            DataFrame with updated sequence_id column (some sequences may be split)
-        """
-        unique_sequences = dataframe['sequence_id'].unique().sort().to_list()
-        processed_glucose_sequences = []
-        next_sequence_id = max(unique_sequences) + 1
-        
-        # Process each existing sequence, checking for internal glucose gaps
-        for seq_id in unique_sequences:
-            seq_data = dataframe.filter(pl.col('sequence_id') == seq_id).sort('original_datetime')
-            
-            # Filter to glucose events only for gap detection
-            glucose_seq = seq_data.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value).sort('original_datetime')
-            
-            if len(glucose_seq) < 2:
-                # Single glucose point or no glucose points, keep as is
-                processed_glucose_sequences.append(glucose_seq)
-                continue
-            
-            # Check for internal large gaps in glucose events using original_datetime
-            glucose_seq = glucose_seq.with_columns([
-                pl.col('original_datetime').diff().dt.total_seconds().alias('time_diff_seconds'),
-            ])
-            
-            # Mark large gaps within this sequence's glucose events
-            glucose_seq = glucose_seq.with_columns([
-                pl.when(pl.col('time_diff_seconds').is_null())
-                .then(pl.lit(False))
-                .otherwise(pl.col('time_diff_seconds') > large_gap_threshold_seconds)
-                .alias('is_gap'),
-            ])
-            
-            # Check if this sequence has any large gaps
-            has_gaps = glucose_seq['is_gap'].sum() > 0
-            
-            if not has_gaps:
-                # No internal gaps, keep sequence as is
-                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
-                processed_glucose_sequences.append(glucose_seq)
-            else:
-                # Split this sequence based on internal glucose gaps
-                # Create sub-sequence IDs
-                glucose_seq = glucose_seq.with_columns([
-                    (pl.col('is_gap').cum_sum() + next_sequence_id).cast(sequence_id_dtype).alias('sequence_id')
-                ])
-                
-                # Remove temporary columns
-                glucose_seq = glucose_seq.drop(['time_diff_seconds', 'is_gap'])
-                
-                # Update next_sequence_id for next iteration
-                next_sequence_id = glucose_seq['sequence_id'].max() + 1
-                
-                processed_glucose_sequences.append(glucose_seq)
-        
-        # Combine all processed glucose sequences
-        if len(processed_glucose_sequences) == 0:
-            # No glucose events at all - return original with sequence_id = 0
-            return dataframe.with_columns([
-                pl.lit(0).cast(sequence_id_dtype).alias('sequence_id')
-            ])
-        
-        all_glucose = pl.concat(processed_glucose_sequences).sort('original_datetime')
-        
-        # Now reassign non-glucose events to nearest glucose sequence
-        non_glucose_events = dataframe.filter(pl.col('event_type') != UnifiedEventType.GLUCOSE.value)
-        
-        if len(non_glucose_events) == 0:
-            # Only glucose events
-            result_df = all_glucose
-        else:
-            # Join non-glucose events to nearest glucose sequence using original_datetime
-            # Drop old sequence_id before joining to avoid conflicts
-            non_glucose_no_seq = non_glucose_events.drop('sequence_id')
-            sequence_info = all_glucose.select(['original_datetime', 'sequence_id'])
-            
-            non_glucose_with_seq = non_glucose_no_seq.join_asof(
-                sequence_info,
-                on='original_datetime',
-                strategy='nearest'
-            )
-            
-            # If join_asof couldn't find a match, set to 0
-            non_glucose_with_seq = non_glucose_with_seq.with_columns([
-                pl.col('sequence_id').fill_null(0).cast(sequence_id_dtype)
-            ])
-            
-            # Combine glucose and non-glucose events
-            result_df = pl.concat([all_glucose, non_glucose_with_seq], how='diagonal')
-            
-            # Reorder columns to match schema (use existing validation method)
-            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
-        
-        return result_df
+        """DEPRECATED: marked for deletion.
 
-        
+        Gap-aware splitting is handled by detect_and_assign_sequences.
+        This stub exists so that any unexpected caller surfaces loudly.
+        """
+        raise NotImplementedError(
+            "_split_sequences_with_internal_gaps is deprecated. "
+            "Use detect_and_assign_sequences instead."
+        )
