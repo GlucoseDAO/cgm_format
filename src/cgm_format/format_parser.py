@@ -713,6 +713,7 @@ class FormatParser(CGMParser):
             sensor_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.SENSOR_GLUCOSE)).alias("_sensor_gl")
             bg_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.BG_READING)).alias("_bg_gl")
             bolus_u = cls._euro_number_to_float(pl.col(MedtronicColumn.BOLUS_VOLUME_DELIVERED)).alias("_bolus_u")
+            basal_u = cls._euro_number_to_float(pl.col(MedtronicColumn.BASAL_RATE)).alias("_basal_u")
             bwz_carbs = cls._euro_number_to_float(pl.col(MedtronicColumn.BWZ_CARB_INPUT)).alias("_bwz_carbs")
 
             # Extract insulin/carbs from Event Marker as fallback
@@ -724,52 +725,69 @@ class FormatParser(CGMParser):
                 event_marker_col.str.extract(r"Meal:\s*([\d,\.]+)\s*grams?", 1)
             ).alias("_marker_carbs")
 
-            df = df.with_columns([sensor_gl, bg_gl, bolus_u, bwz_carbs, marker_insulin, marker_carbs])
+            df = df.with_columns([sensor_gl, bg_gl, bolus_u, basal_u, bwz_carbs, marker_insulin, marker_carbs])
 
             # Coalesce: structured columns take priority over Event Marker
             df = df.with_columns([
                 pl.coalesce([pl.col("_sensor_gl"), pl.col("_bg_gl")]).alias("_glucose"),
-                pl.coalesce([pl.col("_bolus_u"), pl.col("_marker_insulin")]).alias("_insulin"),
+                pl.coalesce([pl.col("_bolus_u"), pl.col("_marker_insulin")]).alias("_insulin_fast"),
+                pl.col("_basal_u").alias("_insulin_slow"),
                 pl.coalesce([pl.col("_bwz_carbs"), pl.col("_marker_carbs")]).alias("_carbs"),
             ])
+
+            _ts = pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime")
+            _quality = pl.lit(0).alias("quality")
 
             # --- Glucose rows ---
             glucose_data = (
                 df.filter(pl.col("_glucose").is_not_null())
                 .select([
-                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    _ts,
                     pl.col("_glucose").alias("glucose"),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                    _quality,
                 ])
             )
 
-            # --- Insulin rows (only rows without glucose to avoid double-counting) ---
-            insulin_data = (
-                df.filter(pl.col("_insulin").is_not_null() & pl.col("_glucose").is_null())
+            # --- Fast insulin rows (bolus / Event Marker insulin) ---
+            insulin_fast_data = (
+                df.filter(pl.col("_insulin_fast").is_not_null())
                 .select([
-                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
-                    pl.col("_insulin").alias("insulin_fast"),
+                    _ts,
+                    pl.col("_insulin_fast").alias("insulin_fast"),
                     pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                    _quality,
                 ])
             )
 
-            # --- Carb rows (only rows without glucose to avoid double-counting) ---
-            carb_data = (
-                df.filter(pl.col("_carbs").is_not_null() & pl.col("_glucose").is_null())
+            # --- Slow insulin rows (basal rate) ---
+            insulin_slow_data = (
+                df.filter(pl.col("_insulin_slow").is_not_null())
                 .select([
-                    pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    _ts,
+                    pl.col("_insulin_slow").alias("insulin_slow"),
+                    pl.lit(UnifiedEventType.INSULIN_SLOW.value).alias("event_type"),
+                    _quality,
+                ])
+            )
+
+            # --- Carb rows ---
+            carb_data = (
+                df.filter(pl.col("_carbs").is_not_null())
+                .select([
+                    _ts,
                     pl.col("_carbs").alias("carbs"),
                     pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                    _quality,
                 ])
             )
 
-            # Combine all data types
+            # Combine all event types
             all_data = [glucose_data]
-            if len(insulin_data) > 0:
-                all_data.append(insulin_data)
+            if len(insulin_fast_data) > 0:
+                all_data.append(insulin_fast_data)
+            if len(insulin_slow_data) > 0:
+                all_data.append(insulin_slow_data)
             if len(carb_data) > 0:
                 all_data.append(carb_data)
 

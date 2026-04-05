@@ -46,6 +46,17 @@ from cgm_format.formats.libre import (
     LIBRE_TIMESTAMP_FORMATS,
 )
 
+# Medtronic format
+from cgm_format.formats.medtronic import (
+    MEDTRONIC_SCHEMA,
+    MedtronicColumn,
+    MEDTRONIC_DETECTION_PATTERNS,
+    MEDTRONIC_HEADER_LINE,
+    MEDTRONIC_DATA_START_LINE,
+    MEDTRONIC_METADATA_LINES,
+    MEDTRONIC_TIMESTAMP_FORMATS,
+)
+
 # Supported format
 from cgm_format.formats.supported import (
     SCHEMA_MAP,
@@ -96,6 +107,15 @@ __all__ = [
     "LIBRE_METADATA_LINES",
     "LIBRE_TIMESTAMP_FORMATS",
     
+    # Medtronic format
+    "MEDTRONIC_SCHEMA",
+    "MedtronicColumn",
+    "MEDTRONIC_DETECTION_PATTERNS",
+    "MEDTRONIC_HEADER_LINE",
+    "MEDTRONIC_DATA_START_LINE",
+    "MEDTRONIC_METADATA_LINES",
+    "MEDTRONIC_TIMESTAMP_FORMATS",
+
     # Supported format
     "SCHEMA_MAP",
     "KNOWN_ISSUES_TO_SUPPRESS",
