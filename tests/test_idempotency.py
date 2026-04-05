@@ -70,7 +70,6 @@ def parsed_files_cache() -> Dict[str, pl.DataFrame]:
     for file_path in test_files:
         try:
             unified_df = FormatParser.parse_file(file_path)
-            unified_df = FormatProcessor.detect_and_assign_sequences(unified_df)
             cache[file_path.name] = unified_df
         except Exception as e:
             print(f"Warning: Failed to parse {file_path.name}: {e}")
@@ -390,8 +389,7 @@ class TestProcessingIdempotency:
         assert_dataframes_equal(df2, df3, "sync→interpolate→sync")
         
         # Validate final output meets all constraints
-        # After sync, gaps can grow by up to EXPECTED_INTERVAL_MINUTES due to grid-snapping
-        check_no_large_gaps(df3, EXPECTED_INTERVAL_MINUTES, "Final output", max_gap_minutes=SMALL_GAP_MAX_MINUTES + EXPECTED_INTERVAL_MINUTES)
+        check_no_large_gaps(df3, EXPECTED_INTERVAL_MINUTES, "Final output")
         check_no_null_glucose_egv(df3, "Final output")
         check_seconds_are_zero(df3, "Final output")
         
@@ -405,17 +403,7 @@ class TestProcessingIdempotency:
         Chain B: synchronize_timestamps → interpolate_gaps → synchronize_timestamps
         
         Both should produce the same final result (commutativity).
-        
-        Note: Medtronic data has borderline gaps (~18 min raw, ~20 min after sync)
-        near the SMALL_GAP_MAX_MINUTES threshold (19 min). This causes the two chains
-        to produce different row counts because sync-first and interpolate-first
-        disagree on whether to fill these borderline gaps.
         """
-        if file_path.name == "medtronics_test_livia.csv":
-            pytest.xfail(
-                "Medtronic data has borderline gaps near SMALL_GAP_MAX_MINUTES threshold; "
-                "sync-first vs interpolate-first chains disagree on gap treatment"
-            )
         
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
@@ -433,7 +421,7 @@ class TestProcessingIdempotency:
         df_a2 = FormatProcessor.synchronize_timestamps(df_a1)
         df_a3 = FormatProcessor.interpolate_gaps(df_a2)
         print(f"Chain A final: {len(df_a3)} rows")
-        check_no_large_gaps(df_a3, EXPECTED_INTERVAL_MINUTES, "Chain A final", max_gap_minutes=SMALL_GAP_MAX_MINUTES + EXPECTED_INTERVAL_MINUTES)
+        check_no_large_gaps(df_a3, EXPECTED_INTERVAL_MINUTES, "Chain A final")
         check_no_null_glucose_egv(df_a3, "Chain A final")
         check_seconds_are_zero(df_a3, "Chain A final")
         
@@ -442,7 +430,7 @@ class TestProcessingIdempotency:
         df_b2 = FormatProcessor.interpolate_gaps(df_b1)
         df_b3 = FormatProcessor.synchronize_timestamps(df_b2)
         print(f"Chain B final: {len(df_b3)} rows")
-        check_no_large_gaps(df_b3, EXPECTED_INTERVAL_MINUTES, "Chain B final", max_gap_minutes=SMALL_GAP_MAX_MINUTES + EXPECTED_INTERVAL_MINUTES)
+        check_no_large_gaps(df_b3, EXPECTED_INTERVAL_MINUTES, "Chain B final")
         check_no_null_glucose_egv(df_b3, "Chain B final")
         check_seconds_are_zero(df_b3, "Chain B final")
         
