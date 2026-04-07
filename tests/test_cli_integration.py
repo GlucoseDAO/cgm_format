@@ -17,7 +17,7 @@ from cgm_format.interface.cgm_interface import (
 )
 
 # Data directory relative to project root
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 TEST_OUTPUT_DIR = Path(__file__).parent.parent / "data" / "cli_test_output"
 
 

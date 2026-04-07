@@ -48,7 +48,7 @@ uv run pytest tests/ -k "idempotency"
 **Purpose:** Validates format detection and Frictionless schema compliance for all CGM formats.
 
 **Key Features:**
-- Parametrized tests run on all CSV files in `data/` directory
+- Parametrized tests run on all CSV files in `data/input/` directory
 - Validates format detection for Dexcom, Libre, and Unified formats
 - Uses Frictionless library to validate CSV files against their schemas
 - Suppresses known vendor format issues (e.g., Dexcom's "Low"/"High" text markers)
@@ -82,7 +82,7 @@ uv run pytest tests/ -k "idempotency"
 - Validates unified format schema compliance
 - Tests roundtrip: vendor → unified → CSV → unified
 - Tests sequence detection with large gaps
-- No mocking - uses real data files from `data/` directory
+- No mocking - uses real data files from `data/input/` directory
 
 **Test Classes:**
 - **TestFormatDetection** - Format detection for all data files
@@ -298,7 +298,7 @@ uv run pytest tests/ -k "idempotency"
 
 **Key Features:**
 - Parametrized tests run on each file individually (clear pass/fail per file)
-- No mocking - uses actual data files from `data/` directory
+- No mocking - uses actual data files from `data/input/` directory
 - Tests complete pipeline: parse → interpolate → synchronize → prepare → convert
 - Tests error handling, data consistency, and timestamp ordering
 
@@ -340,7 +340,7 @@ uv run pytest tests/ -k "idempotency"
 
 ## Test Data
 
-All tests use real CGM data files from the `data/` directory:
+All tests use real CGM data files from the `data/input/` directory:
 - Tests automatically discover and parametrize over all CSV files
 - Unsupported formats (e.g., Medtronic Guardian Connect) are skipped using `format_supported()`
 - Parsed output is saved to `data/parsed/` for inspection

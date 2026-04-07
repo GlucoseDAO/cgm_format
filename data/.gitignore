@@ -1,0 +1,9 @@
+# Default: ignore all new/untracked paths under data/ (CLI output, local dumps, etc.).
+# Version control is limited to this file, the allowlisted directories below, and their contents.
+
+*
+!.gitignore
+
+# Fixtures and imports (see also: add new !<dir>/ + !<dir>/** when committing another top-level subtree).
+!input/
+!input/**

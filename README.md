@@ -62,11 +62,11 @@ python -m cgm_format.cgm_cli <command>   # Module execution
 python scripts/cgm_cli.py <command>      # Direct script
 
 # Examples
-cgm-cli detect data/patient.csv                    # Detect format
-cgm-cli parse data/dexcom.csv -o unified.csv       # Parse to unified
-cgm-cli pipeline data/libre.csv -o output.csv      # Full pipeline
-cgm-cli report data/ -o report.txt --frictionless  # Validation report
-cgm-cli batch data/raw/ -o data/processed/         # Batch process
+cgm-cli detect data/input/patient.csv                    # Detect format
+cgm-cli parse data/input/dexcom.csv -o unified.csv       # Parse to unified
+cgm-cli pipeline data/input/libre.csv -o output.csv      # Full pipeline
+cgm-cli report data/input/ -o report.txt --frictionless  # Validation report
+cgm-cli batch data/input/ -o data/processed/         # Batch process
 
 # Run interactive example
 uv run python examples/example_cli_usage.py --skip-slow
@@ -90,7 +90,7 @@ from cgm_format import FormatParser
 import polars as pl
 
 # Parse any supported CGM file (Dexcom, Libre, or Unified)
-unified_df = FormatParser.parse_file("data/example.csv")
+unified_df = FormatParser.parse_file("data/input/example.csv")
 
 # Or parse from base64 (useful for web APIs)
 unified_df = FormatParser.parse_base64(base64_encoded_csv)
@@ -108,7 +108,7 @@ FormatParser.to_csv_file(unified_df, "output.csv")
 from cgm_format import FormatParser, FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
-unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/input/dexcom_export.csv")
 
 # Stage 4-5: Process for inference
 processor = FormatProcessor(
@@ -139,7 +139,7 @@ predictions = your_model.predict(inference_df)
 from cgm_format import FormatParser, FormatProcessor
 
 # Parse mixed data
-unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
+unified_df = FormatParser.parse_file("data/input/cgm_with_events.csv")
 
 # Split into glucose readings and other events (insulin, carbs, etc.)
 glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)
@@ -202,7 +202,7 @@ Vendor-agnostic operations on unified data. All operations are **idempotent** th
 from cgm_format import FormatParser, FormatProcessor
 
 # Stages 1-3: Parse to unified format (sequences automatically assigned)
-unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/input/dexcom_export.csv")
 
 # Stage 4: Interpolate gaps and mark calibration periods
 processor = FormatProcessor(expected_interval_minutes=5, small_gap_max_minutes=15)
@@ -587,8 +587,9 @@ cgm_format/
 │   ├── test_format_parser.py # Parsing and conversion tests
 │   ├── test_format_processor.py # Processing tests
 │   └── test_schema.py           # Schema validation tests
-├── data/                        # Test data and parsed outputs
-│   └── parsed/                  # Converted unified format files
+├── data/                        # Local data (gitignored except allowlisted paths)
+│   ├── input/                   # Committed test fixtures (vendor CSV/JSON)
+│   └── parsed/                  # Converted unified format files (generated)
 ├── pyproject.toml               # Package configuration (hatchling)
 └── README.md                    # This file
 ```

@@ -138,6 +138,6 @@ These principles translate into a concrete checklist:
 
 5. **Export public symbols**: Add new enums and schemas to `__init__.py` and `__all__`.
 
-6. **Write integration tests**: Use real vendor CSV files in `data/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
+6. **Write integration tests**: Use real vendor CSV files in `data/input/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
 
 The processor, schema validation, CLI, and all downstream consumers require zero changes — they only see `UnifiedFormat`.

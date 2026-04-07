@@ -20,7 +20,7 @@ from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 
 # Stage 1-3: Parse vendor-specific data to unified format
-unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/input/dexcom_export.csv")
 
 # Stage 4: Process unified format
 # FormatProcessor uses classmethods - call directly on the class
@@ -630,7 +630,7 @@ Parse CGM data directly from file path. Automatically detects format and handles
 from cgm_format.format_parser import FormatParser
 
 # Parse from file path
-df = FormatParser.parse_file("data/dexcom_export.csv")
+df = FormatParser.parse_file("data/input/dexcom_export.csv")
 ```
 
 ### Base64 Input

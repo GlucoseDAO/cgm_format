@@ -33,7 +33,7 @@ uv run cgm-cli pipeline <file>  # run full 6-stage pipeline
 
 If tests fail with `ModuleNotFoundError: No module named 'polars'` or `No module named 'cgm_format'`, run `uv sync --extra dev` first.
 
-Tests are **integration tests that use real data** in `data/` — do not mock unless absolutely required.
+Tests are **integration tests that use real data** in `data/input/` — do not mock unless absolutely required.
 
 ## Code style guidelines
 
@@ -140,13 +140,18 @@ The `nightscout_downloader` module requires `httpx` for HTTP requests. It is inc
 ## Learned workspace facts
 
 - Source layout: `src/cgm_format/` (hatchling build, `tool.hatch.build.targets.wheel.packages`).
-- Test data lives in `data/` (excluded from sdist). Tests use real files — no mocking.
+- Test data lives in `data/input/` (excluded from sdist). Tests use real files — no mocking.
 - `scripts/` contains one-off utilities (`regenerate_all_schemas.py`, scrub scripts); they are not part of the installed package.
 - `examples/` shows library usage patterns; keep them runnable as documentation.
 - The `cgm-cli` entry point is defined in `[project.scripts]` in `pyproject.toml`; the implementation is `cgm_format.cgm_cli:main`.
-- Optional dependency groups: `cli` (typer, rich, httpx, pandas, pyarrow, frictionless), `dev` (pytest + cli).
+- Optional dependency groups: `cli` (typer, rich, httpx, pandas, pyarrow, frictionless), `dev` (pytest + cli + python-dotenv).
 - `uv lock --upgrade` only updates `uv.lock`; `pyproject.toml` minimum version bounds must be bumped manually if you want to raise them.
+- `tests/conftest.py` loads `.env` via `python-dotenv` and provides a session-scoped `nightscout_data_dir` fixture that downloads Nightscout data from `NIGHTSCOUT_URL` (and optional `NIGHTSCOUT_TOKEN`) into `data/input/`. Files are cached; pass `--nightscout-redownload` to force refresh.
+- `data/.gitignore` uses an ignore-all + allowlist pattern (`*` then `!input/`, `!input/**`). To commit a new top-level subdirectory under `data/`, add explicit `!<dir>/` and `!<dir>/**` entries.
+- Nightscout JSON entries are detected and parsed through the standard single-file pipeline (`detect_format` → `parse_from_bytes` / `parse_from_string` / `parse_file`), not only through `parse_nightscout()`.
+- `NightscoutApiFormat = Literal["json", "csv"]` in `nightscout_downloader.py`; both `download_nightscout()` and `download_and_parse_nightscout()` accept an `api_format` parameter (default `"json"`).
 
 ## Learned User Preferences
 
 - When upgrading dependencies (`uv lock --upgrade`), also raise the lower-bound version constraints in `pyproject.toml` to match the newly resolved versions.
+- Tests should be resilient to changing data — use `pytest.skip()` for optional data features (e.g. specific treatment types) rather than hard assertions that assume specific data content.

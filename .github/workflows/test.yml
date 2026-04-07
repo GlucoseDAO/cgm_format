@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    environment: test
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -29,5 +30,8 @@ jobs:
         uv sync --extra dev
     
     - name: Run tests
+      env:
+        NIGHTSCOUT_URL: ${{ vars.NIGHTSCOUT_URL }}
+        NIGHTSCOUT_TOKEN: ${{ secrets.NIGHTSCOUT_TOKEN }}
       run: |
         uv run pytest tests/ -v

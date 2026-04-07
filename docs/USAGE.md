@@ -22,7 +22,7 @@ Vendor CSV → Parse → Unified Format → Interpolate → Synchronize → Infe
 from cgm_format import FormatParser, FormatProcessor
 
 # Stage 1-3: Parse vendor format to unified
-unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/input/dexcom_export.csv")
 
 # Stage 4a: Detect and assign sequences based on gaps
 # FormatProcessor uses classmethods - call directly on class
@@ -538,7 +538,7 @@ For workflows that need to process glucose readings separately from other events
 
 ```python
 # Parse data with multiple event types
-unified_df = FormatParser.parse_file("data/cgm_with_events.csv")
+unified_df = FormatParser.parse_file("data/input/cgm_with_events.csv")
 
 # Split into glucose readings and other events
 glucose_df, events_df = FormatProcessor.split_glucose_events(unified_df)

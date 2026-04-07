@@ -444,10 +444,10 @@ def example_6_error_handling() -> None:
     print("="*70)
     
     test_files = [
-        ("data/valid_file.csv", "Valid file"),
-        ("data/unknown_format.csv", "Unknown format"),
-        ("data/corrupted.csv", "Corrupted file"),
-        ("data/nonexistent.csv", "Missing file"),
+        ("data/input/valid_file.csv", "Valid file"),
+        ("data/input/unknown_format.csv", "Unknown format"),
+        ("data/input/corrupted.csv", "Corrupted file"),
+        ("data/input/nonexistent.csv", "Missing file"),
     ]
     
     for file_path, description in test_files:
@@ -594,10 +594,10 @@ def main() -> None:
     print("="*70)
     
     # Check for test data
-    data_dir = Path("data")
+    data_dir = Path("data/input")
     if not data_dir.exists():
         print(f"\n⚠ Warning: Data directory '{data_dir}' not found")
-        print("   Please create 'data/' directory with sample CGM files")
+        print("   Please create 'data/input/' directory with sample CGM files")
         print("   Supported formats: Dexcom, Libre, Unified")
         return
     

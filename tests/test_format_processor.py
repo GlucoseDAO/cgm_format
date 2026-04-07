@@ -1824,7 +1824,7 @@ def test_synchronize_timestamps_is_lossless():
     from cgm_format.format_parser import FormatParser
     
     # Get test data directory
-    data_dir = Path(__file__).parent.parent / "data"
+    data_dir = Path(__file__).parent.parent / "data" / "input"
     if not data_dir.exists():
         pytest.skip(f"Data directory not found: {data_dir}")
     

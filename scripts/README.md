@@ -52,7 +52,7 @@ cgm-cli validate input.csv [--format unified|dexcom|libre] [--verbose]
 
 **report** - Generate comprehensive validation report for directory
 ```bash
-cgm-cli report data/ --output validation_report.txt \
+cgm-cli report data/input/ --output validation_report.txt \
     [--pattern "*.csv"] \
     [--frictionless/--no-frictionless] \
     [--suppress-known/--show-all]
@@ -106,7 +106,7 @@ cgm-cli info input.csv [--detailed]
 
 **batch** - Batch process multiple CGM data files
 ```bash
-cgm-cli batch data/ --output processed/ \
+cgm-cli batch data/input/ --output processed/ \
     [--pattern "*.csv"] \
     [--command parse|process|pipeline] \
     [--continue/--stop]
@@ -116,13 +116,13 @@ cgm-cli batch data/ --output processed/ \
 
 ```bash
 # Detect format of a file
-cgm-cli detect data/patient_export.csv
+cgm-cli detect data/input/patient_export.csv
 
 # Parse Dexcom file to unified format
-cgm-cli parse data/dexcom_export.csv -o data/unified.csv --stats
+cgm-cli parse data/input/dexcom_export.csv -o data/unified.csv --stats
 
 # Run full pipeline with glucose-only output
-cgm-cli pipeline data/libre_export.csv -o output.csv --glucose-only
+cgm-cli pipeline data/input/libre_export.csv -o output.csv --glucose-only
 
 # Get detailed info about a file
 cgm-cli info data/unified.csv --detailed
@@ -131,10 +131,10 @@ cgm-cli info data/unified.csv --detailed
 cgm-cli validate data/unified.csv
 
 # Generate comprehensive validation report (like example_schema_usage.py)
-cgm-cli report data/ -o validation_report.txt --frictionless
+cgm-cli report data/input/ -o validation_report.txt --frictionless
 
 # Batch process all CSV files in a directory
-cgm-cli batch data/raw/ --output data/processed/ --command pipeline
+cgm-cli batch data/input/ --output data/processed/ --command pipeline
 
 # Process with custom parameters
 cgm-cli process data/unified.csv -o processed.csv \
@@ -216,8 +216,8 @@ uv run python scripts/scrub_synthetic_libre.py INPUT_FILE OUTPUT_FILE [--seed SE
 
 ```bash
 uv run python scripts/scrub_synthetic_libre.py \
-    data/FreeStyle_Libre_3__11-12-2024.csv \
-    data/FreeStyle_Libre_3_synthetic.csv
+    data/input/FreeStyle_Libre_3__11-12-2024.csv \
+    data/input/FreeStyle_Libre_3_synthetic.csv
 ```
 
 ### Transformations Applied
@@ -258,8 +258,8 @@ uv run python scripts/scrub_synthetic_dexcom.py INPUT_FILE OUTPUT_FILE [--seed S
 
 ```bash
 uv run python scripts/scrub_synthetic_dexcom.py \
-    data/Clarity_Export__Patient_2025-05-14_154517.csv \
-    data/Clarity_Export_synthetic.csv
+    data/input/Clarity_Export__Patient_2025-05-14_154517.csv \
+    data/input/Clarity_Export_synthetic.csv
 ```
 
 ### Transformations Applied

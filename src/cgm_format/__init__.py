@@ -11,7 +11,7 @@ Quick Start:
     >>> from cgm_format import FormatParser, FormatProcessor
     >>> 
     >>> # Parse any supported CGM file
-    >>> unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
+    >>> unified_df = FormatParser.parse_from_file("data/input/dexcom_export.csv")
     >>> 
     >>> # Process for inference
     >>> processor = FormatProcessor()
@@ -102,6 +102,7 @@ from cgm_format.formats.nightscout import (
 from cgm_format.nightscout_downloader import (
     download_nightscout,
     download_and_parse_nightscout,
+    NightscoutApiFormat,
 )
 
 __all__ = [
@@ -179,6 +180,7 @@ __all__ = [
     # Nightscout downloader
     "download_nightscout",
     "download_and_parse_nightscout",
+    "NightscoutApiFormat",
     
     # Version
     "__version__",

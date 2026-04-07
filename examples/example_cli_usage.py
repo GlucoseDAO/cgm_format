@@ -56,7 +56,7 @@ def run_cli_command(args: List[str], description: str = "") -> subprocess.Comple
 @app.command()
 def main(
     data_dir: Path = typer.Option(
-        Path(__file__).parent.parent / "data",
+        Path(__file__).parent.parent / "data" / "input",
         "--data-dir",
         "-d",
         help="Directory containing CGM data files"

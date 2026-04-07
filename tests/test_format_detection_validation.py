@@ -5,7 +5,7 @@ This test ensures that:
 2. All detected files validate against their Frictionless schemas
 3. Known vendor format issues are properly suppressed
 
-Tests parametrized for all CSV files in the data directory.
+Tests parametrized for all CSV files in the data/input directory.
 """
 
 import pytest
@@ -25,7 +25,7 @@ except ImportError:
 
 
 # Test data directory
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 def is_medtronic_file(file_path: Path) -> bool:
     """Check if a file is a Medtronic Guardian Connect file."""

@@ -604,30 +604,37 @@ def batch(
 @app.command(name="download-nightscout")
 def download_nightscout_cmd(
     url: str = typer.Argument(..., help="Nightscout base URL (e.g. https://my-ns.example.com)"),
-    output_dir: Path = typer.Option(Path("."), "--output", "-o", help="Output directory for JSON files"),
+    output_dir: Path = typer.Option(Path("."), "--output", "-o", help="Output directory for downloaded files"),
     count: int = typer.Option(10_000, "--count", "-c", help="Maximum entries to fetch"),
     days: Optional[int] = typer.Option(None, "--days", "-d", help="Only fetch last N days"),
     token: Optional[str] = typer.Option(None, "--token", "-t", help="API token for authenticated instances"),
+    api_format: str = typer.Option("json", "--format", "-f", help="API response format: json or csv"),
     parse: bool = typer.Option(False, "--parse", "-p", help="Also parse to unified CSV"),
 ) -> None:
     """Download CGM data from a Nightscout instance via its REST API.
 
-    Fetches entries, treatments, and profile JSON from the Nightscout API
-    and saves them to the output directory.
+    Fetches entries, treatments, and profile from the Nightscout API
+    and saves them to the output directory. Supports both JSON and CSV
+    response formats via the --format flag.
     """
+    if api_format not in ("json", "csv"):
+        console.print(f"[red]Error: --format must be 'json' or 'csv', got '{api_format}'[/red]")
+        raise typer.Exit(1)
+
     try:
         from cgm_format.nightscout_downloader import download_nightscout as _download
     except ImportError:
         console.print("[red]httpx is required for Nightscout downloads. Install with: uv add httpx[/red]")
         raise typer.Exit(1)
 
-    with console.status(f"[bold green]Downloading from {url}..."):
+    with console.status(f"[bold green]Downloading {api_format.upper()} from {url}..."):
         entries_path, treatments_path, profile_path = _download(
             base_url=url,
             output_dir=output_dir,
             count=count,
             token=token,
             days=days,
+            api_format=api_format,  # type: ignore[arg-type]
         )
 
     console.print(f"[green]✓[/green] Entries:    {entries_path}")
@@ -636,9 +643,9 @@ def download_nightscout_cmd(
 
     if parse:
         with console.status("[bold green]Parsing to unified format..."):
-            entries_json = entries_path.read_text()
-            treatments_json = treatments_path.read_text()
-            unified_df = FormatParser.parse_nightscout(entries_json, treatments_json)
+            entries_text = entries_path.read_text()
+            treatments_text = treatments_path.read_text()
+            unified_df = FormatParser.parse_nightscout(entries_text, treatments_text)
 
         csv_path = output_dir / "nightscout_unified.csv"
         FormatParser.to_csv_file(unified_df, str(csv_path))
