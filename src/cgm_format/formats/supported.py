@@ -63,5 +63,13 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         # BOM marker in header
         ('incorrect-label', 'Index', None),
     ],
-    SupportedCGMFormat.NIGHTSCOUT: [],
+    SupportedCGMFormat.NIGHTSCOUT: [
+        # nightscout-exporter CSV uses blank lines and "# TREATMENTS ..." comment
+        # lines as section separators — frictionless sees these as blank/missing rows
+        ('blank-row', None, None),
+        ('missing-cell', 'Type', None),
+        ('missing-cell', 'Device', None),
+        ('missing-cell', 'Trend', None),
+        ('missing-cell', 'ID', None),
+    ],
 }

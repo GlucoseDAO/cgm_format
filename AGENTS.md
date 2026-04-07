@@ -13,7 +13,7 @@ Supporting modules:
 - `interface/cgm_interface.py` — abstract base classes `CGMParser` / `CGMProcessor`, all exception types, `ProcessingWarning`, constants.
 - `interface/schema.py` — `CGMSchemaDefinition`, `ColumnSchema`, `EnumLiteral`, Frictionless export helpers.
 - `cgm_cli.py` — Typer CLI entry-point (`cgm-cli`).
-- `nightscout_downloader.py` — `download_nightscout()` and `download_and_parse_nightscout()` helpers using `httpx`.
+- `nightscout_downloader.py` — `download_nightscout()` helper using `httpx` (JSON-only download, supports `token` and `api_secret` auth).
 
 GitHub repo: GlucoseDAO/cgm_format
 
@@ -129,9 +129,22 @@ df.filter((pl.col("quality") & Quality.IMPUTATION.value) != 0)
 
 The CLI `report` and `validate` commands use `frictionless` if available, but degrade gracefully without it. Import it inside functions (not at module level) or guard with `HAS_FRICTIONLESS`. The core `FormatParser` / `FormatProcessor` do not depend on it.
 
-### Nightscout dual-file architecture
+### Nightscout dual-path architecture
 
-Nightscout data comes from two separate API endpoints: entries (glucose) and treatments (insulin, carbs, temp basals). Unlike single-file vendor formats, Nightscout requires combining these two sources. Use `FormatParser.parse_nightscout(entries_data, treatments_data)` for the combined parse. The single-file `parse_from_bytes` / `detect_format` path works for entries-only (glucose data). Nightscout treatments CSV (`nightscout_treatments.csv`) is a supplementary file — it cannot be detected or parsed standalone. Both JSON and CSV inputs are auto-detected.
+Nightscout data is supported through two parsing paths:
+
+1. **JSON API path** (primary): `FormatParser.parse_nightscout(entries_json, treatments_json)` or
+   `FormatParser.from_nightscout_exports(entries_path, treatments_path)` or
+   `FormatParser.from_nightscout_url(base_url, ...)`. Downloads entries and treatments as JSON,
+   combines glucose readings with insulin/carbs/temp basals. Supports `token` and `api_secret` auth.
+
+2. **nightscout-exporter CSV path**: Combined CSV file with `# CGM ENTRIES` and `# TREATMENTS`
+   section headers. Auto-detected by `detect_format()` and parsed via `parse_file()` /
+   `parse_from_string()`. The `_process_nightscout` dispatcher handles both JSON and CSV.
+
+The built-in Nightscout API CSV endpoints are **not supported** — entries.csv is headerless with
+only 5 columns, and treatments.csv doesn't actually serve CSV (returns JSON regardless). The
+`nightscout_entries.csv` file in `data/input/` is kept as a negative control.
 
 ### `httpx` is an optional dependency
 
@@ -146,10 +159,10 @@ The `nightscout_downloader` module requires `httpx` for HTTP requests. It is inc
 - The `cgm-cli` entry point is defined in `[project.scripts]` in `pyproject.toml`; the implementation is `cgm_format.cgm_cli:main`.
 - Optional dependency groups: `cli` (typer, rich, httpx, pandas, pyarrow, frictionless), `dev` (pytest + cli + python-dotenv).
 - `uv lock --upgrade` only updates `uv.lock`; `pyproject.toml` minimum version bounds must be bumped manually if you want to raise them.
-- `tests/conftest.py` loads `.env` via `python-dotenv` and provides a session-scoped `nightscout_data_dir` fixture that downloads Nightscout data from `NIGHTSCOUT_URL` (and optional `NIGHTSCOUT_TOKEN`) into `data/input/`. Files are cached; pass `--nightscout-redownload` to force refresh.
+- `tests/conftest.py` loads `.env` via `python-dotenv` and provides a session-scoped `nightscout_data_dir` fixture that downloads Nightscout JSON data from `NIGHTSCOUT_URL` (with optional `NIGHTSCOUT_TOKEN` / `NIGHTSCOUT_API_SECRET`) into `data/input/`. Files are cached; pass `--nightscout-redownload` to force refresh.
 - `data/.gitignore` uses an ignore-all + allowlist pattern (`*` then `!input/`, `!input/**`). To commit a new top-level subdirectory under `data/`, add explicit `!<dir>/` and `!<dir>/**` entries.
-- Nightscout JSON entries are detected and parsed through the standard single-file pipeline (`detect_format` → `parse_from_bytes` / `parse_from_string` / `parse_file`), not only through `parse_nightscout()`.
-- `NightscoutApiFormat = Literal["json", "csv"]` in `nightscout_downloader.py`; both `download_nightscout()` and `download_and_parse_nightscout()` accept an `api_format` parameter (default `"json"`).
+- `detect_format()` recognizes nightscout-exporter CSV (with `# CGM ENTRIES` section headers). Nightscout JSON files do **not** go through `detect_format` — use `parse_nightscout()` or `from_nightscout_exports()` instead.
+- `download_nightscout()` always fetches JSON (entries, treatments, profile). Supports `token` (query param) and `api_secret` (SHA1-hashed header) authentication.
 
 ## Learned User Preferences
 

@@ -1,35 +1,36 @@
 """Integration tests for Nightscout format support.
 
-Tests use Nightscout data files in data/input/. When ``NIGHTSCOUT_URL`` is set
-in the project ``.env``, the ``nightscout_data_dir`` session fixture (defined
-in conftest.py) downloads fresh data in both JSON and CSV formats before the
-test session starts.  Existing files are reused unless ``--nightscout-redownload``
-is passed.
+Tests use Nightscout JSON data files in data/input/. When ``NIGHTSCOUT_URL`` is
+set in the project ``.env``, the ``nightscout_data_dir`` session fixture
+(defined in conftest.py) downloads fresh data before the test session starts.
+
+Two parsing paths are covered:
+
+1. **JSON API** (``parse_nightscout`` / ``from_nightscout_exports``): parses the
+   entries + treatments JSON files fetched from the Nightscout REST API.
+2. **Exporter CSV** (``detect_format`` → ``parse_to_unified``): parses the
+   combined CSV file produced by *nightscout-exporter*.
 
 Expected file naming convention:
-- nightscout_entries.csv / nightscout_entries.json  (SGV readings)
-- nightscout_treatments.csv / nightscout_treatments.json  (treatments)
-
-Covers: CSV + JSON detection, entries-only parsing, combined entries+treatments
-parsing, roundtrip, and full pipeline.
+- nightscout_entries.json  (SGV readings)
+- nightscout_treatments.json  (treatments)
+- nightscout_profile.json  (pump/loop profile)
 """
 
 import pytest
 from pathlib import Path
-from typing import ClassVar, List, Optional, Tuple
+from typing import ClassVar, Optional
 import polars as pl
 
 from cgm_format import FormatParser as FormatParserPrime
 from cgm_format import FormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
-    UnknownFormatError,
     ValidationMethod,
 )
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
     UnifiedEventType,
-    Quality,
 )
 
 
@@ -41,110 +42,49 @@ class FormatParser(FormatParserPrime):
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "input"
 
+ENTRIES_JSON = DATA_DIR / "nightscout_entries.json"
+TREATMENTS_JSON = DATA_DIR / "nightscout_treatments.json"
+PROFILE_JSON = DATA_DIR / "nightscout_profile.json"
 
-# =============================================================================
-# File Discovery
-# =============================================================================
-
-def _discover_nightscout_files(data_dir: Path) -> Tuple[List[Path], List[Path]]:
-    """Discover Nightscout entries and treatments files in *data_dir*.
-
-    Uses format detection for CSV files, filename convention + content sniffing
-    for JSON files.  Returns (entries_files, treatments_files).
-    """
-    if not data_dir.exists():
-        return [], []
-
-    entries: List[Path] = []
-    treatments: List[Path] = []
-
-    for f in sorted(data_dir.glob("*.csv")):
-        if "parsed" in str(f):
-            continue
-        with open(f, "rb") as fh:
-            raw = fh.read()
-        text = FormatParserPrime.decode_raw_data(raw)
-        try:
-            detected = FormatParserPrime.detect_format(text)
-        except UnknownFormatError:
-            detected = None
-
-        first_line = text.split("\n", 1)[0]
-        if detected == SupportedCGMFormat.NIGHTSCOUT:
-            if "eventType" in first_line:
-                treatments.append(f)
-            else:
-                entries.append(f)
-        elif detected is None and "eventType" in first_line and "created_at" in first_line:
-            treatments.append(f)
-
-    for f in sorted(data_dir.glob("*.json")):
-        text = f.read_text(errors="replace")[:2000]
-        stripped = text.strip()
-        if not stripped.startswith("["):
-            continue
-        if '"sgv"' in stripped:
-            entries.append(f)
-        elif '"eventType"' in stripped:
-            treatments.append(f)
-
-    return entries, treatments
-
-
-# Module-level discovery for parameterisation.  The conftest session fixture
-# has not run yet at collection time, so we rely on whatever files are already
-# present on disk.  When NIGHTSCOUT_URL is configured, the first test run
-# will download files, and subsequent runs will pick them up here.
-ENTRIES_FILES, TREATMENTS_FILES = _discover_nightscout_files(DATA_DIR)
-
-if not ENTRIES_FILES:
-    pytest.skip("No Nightscout entries files found in data/input/", allow_module_level=True)
-
-
-def _find_treatments_for(entries_path: Path) -> Optional[Path]:
-    """Find a treatments file matching an entries file (same extension)."""
-    ext = entries_path.suffix
-    matches = [t for t in TREATMENTS_FILES if t.suffix == ext]
-    return matches[0] if matches else None
+if not ENTRIES_JSON.exists():
+    pytest.skip("No Nightscout entries JSON found in data/input/", allow_module_level=True)
 
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
-@pytest.fixture(scope="session", params=ENTRIES_FILES, ids=lambda p: p.name)
-def entries_path(request: pytest.FixtureRequest, nightscout_data_dir: Path) -> Path:
-    return request.param
+@pytest.fixture(scope="session")
+def entries_json_text() -> str:
+    return ENTRIES_JSON.read_text()
 
 
 @pytest.fixture(scope="session")
-def entries_text(entries_path: Path) -> str:
-    return entries_path.read_text()
-
-
-@pytest.fixture(scope="session")
-def entries_bytes(entries_path: Path) -> bytes:
-    return entries_path.read_bytes()
-
-
-@pytest.fixture(scope="session")
-def unified_entries(entries_text: str) -> pl.DataFrame:
-    """Parse entries to unified format (glucose only)."""
-    return FormatParser.parse_from_string(entries_text)
-
-
-@pytest.fixture(scope="session")
-def treatments_path(entries_path: Path) -> Optional[Path]:
-    return _find_treatments_for(entries_path)
-
-
-@pytest.fixture(scope="session")
-def unified_combined(entries_text: str, treatments_path: Optional[Path]) -> Optional[pl.DataFrame]:
-    """Parse entries + treatments to unified format. None if no treatments file."""
-    if treatments_path is None:
+def treatments_json_text() -> Optional[str]:
+    if not TREATMENTS_JSON.exists():
         return None
-    treatments_text = treatments_path.read_text()
-    return FormatParser.parse_nightscout(entries_text, treatments_text)
+    return TREATMENTS_JSON.read_text()
+
+
+@pytest.fixture(scope="session")
+def unified_entries(entries_json_text: str) -> pl.DataFrame:
+    """Parse entries JSON to unified format (glucose only)."""
+    return FormatParser.parse_nightscout(entries_json_text)
+
+
+@pytest.fixture(scope="session")
+def unified_combined(entries_json_text: str, treatments_json_text: Optional[str]) -> Optional[pl.DataFrame]:
+    """Parse entries + treatments JSON to unified format."""
+    if treatments_json_text is None:
+        return None
+    return FormatParser.parse_nightscout(entries_json_text, treatments_json_text)
+
+
+@pytest.fixture(scope="session")
+def unified_from_exports() -> pl.DataFrame:
+    """Parse via from_nightscout_exports file-based API."""
+    treatments = TREATMENTS_JSON if TREATMENTS_JSON.exists() else None
+    return FormatParser.from_nightscout_exports(ENTRIES_JSON, treatments)
 
 
 # =============================================================================
@@ -152,7 +92,7 @@ def unified_combined(entries_text: str, treatments_path: Optional[Path]) -> Opti
 # =============================================================================
 
 class TestNightscoutDownload:
-    """Verify the download fixture produced the expected files."""
+    """Verify the download fixture produced the expected JSON files."""
 
     def test_entries_json_exists(self, nightscout_data_dir: Path) -> None:
         path = nightscout_data_dir / "nightscout_entries.json"
@@ -166,18 +106,6 @@ class TestNightscoutDownload:
             pytest.skip("No JSON treatments file")
         assert path.stat().st_size > 0
 
-    def test_entries_csv_exists(self, nightscout_data_dir: Path) -> None:
-        path = nightscout_data_dir / "nightscout_entries.csv"
-        if not path.exists():
-            pytest.skip("No CSV entries file")
-        assert path.stat().st_size > 0
-
-    def test_treatments_csv_exists(self, nightscout_data_dir: Path) -> None:
-        path = nightscout_data_dir / "nightscout_treatments.csv"
-        if not path.exists():
-            pytest.skip("No CSV treatments file")
-        assert path.stat().st_size > 0
-
     def test_profile_json_exists(self, nightscout_data_dir: Path) -> None:
         path = nightscout_data_dir / "nightscout_profile.json"
         if not path.exists():
@@ -186,34 +114,11 @@ class TestNightscoutDownload:
 
 
 # =============================================================================
-# Detection Tests
-# =============================================================================
-
-class TestNightscoutDetection:
-    """Test format detection for Nightscout data."""
-
-    def test_detect_entries(self, entries_text: str) -> None:
-        detected = FormatParser.detect_format(entries_text)
-        assert detected == SupportedCGMFormat.NIGHTSCOUT
-
-    def test_format_supported_bytes(self, entries_bytes: bytes) -> None:
-        assert FormatParser.format_supported(entries_bytes) is True
-
-    def test_format_supported_string(self, entries_text: str) -> None:
-        assert FormatParser.format_supported(entries_text) is True
-
-    def test_parse_file(self, entries_path: Path) -> None:
-        df = FormatParser.parse_file(entries_path)
-        assert isinstance(df, pl.DataFrame)
-        assert len(df) > 0
-
-
-# =============================================================================
-# Entries-Only Parsing Tests
+# Entries-Only Parsing Tests (JSON API)
 # =============================================================================
 
 class TestNightscoutEntriesParsing:
-    """Test parsing of Nightscout entries to unified format."""
+    """Test parsing of Nightscout entries JSON to unified format."""
 
     def test_schema_columns(self, unified_entries: pl.DataFrame) -> None:
         expected_columns = CGM_SCHEMA.get_column_names()
@@ -252,11 +157,11 @@ class TestNightscoutEntriesParsing:
 
 
 # =============================================================================
-# Combined Entries + Treatments Parsing Tests
+# Combined Entries + Treatments Parsing Tests (JSON API)
 # =============================================================================
 
 class TestNightscoutCombinedParsing:
-    """Test parse_nightscout() with both entries and treatments."""
+    """Test parse_nightscout() with both entries and treatments JSON."""
 
     def test_has_glucose_rows(self, unified_combined: Optional[pl.DataFrame]) -> None:
         if unified_combined is None:
@@ -303,7 +208,6 @@ class TestNightscoutCombinedParsing:
         assert carb_vals.min() > 0
 
     def test_all_event_types_present(self, unified_combined: Optional[pl.DataFrame]) -> None:
-        """Check which event types are present (informational, always passes)."""
         if unified_combined is None:
             pytest.skip("No treatments file available")
         event_types = set(unified_combined["event_type"].unique().to_list())
@@ -326,24 +230,101 @@ class TestNightscoutCombinedParsing:
 
 
 # =============================================================================
-# Convenience API Tests
+# from_nightscout_exports Tests
 # =============================================================================
 
-class TestNightscoutConvenienceAPIs:
-    """Test convenience parse methods work with Nightscout data."""
+class TestNightscoutExportsAPI:
+    """Test the from_nightscout_exports file-based convenience API."""
 
-    def test_parse_from_bytes(self, entries_bytes: bytes) -> None:
-        df = FormatParser.parse_from_bytes(entries_bytes)
+    def test_returns_dataframe(self, unified_from_exports: pl.DataFrame) -> None:
+        assert isinstance(unified_from_exports, pl.DataFrame)
+        assert len(unified_from_exports) > 0
+
+    def test_schema_columns(self, unified_from_exports: pl.DataFrame) -> None:
+        expected_columns = CGM_SCHEMA.get_column_names()
+        assert list(unified_from_exports.columns) == expected_columns
+
+    def test_has_glucose(self, unified_from_exports: pl.DataFrame) -> None:
+        glucose_rows = unified_from_exports.filter(
+            pl.col("event_type") == UnifiedEventType.GLUCOSE.value
+        )
+        assert len(glucose_rows) > 0
+
+    def test_matches_parse_nightscout(
+        self, unified_from_exports: pl.DataFrame, unified_combined: Optional[pl.DataFrame]
+    ) -> None:
+        """from_nightscout_exports should produce the same result as parse_nightscout."""
+        if unified_combined is None:
+            pytest.skip("No treatments file")
+        assert len(unified_from_exports) == len(unified_combined)
+
+
+# =============================================================================
+# Exporter CSV Detection Tests
+# =============================================================================
+
+class TestNightscoutExporterCSVDetection:
+    """Test detect_format for nightscout-exporter CSV format."""
+
+    SAMPLE_ENTRIES_CSV = (
+        "# CGM ENTRIES\n"
+        "Date,Time,Glucose (mg/dL),Type,Device,Trend,ID\n"
+        '"3/31/2026","7:51:03 PM","202","sgv","","4","abc123"\n'
+        '"3/31/2026","7:46:03 PM","198","sgv","","4","abc124"\n'
+    )
+
+    SAMPLE_COMBINED_CSV = (
+        "# CGM ENTRIES\n"
+        "Date,Time,Glucose (mg/dL),Type,Device,Trend,ID\n"
+        '"3/31/2026","7:51:03 PM","202","sgv","","4","abc123"\n'
+        "\n"
+        "# TREATMENTS (Insulin, Carbs, Exercise)\n"
+        "Date,Time,Event Type,Insulin (U),Carbs (g),Notes,ID\n"
+        '"3/31/2026","8:12:21 PM","SMB","0.1","","","def456"\n'
+        '"3/31/2026","8:30:00 PM","Bolus","2.5","","dinner","def457"\n'
+    )
+
+    def test_detect_entries_csv(self) -> None:
+        detected = FormatParser.detect_format(self.SAMPLE_ENTRIES_CSV)
+        assert detected == SupportedCGMFormat.NIGHTSCOUT
+
+    def test_detect_combined_csv(self) -> None:
+        detected = FormatParser.detect_format(self.SAMPLE_COMBINED_CSV)
+        assert detected == SupportedCGMFormat.NIGHTSCOUT
+
+    def test_format_supported(self) -> None:
+        assert FormatParser.format_supported(self.SAMPLE_ENTRIES_CSV) is True
+
+    def test_parse_entries_only(self) -> None:
+        df = FormatParser.parse_from_string(self.SAMPLE_ENTRIES_CSV)
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 2
+        glucose_vals = df["glucose"].drop_nulls()
+        assert set(glucose_vals.to_list()) == {202.0, 198.0}
+
+    def test_parse_combined(self) -> None:
+        df = FormatParser.parse_from_string(self.SAMPLE_COMBINED_CSV)
+        assert isinstance(df, pl.DataFrame)
+        # 2 glucose rows + 2 insulin rows
+        event_types = set(df["event_type"].unique().to_list())
+        assert UnifiedEventType.GLUCOSE.value in event_types
+        assert UnifiedEventType.INSULIN_FAST.value in event_types
+
+
+# =============================================================================
+# parse_nightscout direct API Tests
+# =============================================================================
+
+class TestNightscoutDirectAPI:
+    """Test parse_nightscout with JSON string data."""
+
+    def test_parse_entries_only(self, entries_json_text: str) -> None:
+        df = FormatParser.parse_nightscout(entries_json_text)
         assert isinstance(df, pl.DataFrame)
         assert len(df) > 0
 
-    def test_parse_from_string(self, entries_text: str) -> None:
-        df = FormatParser.parse_from_string(entries_text)
-        assert isinstance(df, pl.DataFrame)
-        assert len(df) > 0
-
-    def test_parse_nightscout_entries_only(self, entries_text: str) -> None:
-        df = FormatParser.parse_nightscout(entries_text)
+    def test_parse_entries_bytes(self, entries_json_text: str) -> None:
+        df = FormatParser.parse_nightscout(entries_json_text.encode("utf-8"))
         assert isinstance(df, pl.DataFrame)
         assert len(df) > 0
 

@@ -7,7 +7,7 @@ Python library for converting vendor-specific Continuous Glucose Monitoring (CGM
 ## Features
 
 - **Vendor format detection**: Automatic detection of Dexcom, Libre, Medtronic, Nightscout, and Unified formats
-- **Nightscout support**: Download and parse CGM data directly from Nightscout instances via REST API (entries + treatments)
+- **Nightscout support**: Download and parse CGM data from Nightscout via REST API (JSON) or nightscout-exporter CSV, with `api-secret` and token auth
 - **Robust parsing**: Handles BOM marks, encoding artifacts, and vendor-specific CSV quirks
 - **Unified schema**: Standardized data format with service columns (metadata) and data columns
 - **Idempotent processing**: All operations are idempotent - applying them multiple times produces the same result
@@ -548,6 +548,34 @@ This generates a detailed report with:
 - Record type filtering (0=glucose, 4=insulin, 5=food)
 - Multiple timestamp format variants
 - Separate rapid/long insulin columns
+
+### Nightscout
+
+Nightscout data is supported via two paths:
+
+- **JSON API** (`/api/v1/entries.json`, `/api/v1/treatments.json`): Download directly from
+  any Nightscout instance using `download_nightscout()` or `FormatParser.from_nightscout_url()`.
+  Supports `token` and `api_secret` authentication.
+- **nightscout-exporter CSV**: Combined CSV file with `# CGM ENTRIES` and `# TREATMENTS`
+  sections, produced by the [nightscout-exporter](https://github.com/wisejester-sudo/nightscout-exporter)
+  community tool. Auto-detected by `detect_format()`.
+
+```python
+from cgm_format import FormatParser
+
+# From JSON files (downloaded or local)
+df = FormatParser.from_nightscout_exports("entries.json", "treatments.json")
+
+# Download and parse in one call
+df = FormatParser.from_nightscout_url("https://my-ns.example.com", api_secret="my-secret")
+
+# From nightscout-exporter CSV (auto-detected)
+df = FormatParser.parse_file("nightscout-data-with-treatments.csv")
+```
+
+> **Note:** The built-in Nightscout `/api/v1/entries.csv` endpoint is defective (headerless,
+> 5 columns only) and treatments don't support CSV at all. Use the JSON API or
+> nightscout-exporter CSV instead.
 
 ### Unified Format
 

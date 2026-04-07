@@ -23,19 +23,15 @@ DATA_DIR = PROJECT_ROOT / "data" / "input"
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-NIGHTSCOUT_EXPECTED_JSON = [
+NIGHTSCOUT_EXPECTED_FILES = [
     DATA_DIR / "nightscout_entries.json",
     DATA_DIR / "nightscout_treatments.json",
     DATA_DIR / "nightscout_profile.json",
 ]
-NIGHTSCOUT_EXPECTED_CSV = [
-    DATA_DIR / "nightscout_entries.csv",
-    DATA_DIR / "nightscout_treatments.csv",
-]
 
 
 def _nightscout_download(force: bool) -> Path:
-    """Download Nightscout data to data/input/ if needed.
+    """Download Nightscout JSON data to data/input/ if needed.
 
     Called once during collection so files are available for test
     parameterisation.
@@ -44,6 +40,7 @@ def _nightscout_download(force: bool) -> Path:
 
     nightscout_url = os.environ.get("NIGHTSCOUT_URL")
     nightscout_token = os.environ.get("NIGHTSCOUT_TOKEN")
+    nightscout_secret = os.environ.get("NIGHTSCOUT_API_SECRET")
 
     if not nightscout_url:
         if force:
@@ -53,8 +50,7 @@ def _nightscout_download(force: bool) -> Path:
             )
         return DATA_DIR
 
-    all_expected = NIGHTSCOUT_EXPECTED_JSON + NIGHTSCOUT_EXPECTED_CSV
-    all_exist = all(f.exists() and f.stat().st_size > 0 for f in all_expected)
+    all_exist = all(f.exists() and f.stat().st_size > 0 for f in NIGHTSCOUT_EXPECTED_FILES)
     if all_exist and not force:
         return DATA_DIR
 
@@ -64,14 +60,7 @@ def _nightscout_download(force: bool) -> Path:
         base_url=nightscout_url,
         output_dir=DATA_DIR,
         token=nightscout_token,
-        api_format="json",
-    )
-
-    download_nightscout(
-        base_url=nightscout_url,
-        output_dir=DATA_DIR,
-        token=nightscout_token,
-        api_format="csv",
+        api_secret=nightscout_secret,
     )
 
     return DATA_DIR

@@ -1,24 +1,40 @@
 """Nightscout CGM data format schema definition.
 
-Nightscout is an open-source cloud-based CGM data platform. Unlike vendor CSV exports,
-Nightscout data comes from a REST API and is natively JSON (though CSV exports are also
-supported). Data is split across two endpoints:
+Nightscout is an open-source cloud-based CGM data platform.  Data can be
+obtained in two ways:
 
-- **Entries** (`/api/v1/entries.json`): Sensor glucose values (SGV) with direction trends
-- **Treatments** (`/api/v1/treatments.json`): Insulin, carbs, temp basals, site changes, etc.
+1. **REST API** (``/api/v1/entries.json``, ``/api/v1/treatments.json``): native
+   JSON, handled by :meth:`~cgm_format.format_parser.FormatParser.parse_nightscout`
+   and its wrappers.
 
-Entries CSV example:
-    dateString,date,sgv,direction,type,glucose,unfiltered,uncalibrated,sessionStartDate,utcOffset
-    2026-03-31T19:51:03.000Z,1774986663000,202,Flat,sgv,202,202,202,,0
+2. **nightscout-exporter CSV** (community tool): a combined CSV file with two
+   sections separated by ``#`` comment lines.  This is what the schema and
+   ``detect_format`` pipeline target.
 
-Treatments CSV example:
-    created_at,eventType,insulin,carbs,duration,rate,absolute,enteredBy,utcOffset,mills,notes
-    2026-03-31T20:12:21.726Z,SMB,0.1,,0,,,iAPS,0,,
+.. note::
+   The built-in Nightscout ``/api/v1/entries.csv`` endpoint is *defective*:
+   it returns headerless CSV with only 5 hard-coded columns.  The treatments
+   endpoint does not support CSV at all.  We therefore **do not** support the
+   Nightscout API CSV — use the JSON API or the nightscout-exporter CSV.
 
-Entries JSON example:
+nightscout-exporter CSV example::
+
+    # CGM ENTRIES
+    Date,Time,Glucose (mg/dL),Type,Device,Trend,ID
+    "3/31/2026","7:51:03 PM","202","sgv","","4","abc123"
+    ...
+
+    # TREATMENTS (Insulin, Carbs, Exercise)
+    Date,Time,Event Type,Insulin (U),Carbs (g),Notes,ID
+    "3/31/2026","8:12:21 PM","SMB","0.1","","","def456"
+    ...
+
+Entries JSON example::
+
     {"sgv": 202, "dateString": "2026-03-31T19:51:03.000Z", "direction": "Flat", "type": "sgv", ...}
 
-Treatments JSON example:
+Treatments JSON example::
+
     {"eventType": "SMB", "insulin": 0.1, "created_at": "2026-03-31T20:12:21.726Z", ...}
 """
 
@@ -39,6 +55,7 @@ NIGHTSCOUT_HEADER_LINE = 1
 NIGHTSCOUT_DATA_START_LINE = 2
 NIGHTSCOUT_METADATA_LINES = ()
 
+# Timestamp formats used by the JSON API (ISO 8601 variants)
 NIGHTSCOUT_TIMESTAMP_FORMATS: tuple[str, ...] = (
     "%Y-%m-%dT%H:%M:%S%.fZ",   # ISO 8601 with millis + Z: 2026-03-31T19:51:03.000Z
     "%Y-%m-%dT%H:%M:%SZ",      # ISO 8601 without millis + Z: 2026-03-31T19:51:03Z
@@ -46,15 +63,15 @@ NIGHTSCOUT_TIMESTAMP_FORMATS: tuple[str, ...] = (
     "%Y-%m-%dT%H:%M:%S",       # ISO 8601 plain
 )
 
+# Detection patterns for nightscout-exporter CSV files
 NIGHTSCOUT_ENTRIES_DETECTION_PATTERNS: list[str] = [
-    "dateString,date,sgv",          # CSV entries header
-    "\"sgv\"",                       # JSON entries key
-    "direction,type,glucose",        # CSV entries header fragment
+    "# CGM ENTRIES",                    # nightscout-exporter section header
+    "Date,Time,Glucose (mg/dL)",        # nightscout-exporter entries header
 ]
 
 NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS: list[str] = [
-    "created_at,eventType,insulin",  # CSV treatments header
-    "\"eventType\"",                  # JSON treatments key
+    "# TREATMENTS",                     # nightscout-exporter section header
+    "Date,Time,Event Type,Insulin",     # nightscout-exporter treatments header
 ]
 
 NIGHTSCOUT_DETECTION_PATTERNS: list[str] = NIGHTSCOUT_ENTRIES_DETECTION_PATTERNS
@@ -100,31 +117,57 @@ class NightscoutDirection(EnumLiteral):
 # =============================================================================
 
 class NightscoutEntryColumn(EnumLiteral):
-    """Column names in Nightscout entries CSV exports."""
-    DATE_STRING = "dateString"
-    DATE = "date"
-    SGV = "sgv"
-    DIRECTION = "direction"
-    TYPE = "type"
-    GLUCOSE = "glucose"
-    UNFILTERED = "unfiltered"
-    UNCALIBRATED = "uncalibrated"
-    SESSION_START_DATE = "sessionStartDate"
-    UTC_OFFSET = "utcOffset"
+    """Column names for Nightscout entries.
+
+    Two sets of names are defined:
+
+    - **Exporter CSV** columns (``Date``, ``Time``, ``Glucose (mg/dL)``, …) —
+      used by the nightscout-exporter CSV format and the frictionless schema.
+    - **JSON API** field names (``dateString``, ``sgv``, …) — used by the
+      JSON parser internally.
+    """
+    # nightscout-exporter CSV columns
+    DATE = "Date"
+    TIME = "Time"
+    GLUCOSE_MGDL = "Glucose (mg/dL)"
+    TYPE = "Type"
+    DEVICE = "Device"
+    TREND = "Trend"
+    ID = "ID"
+
+    # JSON API field names (not part of the CSV schema)
+    DATE_STRING = "dateString"   # JSON: ISO 8601 timestamp
+    DATE_EPOCH = "date"          # JSON: epoch millis
+    SGV = "sgv"                  # JSON: sensor glucose value
+    DIRECTION = "direction"      # JSON: trend direction string
+
+    @classmethod
+    def get_csv_columns(cls) -> List[str]:
+        """Columns in nightscout-exporter CSV entries section."""
+        return [cls.DATE, cls.TIME, cls.GLUCOSE_MGDL, cls.TYPE, cls.DEVICE, cls.TREND, cls.ID]
 
     @classmethod
     def get_all_columns(cls) -> List[str]:
-        return [
-            cls.DATE_STRING, cls.DATE, cls.SGV, cls.DIRECTION, cls.TYPE,
-            cls.GLUCOSE, cls.UNFILTERED, cls.UNCALIBRATED,
-            cls.SESSION_START_DATE, cls.UTC_OFFSET,
-        ]
+        return cls.get_csv_columns()
 
 
 class NightscoutTreatmentColumn(EnumLiteral):
-    """Column names in Nightscout treatments CSV exports."""
+    """Column names for Nightscout treatments.
+
+    Two sets: exporter CSV columns and JSON API field names.
+    """
+    # nightscout-exporter CSV columns
+    DATE = "Date"
+    TIME = "Time"
+    EVENT_TYPE = "Event Type"
+    INSULIN_U = "Insulin (U)"
+    CARBS_G = "Carbs (g)"
+    NOTES = "Notes"
+    ID = "ID"
+
+    # JSON API field names
     CREATED_AT = "created_at"
-    EVENT_TYPE = "eventType"
+    EVENT_TYPE_JSON = "eventType"
     INSULIN = "insulin"
     CARBS = "carbs"
     DURATION = "duration"
@@ -133,15 +176,15 @@ class NightscoutTreatmentColumn(EnumLiteral):
     ENTERED_BY = "enteredBy"
     UTC_OFFSET = "utcOffset"
     MILLS = "mills"
-    NOTES = "notes"
+
+    @classmethod
+    def get_csv_columns(cls) -> List[str]:
+        """Columns in nightscout-exporter CSV treatments section."""
+        return [cls.DATE, cls.TIME, cls.EVENT_TYPE, cls.INSULIN_U, cls.CARBS_G, cls.NOTES, cls.ID]
 
     @classmethod
     def get_all_columns(cls) -> List[str]:
-        return [
-            cls.CREATED_AT, cls.EVENT_TYPE, cls.INSULIN, cls.CARBS,
-            cls.DURATION, cls.RATE, cls.ABSOLUTE, cls.ENTERED_BY,
-            cls.UTC_OFFSET, cls.MILLS, cls.NOTES,
-        ]
+        return cls.get_csv_columns()
 
 
 # =============================================================================
@@ -151,30 +194,24 @@ class NightscoutTreatmentColumn(EnumLiteral):
 NIGHTSCOUT_ENTRIES_SCHEMA = CGMSchemaDefinition(
     service_columns=(
         {
-            "name": NightscoutEntryColumn.DATE_STRING,
+            "name": NightscoutEntryColumn.DATE,
             "dtype": pl.Utf8,
-            "description": "ISO 8601 timestamp string",
+            "description": "Locale-formatted date string (e.g. 3/31/2026)",
             "constraints": {"required": True},
         },
         {
-            "name": NightscoutEntryColumn.DATE,
-            "dtype": pl.Int64,
-            "description": "Unix epoch timestamp in milliseconds",
+            "name": NightscoutEntryColumn.TIME,
+            "dtype": pl.Utf8,
+            "description": "Locale-formatted time string (e.g. 7:51:03 PM)",
             "constraints": {"required": True},
         },
     ),
     data_columns=(
         {
-            "name": NightscoutEntryColumn.SGV,
-            "dtype": pl.Int64,
-            "description": "Sensor glucose value",
-            "unit": "mg/dL",
-            "constraints": {"minimum": 0},
-        },
-        {
-            "name": NightscoutEntryColumn.DIRECTION,
+            "name": NightscoutEntryColumn.GLUCOSE_MGDL,
             "dtype": pl.Utf8,
-            "description": "Glucose trend direction (Flat, SingleUp, etc.)",
+            "description": "Sensor glucose value (string from exporter, cast to int during parsing)",
+            "unit": "mg/dL",
             "constraints": {"required": False},
         },
         {
@@ -184,34 +221,21 @@ NIGHTSCOUT_ENTRIES_SCHEMA = CGMSchemaDefinition(
             "constraints": {"required": False},
         },
         {
-            "name": NightscoutEntryColumn.GLUCOSE,
-            "dtype": pl.Int64,
-            "description": "Glucose value (alias for sgv)",
-            "unit": "mg/dL",
-            "constraints": {"minimum": 0},
-        },
-        {
-            "name": NightscoutEntryColumn.UNFILTERED,
-            "dtype": pl.Int64,
-            "description": "Unfiltered raw sensor value",
-            "constraints": {"required": False},
-        },
-        {
-            "name": NightscoutEntryColumn.UNCALIBRATED,
-            "dtype": pl.Int64,
-            "description": "Uncalibrated raw sensor value",
-            "constraints": {"required": False},
-        },
-        {
-            "name": NightscoutEntryColumn.SESSION_START_DATE,
+            "name": NightscoutEntryColumn.DEVICE,
             "dtype": pl.Utf8,
-            "description": "Sensor session start date",
+            "description": "Source device identifier",
             "constraints": {"required": False},
         },
         {
-            "name": NightscoutEntryColumn.UTC_OFFSET,
-            "dtype": pl.Int64,
-            "description": "UTC offset in minutes",
+            "name": NightscoutEntryColumn.TREND,
+            "dtype": pl.Utf8,
+            "description": "Trend direction (numeric string from exporter)",
+            "constraints": {"required": False},
+        },
+        {
+            "name": NightscoutEntryColumn.ID,
+            "dtype": pl.Utf8,
+            "description": "Nightscout entry _id",
             "constraints": {"required": False},
         },
     ),
@@ -223,33 +247,37 @@ NIGHTSCOUT_ENTRIES_SCHEMA = CGMSchemaDefinition(
 NIGHTSCOUT_TREATMENTS_SCHEMA = CGMSchemaDefinition(
     service_columns=(
         {
-            "name": NightscoutTreatmentColumn.CREATED_AT,
+            "name": NightscoutTreatmentColumn.DATE,
             "dtype": pl.Utf8,
-            "description": "ISO 8601 timestamp of the treatment",
+            "description": "Locale-formatted date string",
+            "constraints": {"required": True},
+        },
+        {
+            "name": NightscoutTreatmentColumn.TIME,
+            "dtype": pl.Utf8,
+            "description": "Locale-formatted time string",
             "constraints": {"required": True},
         },
         {
             "name": NightscoutTreatmentColumn.EVENT_TYPE,
             "dtype": pl.Utf8,
-            "description": "Type of treatment event",
+            "description": "Type of treatment event (SMB, Bolus, Temp Basal, etc.)",
             "constraints": {"required": True},
         },
+    ),
+    data_columns=(
         {
-            "name": NightscoutTreatmentColumn.ENTERED_BY,
+            "name": NightscoutTreatmentColumn.INSULIN_U,
             "dtype": pl.Utf8,
-            "description": "Source system (e.g. iAPS, Loop)",
+            "description": "Insulin dose (string from exporter, cast to float during parsing)",
+            "unit": "U",
             "constraints": {"required": False},
         },
         {
-            "name": NightscoutTreatmentColumn.UTC_OFFSET,
-            "dtype": pl.Int64,
-            "description": "UTC offset in minutes",
-            "constraints": {"required": False},
-        },
-        {
-            "name": NightscoutTreatmentColumn.MILLS,
-            "dtype": pl.Int64,
-            "description": "Unix epoch timestamp in milliseconds",
+            "name": NightscoutTreatmentColumn.CARBS_G,
+            "dtype": pl.Utf8,
+            "description": "Carbohydrate intake (string from exporter)",
+            "unit": "grams",
             "constraints": {"required": False},
         },
         {
@@ -258,41 +286,10 @@ NIGHTSCOUT_TREATMENTS_SCHEMA = CGMSchemaDefinition(
             "description": "Treatment notes",
             "constraints": {"required": False},
         },
-    ),
-    data_columns=(
         {
-            "name": NightscoutTreatmentColumn.INSULIN,
-            "dtype": pl.Float64,
-            "description": "Insulin dose",
-            "unit": "U",
-            "constraints": {"minimum": 0},
-        },
-        {
-            "name": NightscoutTreatmentColumn.CARBS,
-            "dtype": pl.Float64,
-            "description": "Carbohydrate intake",
-            "unit": "grams",
-            "constraints": {"minimum": 0},
-        },
-        {
-            "name": NightscoutTreatmentColumn.DURATION,
-            "dtype": pl.Float64,
-            "description": "Duration of treatment in minutes",
-            "unit": "minutes",
-            "constraints": {"required": False},
-        },
-        {
-            "name": NightscoutTreatmentColumn.RATE,
-            "dtype": pl.Float64,
-            "description": "Basal rate",
-            "unit": "U/h",
-            "constraints": {"required": False},
-        },
-        {
-            "name": NightscoutTreatmentColumn.ABSOLUTE,
-            "dtype": pl.Float64,
-            "description": "Absolute basal rate",
-            "unit": "U/h",
+            "name": NightscoutTreatmentColumn.ID,
+            "dtype": pl.Utf8,
+            "description": "Nightscout treatment _id",
             "constraints": {"required": False},
         },
     ),

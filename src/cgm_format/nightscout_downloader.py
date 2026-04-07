@@ -4,50 +4,36 @@ Downloads CGM data from a Nightscout instance via its REST API v1 endpoints.
 Requires ``httpx`` (optional dependency — install via ``uv add httpx`` or
 ``pip install cgm-format[cli]``).
 
-The Nightscout API supports multiple output formats via endpoint extensions:
+The downloader fetches three JSON files:
 
-- ``.json`` — native JSON (default)
-- ``.csv`` — comma-separated values
+- **entries** (``/api/v1/entries.json``): sensor glucose values
+- **treatments** (``/api/v1/treatments.json``): insulin, carbs, temp basals, etc.
+- **profile** (``/api/v1/profile.json``): pump / loop profile configuration
 
-Both formats are accepted by :class:`~cgm_format.format_parser.FormatParser`
-and auto-detected during parsing.
+Authentication: Nightscout supports two auth methods:
+
+- **token** — a readable access token passed as ``?token=...`` query param
+- **api_secret** — the ``API_SECRET`` value, sent as a SHA1 hash in the
+  ``api-secret`` header
 
 Usage::
 
-    from cgm_format.nightscout_downloader import download_nightscout, download_and_parse_nightscout
+    from cgm_format.nightscout_downloader import download_nightscout
 
-    # Download raw JSON files (default)
-    entries_path, treatments_path, profile_path = download_nightscout(
-        "https://my-nightscout.example.com",
-        output_dir=Path("data"),
-        count=10000,
-        days=30,
-    )
+    # With readable token
+    download_nightscout("https://my-ns.example.com", token="mytoken-1234")
 
-    # Download as CSV instead
-    entries_path, treatments_path, profile_path = download_nightscout(
-        "https://my-nightscout.example.com",
-        output_dir=Path("data"),
-        api_format="csv",
-    )
-
-    # Download and parse to unified DataFrame in one call
-    unified_df = download_and_parse_nightscout(
-        "https://my-nightscout.example.com",
-        count=10000,
-    )
+    # With API secret
+    download_nightscout("https://my-ns.example.com", api_secret="my-api-secret")
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal, Optional
-
-import polars as pl
-
-NightscoutApiFormat = Literal["json", "csv"]
+from typing import Optional
 
 
 def _ensure_httpx():  # type: ignore[no-untyped-def]
@@ -78,29 +64,38 @@ def _build_params(
     return params
 
 
+def _build_headers(api_secret: Optional[str]) -> dict[str, str]:
+    """Build HTTP headers, including api-secret if provided."""
+    headers: dict[str, str] = {}
+    if api_secret:
+        # Nightscout expects the SHA1 hash of the API_SECRET
+        secret_hash = hashlib.sha1(api_secret.encode("utf-8")).hexdigest()
+        headers["api-secret"] = secret_hash
+    return headers
+
+
 def download_nightscout(
     base_url: str,
     output_dir: Path = Path("."),
     count: int = 10_000,
     token: Optional[str] = None,
+    api_secret: Optional[str] = None,
     days: Optional[int] = None,
     timeout: float = 60.0,
-    api_format: NightscoutApiFormat = "json",
 ) -> tuple[Path, Path, Path]:
-    """Download entries, treatments, and profile from a Nightscout instance.
+    """Download entries, treatments, and profile JSON from a Nightscout instance.
 
     Args:
         base_url: Nightscout base URL (e.g. ``https://my-ns.example.com``)
         output_dir: Directory to save files into (created if missing)
         count: Maximum number of entries/treatments to fetch
-        token: Optional API token for authenticated instances
+        token: Optional readable access token (passed as query param)
+        api_secret: Optional API_SECRET (hashed and sent as ``api-secret`` header)
         days: If set, only fetch data from the last N days
         timeout: HTTP request timeout in seconds
-        api_format: Response format to request from the API (``"json"`` or ``"csv"``)
 
     Returns:
-        Tuple of (entries_path, treatments_path, profile_path).
-        Profile is always downloaded as JSON regardless of *api_format*.
+        Tuple of (entries_json_path, treatments_json_path, profile_json_path)
     """
     httpx = _ensure_httpx()
 
@@ -115,95 +110,24 @@ def download_nightscout(
     if token:
         profile_params["token"] = token
 
-    ext = api_format  # "json" or "csv"
+    headers = _build_headers(api_secret)
 
-    with httpx.Client(timeout=timeout) as client:
-        entries_resp = client.get(f"{base}/api/v1/entries.{ext}", params=entry_params)
+    with httpx.Client(timeout=timeout, headers=headers) as client:
+        entries_resp = client.get(f"{base}/api/v1/entries.json", params=entry_params)
         entries_resp.raise_for_status()
 
-        treatments_resp = client.get(f"{base}/api/v1/treatments.{ext}", params=treatment_params)
+        treatments_resp = client.get(f"{base}/api/v1/treatments.json", params=treatment_params)
         treatments_resp.raise_for_status()
 
         profile_resp = client.get(f"{base}/api/v1/profile.json", params=profile_params)
         profile_resp.raise_for_status()
 
-    entries_path = output_dir / f"nightscout_entries.{ext}"
-    treatments_path = output_dir / f"nightscout_treatments.{ext}"
+    entries_path = output_dir / "nightscout_entries.json"
+    treatments_path = output_dir / "nightscout_treatments.json"
     profile_path = output_dir / "nightscout_profile.json"
 
-    if api_format == "json":
-        entries_path.write_text(json.dumps(entries_resp.json(), indent=2, ensure_ascii=False))
-        treatments_path.write_text(json.dumps(treatments_resp.json(), indent=2, ensure_ascii=False))
-    else:
-        entries_path.write_text(entries_resp.text)
-        treatments_path.write_text(treatments_resp.text)
-
+    entries_path.write_text(json.dumps(entries_resp.json(), indent=2, ensure_ascii=False))
+    treatments_path.write_text(json.dumps(treatments_resp.json(), indent=2, ensure_ascii=False))
     profile_path.write_text(json.dumps(profile_resp.json(), indent=2, ensure_ascii=False))
 
     return entries_path, treatments_path, profile_path
-
-
-def download_and_parse_nightscout(
-    base_url: str,
-    count: int = 10_000,
-    token: Optional[str] = None,
-    days: Optional[int] = None,
-    timeout: float = 60.0,
-    output_dir: Optional[Path] = None,
-    api_format: NightscoutApiFormat = "json",
-) -> pl.DataFrame:
-    """Download Nightscout data and parse to unified format in one call.
-
-    If *output_dir* is provided, raw response files are also saved to disk.
-
-    Args:
-        base_url: Nightscout base URL
-        count: Maximum number of entries/treatments to fetch
-        token: Optional API token
-        days: If set, only fetch data from the last N days
-        timeout: HTTP request timeout in seconds
-        output_dir: Optional directory to persist raw data alongside parsing
-        api_format: Response format to request from the API (``"json"`` or ``"csv"``)
-
-    Returns:
-        Unified-format Polars DataFrame
-    """
-    from cgm_format.format_parser import FormatParser
-
-    httpx = _ensure_httpx()
-    base = base_url.rstrip("/")
-
-    entry_params = _build_params(count, token, days, date_field="dateString")
-    treatment_params = _build_params(count, token, days, date_field="created_at")
-
-    ext = api_format
-
-    with httpx.Client(timeout=timeout) as client:
-        entries_resp = client.get(f"{base}/api/v1/entries.{ext}", params=entry_params)
-        entries_resp.raise_for_status()
-
-        treatments_resp = client.get(f"{base}/api/v1/treatments.{ext}", params=treatment_params)
-        treatments_resp.raise_for_status()
-
-    if api_format == "json":
-        entries_text = json.dumps(entries_resp.json(), ensure_ascii=False)
-        treatments_text = json.dumps(treatments_resp.json(), ensure_ascii=False)
-    else:
-        entries_text = entries_resp.text
-        treatments_text = treatments_resp.text
-
-    if output_dir:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        if api_format == "json":
-            (output_dir / "nightscout_entries.json").write_text(
-                json.dumps(entries_resp.json(), indent=2, ensure_ascii=False)
-            )
-            (output_dir / "nightscout_treatments.json").write_text(
-                json.dumps(treatments_resp.json(), indent=2, ensure_ascii=False)
-            )
-        else:
-            (output_dir / "nightscout_entries.csv").write_text(entries_text)
-            (output_dir / "nightscout_treatments.csv").write_text(treatments_text)
-
-    return FormatParser.parse_nightscout(entries_text, treatments_text)

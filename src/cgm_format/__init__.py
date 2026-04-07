@@ -101,8 +101,6 @@ from cgm_format.formats.nightscout import (
 
 from cgm_format.nightscout_downloader import (
     download_nightscout,
-    download_and_parse_nightscout,
-    NightscoutApiFormat,
 )
 
 __all__ = [
@@ -179,8 +177,6 @@ __all__ = [
     
     # Nightscout downloader
     "download_nightscout",
-    "download_and_parse_nightscout",
-    "NightscoutApiFormat",
     
     # Version
     "__version__",
