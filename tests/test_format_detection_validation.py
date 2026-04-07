@@ -5,7 +5,7 @@ This test ensures that:
 2. All detected files validate against their Frictionless schemas
 3. Known vendor format issues are properly suppressed
 
-Tests parametrized for all CSV files in the data directory.
+Tests parametrized for all CSV files in the data/input directory.
 """
 
 import pytest
@@ -25,7 +25,7 @@ except ImportError:
 
 
 # Test data directory
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 def is_medtronic_file(file_path: Path) -> bool:
     """Check if a file is a Medtronic Guardian Connect file."""
@@ -49,6 +49,13 @@ def get_all_csv_files():
     csv_files = list(DATA_DIR.glob("*.csv"))
     # Exclude Medtronic files (not yet supported)
     csv_files = [f for f in csv_files if not is_medtronic_file(f)]
+    # Exclude Nightscout supplementary files:
+    # - treatments.csv: supplementary file, not a standalone format
+    # - entries.csv: defective headerless CSV from Nightscout API (kept as negative control)
+    csv_files = [f for f in csv_files if f.name not in (
+        "nightscout_treatments.csv",
+        "nightscout_entries.csv",
+    )]
     
     if not csv_files:
         pytest.skip(f"No CSV files found in {DATA_DIR}")
@@ -122,23 +129,29 @@ def should_suppress_error(error: Any, format_type: SupportedCGMFormat) -> bool:
     elif isinstance(error, dict):
         cell_value = error.get('cell', '')
     
-    if not error_type or not field_name:
+    if not error_type:
         return False
-    
+
     # Check if this error matches any suppression rule
     # Suppression rules are tuples: (error_type, field_name, cell_value)
-    # If cell_value in rule is None, we only match on error_type and field_name
+    # If field_name or cell_value in rule is None, that field is not checked
     for rule in suppressions:
         rule_error_type, rule_field_name, rule_cell_value = rule
-        
-        # Check error type and field name
-        if error_type == rule_error_type and field_name == rule_field_name:
-            # If rule doesn't care about cell value (None), it's a match
-            if rule_cell_value is None:
-                return True
-            # Otherwise, check if cell value matches
-            if cell_value == rule_cell_value:
-                return True
+
+        # Check error type match
+        if error_type != rule_error_type:
+            continue
+
+        # Check field name (None in rule means match any field, including no field)
+        if rule_field_name is not None and field_name != rule_field_name:
+            continue
+
+        # If rule doesn't care about cell value (None), it's a match
+        if rule_cell_value is None:
+            return True
+        # Otherwise, check if cell value matches
+        if cell_value == rule_cell_value:
+            return True
     
     return False
 

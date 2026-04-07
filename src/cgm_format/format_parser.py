@@ -46,6 +46,13 @@ from cgm_format.formats.medtronic import (
     MEDTRONIC_CSV_SEPARATOR,
     MEDTRONIC_SCHEMA_OVERRIDES_UTF8,
 )
+from cgm_format.formats.nightscout import (
+    NightscoutEntryColumn,
+    NightscoutTreatmentColumn,
+    NightscoutTreatmentEventType,
+    NIGHTSCOUT_TIMESTAMP_FORMATS,
+    NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS,
+)
 
 # Common encoding artifacts and their fixes 
 UTF8_BOM = b'\xef\xbb\xbf'
@@ -196,6 +203,8 @@ class FormatParser(CGMParser):
             unified_df = cls._process_libre(text_data)
         elif format_type == SupportedCGMFormat.MEDTRONIC:
             unified_df = cls._process_medtronic(text_data)
+        elif format_type == SupportedCGMFormat.NIGHTSCOUT:
+            unified_df = cls._process_nightscout(text_data)
         else:
             raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
         
@@ -802,6 +811,523 @@ class FormatParser(CGMParser):
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse Medtronic CSV: {e}"
             raise MalformedDataError(cls._truncate_error_message(error_msg))
+
+    # ===== Nightscout Processing Methods =====
+
+    @classmethod
+    def _is_nightscout_entries_json(cls, data: str) -> bool:
+        """Check if data looks like Nightscout entries JSON (array with sgv keys)."""
+        stripped = data.strip()
+        return stripped.startswith("[") and '"sgv"' in stripped[:2000]
+
+    @classmethod
+    def _is_nightscout_treatments_json(cls, data: str) -> bool:
+        """Check if data looks like Nightscout treatments JSON (array with eventType keys)."""
+        stripped = data.strip()
+        return stripped.startswith("[") and '"eventType"' in stripped[:2000]
+
+    # ----- JSON parsing (Nightscout REST API) -----
+
+    @classmethod
+    def _parse_nightscout_entries_json(cls, json_data: str) -> pl.DataFrame:
+        """Parse Nightscout entries JSON array to glucose DataFrame.
+
+        Returns a DataFrame with columns ``dateString`` and ``sgv``.
+        """
+        import json as json_mod
+        records = json_mod.loads(json_data)
+        if not records:
+            raise ZeroValidInputError("Nightscout entries JSON is empty")
+
+        rows: list[dict] = []
+        for entry in records:
+            if entry.get("type") != "sgv":
+                continue
+            date_str = entry.get("dateString") or entry.get("sysTime")
+            sgv = entry.get("sgv") or entry.get("glucose")
+            if date_str is None or sgv is None:
+                continue
+            rows.append({"dateString": str(date_str), "sgv": sgv})
+
+        if not rows:
+            raise ZeroValidInputError("No SGV entries found in Nightscout JSON")
+        return pl.DataFrame(rows)
+
+    @classmethod
+    def _parse_nightscout_treatments_json(cls, json_data: str) -> pl.DataFrame:
+        """Parse Nightscout treatments JSON to a flat DataFrame.
+
+        Returns a DataFrame with JSON API field names (``created_at``,
+        ``eventType``, ``insulin``, ``carbs``, ``rate``, ``duration``).
+        """
+        import json as json_mod
+        records = json_mod.loads(json_data)
+        if not records:
+            return pl.DataFrame()
+
+        rows: list[dict] = []
+        for t in records:
+            event_type = t.get("eventType")
+            created_at = t.get("created_at")
+            if not event_type or not created_at:
+                continue
+            rows.append({
+                "created_at": str(created_at),
+                "eventType": str(event_type),
+                "insulin": t.get("insulin"),
+                "carbs": t.get("carbs"),
+                "rate": t.get("rate"),
+                "duration": t.get("duration"),
+            })
+        if not rows:
+            return pl.DataFrame()
+        return pl.DataFrame(rows)
+
+    @classmethod
+    def _entries_json_to_unified(cls, entries_df: pl.DataFrame) -> pl.DataFrame:
+        """Convert JSON-parsed entries DataFrame to unified glucose rows."""
+        timestamp_format = cls._probe_timestamp_format(entries_df, "dateString", NIGHTSCOUT_TIMESTAMP_FORMATS)
+        return (
+            entries_df
+            .select([
+                pl.col("dateString").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                pl.col("sgv").cast(pl.Float64, strict=False).alias("glucose"),
+                pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                pl.lit(0).alias("quality"),
+            ])
+            .filter(pl.col("glucose").is_not_null())
+        )
+
+    @classmethod
+    def _treatments_json_to_unified(cls, treatments_df: pl.DataFrame) -> pl.DataFrame:
+        """Convert JSON-parsed treatments DataFrame to unified rows."""
+        if len(treatments_df) == 0:
+            return pl.DataFrame()
+
+        timestamp_format = cls._probe_timestamp_format(treatments_df, "created_at", NIGHTSCOUT_TIMESTAMP_FORMATS)
+
+        all_frames: list[pl.DataFrame] = []
+
+        # Bolus / SMB -> insulin_fast
+        bolus_types = [NightscoutTreatmentEventType.BOLUS.value, NightscoutTreatmentEventType.SMB.value,
+                       NightscoutTreatmentEventType.MEAL_BOLUS.value, NightscoutTreatmentEventType.CORRECTION_BOLUS.value]
+        if "insulin" in treatments_df.columns:
+            bolus_df = (
+                treatments_df
+                .filter(
+                    pl.col("eventType").is_in(bolus_types)
+                    & pl.col("insulin").is_not_null()
+                    & (pl.col("insulin").cast(pl.Float64, strict=False) > 0)
+                )
+                .select([
+                    pl.col("created_at").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("insulin").cast(pl.Float64, strict=False).alias("insulin_fast"),
+                    pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),
+                ])
+            )
+            if len(bolus_df) > 0:
+                all_frames.append(bolus_df)
+
+        # Temp Basal -> insulin_slow (only non-zero rates)
+        if "rate" in treatments_df.columns:
+            basal_df = (
+                treatments_df
+                .filter(
+                    (pl.col("eventType") == NightscoutTreatmentEventType.TEMP_BASAL.value)
+                    & pl.col("rate").is_not_null()
+                    & (pl.col("rate").cast(pl.Float64, strict=False) > 0)
+                )
+                .select([
+                    pl.col("created_at").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("rate").cast(pl.Float64, strict=False).alias("insulin_slow"),
+                    pl.lit(UnifiedEventType.INSULIN_SLOW.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),
+                ])
+            )
+            if len(basal_df) > 0:
+                all_frames.append(basal_df)
+
+        # Any treatment with carbs -> carbs
+        if "carbs" in treatments_df.columns:
+            carb_df = (
+                treatments_df
+                .filter(
+                    pl.col("carbs").is_not_null()
+                    & (pl.col("carbs").cast(pl.Float64, strict=False) > 0)
+                )
+                .select([
+                    pl.col("created_at").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+                    pl.col("carbs").cast(pl.Float64, strict=False).alias("carbs"),
+                    pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),
+                ])
+            )
+            if len(carb_df) > 0:
+                all_frames.append(carb_df)
+
+        if not all_frames:
+            return pl.DataFrame()
+        return pl.concat(all_frames, how="diagonal")
+
+    # ----- CSV parsing (nightscout-exporter format) -----
+
+    @classmethod
+    def _split_nightscout_exporter_csv(cls, text_data: str) -> tuple[str, Optional[str]]:
+        """Split a nightscout-exporter combined CSV into entries and treatments sections.
+
+        The exporter format uses ``# CGM ENTRIES`` and ``# TREATMENTS ...``
+        comment lines as section delimiters.  Returns (entries_csv, treatments_csv)
+        where treatments_csv may be None if no treatments section is present.
+        """
+        entries_lines: list[str] = []
+        treatments_lines: list[str] = []
+        current: Optional[list[str]] = None
+
+        for line in text_data.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# CGM ENTRIES"):
+                current = entries_lines
+                continue
+            if stripped.startswith("# TREATMENTS"):
+                current = treatments_lines
+                continue
+            if stripped.startswith("#"):
+                continue
+            if not stripped:
+                continue
+            if current is not None:
+                current.append(line)
+            else:
+                # Before any section marker → assume entries
+                entries_lines.append(line)
+
+        entries_csv = "\n".join(entries_lines) if entries_lines else ""
+        treatments_csv = "\n".join(treatments_lines) if treatments_lines else None
+        return entries_csv, treatments_csv
+
+    @classmethod
+    def _parse_nightscout_entries_csv(cls, csv_data: str) -> pl.DataFrame:
+        """Parse nightscout-exporter entries CSV section.
+
+        Expected columns: Date, Time, Glucose (mg/dL), Type, Device, Trend, ID
+        """
+        df = pl.read_csv(
+            StringIO(csv_data),
+            truncate_ragged_lines=True,
+            infer_schema_length=None,
+            ignore_errors=False,
+        )
+        df = df.rename({col: col.strip() for col in df.columns})
+        glucose_col = NightscoutEntryColumn.GLUCOSE_MGDL
+        if glucose_col not in df.columns:
+            raise MalformedDataError(
+                f"Missing required column: '{glucose_col}'. "
+                f"Got columns: {df.columns}"
+            )
+        return df
+
+    @classmethod
+    def _parse_nightscout_treatments_csv(cls, csv_data: str) -> pl.DataFrame:
+        """Parse nightscout-exporter treatments CSV section.
+
+        Expected columns: Date, Time, Event Type, Insulin (U), Carbs (g), Notes, ID
+        """
+        df = pl.read_csv(
+            StringIO(csv_data),
+            truncate_ragged_lines=True,
+            infer_schema_length=None,
+            ignore_errors=False,
+        )
+        df = df.rename({col: col.strip() for col in df.columns})
+        return df
+
+    # Datetime formats produced by JavaScript's toLocaleDateString() / toLocaleTimeString()
+    # in the nightscout-exporter.  We try US locale first, then ISO-ish fallbacks.
+    _EXPORTER_DATETIME_FORMATS: ClassVar[list[str]] = [
+        "%m/%d/%Y %I:%M:%S %p",    # US locale: 3/31/2026 7:51:03 PM
+        "%d/%m/%Y %I:%M:%S %p",    # UK locale: 31/3/2026 7:51:03 PM
+        "%Y-%m-%d %H:%M:%S",       # ISO-ish: 2026-03-31 19:51:03
+    ]
+
+    @classmethod
+    def _parse_exporter_datetime(cls, df: pl.DataFrame, date_col: str, time_col: str) -> pl.DataFrame:
+        """Add a ``datetime`` column by combining Date + Time with format probing."""
+        combined = df.with_columns(
+            (pl.col(date_col).cast(pl.Utf8) + " " + pl.col(time_col).cast(pl.Utf8)).alias("_datetime_str")
+        )
+        for fmt in cls._EXPORTER_DATETIME_FORMATS:
+            try:
+                return combined.with_columns(
+                    pl.col("_datetime_str").str.strptime(pl.Datetime("ms"), fmt, strict=False).alias("datetime")
+                )
+            except Exception:
+                continue
+        raise MalformedDataError(
+            f"Cannot parse Date+Time columns with any known format. "
+            f"Sample: {combined['_datetime_str'].head(3).to_list()}"
+        )
+
+    @classmethod
+    def _entries_csv_to_unified(cls, entries_df: pl.DataFrame) -> pl.DataFrame:
+        """Convert nightscout-exporter entries CSV to unified glucose rows.
+
+        Combines locale Date + Time columns into a datetime, maps
+        Glucose (mg/dL) to the unified glucose column.
+        """
+        date_col = NightscoutEntryColumn.DATE
+        time_col = NightscoutEntryColumn.TIME
+        glucose_col = NightscoutEntryColumn.GLUCOSE_MGDL
+
+        entries_df = cls._parse_exporter_datetime(entries_df, date_col, time_col)
+
+        return (
+            entries_df
+            .select([
+                pl.col("datetime"),
+                pl.col(glucose_col).cast(pl.Float64, strict=False).alias("glucose"),
+                pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                pl.lit(0).alias("quality"),
+            ])
+            .filter(pl.col("glucose").is_not_null() & pl.col("datetime").is_not_null())
+        )
+
+    @classmethod
+    def _treatments_csv_to_unified(cls, treatments_df: pl.DataFrame) -> pl.DataFrame:
+        """Convert nightscout-exporter treatments CSV to unified rows."""
+        if len(treatments_df) == 0:
+            return pl.DataFrame()
+
+        date_col = NightscoutTreatmentColumn.DATE
+        time_col = NightscoutTreatmentColumn.TIME
+        event_col = NightscoutTreatmentColumn.EVENT_TYPE
+        insulin_col = NightscoutTreatmentColumn.INSULIN_U
+        carbs_col = NightscoutTreatmentColumn.CARBS_G
+
+        treatments_df = cls._parse_exporter_datetime(treatments_df, date_col, time_col)
+
+        all_frames: list[pl.DataFrame] = []
+
+        bolus_types = [NightscoutTreatmentEventType.BOLUS.value, NightscoutTreatmentEventType.SMB.value,
+                       NightscoutTreatmentEventType.MEAL_BOLUS.value, NightscoutTreatmentEventType.CORRECTION_BOLUS.value]
+
+        if insulin_col in treatments_df.columns:
+            bolus_df = (
+                treatments_df
+                .filter(
+                    pl.col(event_col).is_in(bolus_types)
+                    & pl.col(insulin_col).is_not_null()
+                    & (pl.col(insulin_col).cast(pl.Float64, strict=False) > 0)
+                )
+                .select([
+                    pl.col("datetime"),
+                    pl.col(insulin_col).cast(pl.Float64, strict=False).alias("insulin_fast"),
+                    pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),
+                ])
+            )
+            if len(bolus_df) > 0:
+                all_frames.append(bolus_df)
+
+        if carbs_col in treatments_df.columns:
+            carb_df = (
+                treatments_df
+                .filter(
+                    pl.col(carbs_col).is_not_null()
+                    & (pl.col(carbs_col).cast(pl.Float64, strict=False) > 0)
+                )
+                .select([
+                    pl.col("datetime"),
+                    pl.col(carbs_col).cast(pl.Float64, strict=False).alias("carbs"),
+                    pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),
+                ])
+            )
+            if len(carb_df) > 0:
+                all_frames.append(carb_df)
+
+        if not all_frames:
+            return pl.DataFrame()
+        return pl.concat(all_frames, how="diagonal")
+
+    # ----- Top-level Nightscout dispatch -----
+
+    @classmethod
+    def _process_nightscout(cls, text_data: str) -> UnifiedFormat:
+        """Process Nightscout data (JSON or exporter CSV) to unified format.
+
+        Dispatches to JSON or CSV parsing based on content sniffing.
+        Called by ``parse_to_unified`` when format is NIGHTSCOUT, and also
+        used internally by ``parse_nightscout`` for entries-only data.
+        """
+        try:
+            # JSON entries (from API)
+            if cls._is_nightscout_entries_json(text_data):
+                entries_df = cls._parse_nightscout_entries_json(text_data)
+                glucose_rows = cls._entries_json_to_unified(entries_df)
+                unified = glucose_rows.with_columns([pl.lit(0).alias("sequence_id")])
+                return cls._postprocess_unified(unified)
+
+            # nightscout-exporter CSV (combined entries + optional treatments)
+            entries_csv, treatments_csv = cls._split_nightscout_exporter_csv(text_data)
+
+            if not entries_csv.strip():
+                raise ZeroValidInputError("No entries data found in Nightscout data")
+
+            entries_df = cls._parse_nightscout_entries_csv(entries_csv)
+            glucose_rows = cls._entries_csv_to_unified(entries_df)
+            all_frames: list[pl.DataFrame] = [glucose_rows]
+
+            if treatments_csv:
+                treatments_df = cls._parse_nightscout_treatments_csv(treatments_csv)
+                treatment_rows = cls._treatments_csv_to_unified(treatments_df)
+                if len(treatment_rows) > 0:
+                    all_frames.append(treatment_rows)
+
+            unified = pl.concat(all_frames, how="diagonal")
+            unified = unified.with_columns([pl.lit(0).alias("sequence_id")])
+            return cls._postprocess_unified(unified)
+
+        except (ZeroValidInputError, MalformedDataError):
+            raise
+        except Exception as e:
+            error_msg = f"Failed to parse Nightscout data: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
+
+    @classmethod
+    def parse_nightscout(
+        cls,
+        entries_data: Union[bytes, str],
+        treatments_data: Union[bytes, str, None] = None,
+    ) -> UnifiedFormat:
+        """Parse Nightscout entries and optional treatments to unified format.
+
+        Accepts JSON (from the Nightscout REST API) or nightscout-exporter CSV
+        for entries.  Treatments must be JSON (Nightscout doesn't serve
+        treatments as CSV).  Merges glucose readings with insulin / carb
+        treatments into a single unified DataFrame.
+
+        Args:
+            entries_data: Nightscout entries (JSON or exporter CSV), as bytes or string
+            treatments_data: Optional Nightscout treatments JSON
+
+        Returns:
+            DataFrame in unified format matching CGM_SCHEMA
+        """
+        if isinstance(entries_data, bytes):
+            entries_text = cls.decode_raw_data(entries_data)
+        else:
+            entries_text = entries_data
+
+        if cls._is_nightscout_entries_json(entries_text):
+            entries_df = cls._parse_nightscout_entries_json(entries_text)
+            glucose_rows = cls._entries_json_to_unified(entries_df)
+        else:
+            entries_df = cls._parse_nightscout_entries_csv(entries_text)
+            glucose_rows = cls._entries_csv_to_unified(entries_df)
+
+        all_frames: list[pl.DataFrame] = [glucose_rows]
+
+        if treatments_data is not None:
+            if isinstance(treatments_data, bytes):
+                treatments_text = cls.decode_raw_data(treatments_data)
+            else:
+                treatments_text = treatments_data
+
+            if cls._is_nightscout_treatments_json(treatments_text):
+                treatments_df = cls._parse_nightscout_treatments_json(treatments_text)
+                treatment_rows = cls._treatments_json_to_unified(treatments_df)
+            else:
+                treatments_df = cls._parse_nightscout_treatments_csv(treatments_text)
+                treatment_rows = cls._treatments_csv_to_unified(treatments_df)
+
+            if len(treatment_rows) > 0:
+                all_frames.append(treatment_rows)
+
+        unified = pl.concat(all_frames, how="diagonal")
+        unified = unified.with_columns([pl.lit(0).alias("sequence_id")])
+        return cls._postprocess_unified(unified)
+
+    @classmethod
+    def from_nightscout_exports(
+        cls,
+        entries_path: Union[str, Path],
+        treatments_path: Union[str, Path, None] = None,
+        profile_path: Union[str, Path, None] = None,
+    ) -> UnifiedFormat:
+        """Parse Nightscout export files (JSON or CSV) to unified format.
+
+        Convenience wrapper around :meth:`parse_nightscout` that reads files
+        from disk.  Accepts both JSON and CSV for entries; treatments are
+        expected to be JSON (the Nightscout API does not support CSV for
+        treatments).
+
+        Args:
+            entries_path: Path to entries file (JSON or CSV)
+            treatments_path: Optional path to treatments JSON file
+            profile_path: Reserved for future use (profile data)
+
+        Returns:
+            DataFrame in unified format matching CGM_SCHEMA
+        """
+        entries_data = Path(entries_path).read_bytes()
+        treatments_data: Union[bytes, None] = None
+        if treatments_path is not None:
+            treatments_data = Path(treatments_path).read_bytes()
+        return cls.parse_nightscout(entries_data, treatments_data)
+
+    @classmethod
+    def from_nightscout_url(
+        cls,
+        base_url: str,
+        count: int = 10_000,
+        token: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        days: Optional[int] = None,
+        timeout: float = 60.0,
+        output_dir: Optional[Path] = None,
+    ) -> UnifiedFormat:
+        """Download Nightscout data and parse to unified format in one call.
+
+        Fetches entries and treatments as JSON from the Nightscout REST API,
+        optionally saves the raw files to *output_dir*, and returns a unified
+        DataFrame.
+
+        Requires ``httpx`` (optional dependency).
+
+        Args:
+            base_url: Nightscout base URL
+            count: Maximum number of entries/treatments to fetch
+            token: Optional readable access token
+            api_secret: Optional API_SECRET (hashed and sent as header)
+            days: If set, only fetch data from the last N days
+            timeout: HTTP request timeout in seconds
+            output_dir: Optional directory to persist raw JSON files
+
+        Returns:
+            Unified-format Polars DataFrame
+        """
+        from cgm_format.nightscout_downloader import (
+            download_nightscout,
+        )
+
+        if output_dir is None:
+            import tempfile
+            tmp = Path(tempfile.mkdtemp(prefix="nightscout_"))
+        else:
+            tmp = Path(output_dir)
+
+        entries_path, treatments_path, _ = download_nightscout(
+            base_url=base_url,
+            output_dir=tmp,
+            count=count,
+            token=token,
+            api_secret=api_secret,
+            days=days,
+            timeout=timeout,
+        )
+
+        return cls.from_nightscout_exports(entries_path, treatments_path)
 
     # ===== Serialization Methods =====
     

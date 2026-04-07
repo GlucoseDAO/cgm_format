@@ -1,6 +1,6 @@
 """Integration tests for Medtronic Guardian Connect / CareLink format support.
 
-Tests dynamically discover Medtronic files from data/ using detect_format,
+Tests dynamically discover Medtronic files from data/input/ using detect_format,
 then validate parsing, schema conformance, roundtrip, and pipeline processing.
 """
 
@@ -13,6 +13,7 @@ from cgm_format import FormatParser as FormatParserPrime
 from cgm_format import FormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    UnknownFormatError,
     ValidationMethod,
 )
 from cgm_format.formats.unified import (
@@ -29,7 +30,7 @@ class FormatParser(FormatParserPrime):
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data" / "input"
 
 
 def get_medtronic_files() -> List[Path]:
@@ -44,15 +45,18 @@ def get_medtronic_files() -> List[Path]:
         with open(f, 'rb') as fh:
             raw = fh.read()
         text = FormatParser.decode_raw_data(raw)
-        if FormatParser.detect_format(text) == SupportedCGMFormat.MEDTRONIC:
-            medtronic_files.append(f)
+        try:
+            if FormatParser.detect_format(text) == SupportedCGMFormat.MEDTRONIC:
+                medtronic_files.append(f)
+        except UnknownFormatError:
+            continue
     return medtronic_files
 
 
 MEDTRONIC_FILES = get_medtronic_files()
 
 if not MEDTRONIC_FILES:
-    pytest.skip("No Medtronic files found in data/", allow_module_level=True)
+    pytest.skip("No Medtronic files found in data/input/", allow_module_level=True)
 
 
 @pytest.fixture(scope="session")

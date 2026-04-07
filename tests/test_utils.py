@@ -15,7 +15,7 @@ from cgm_format.formats.unified import UnifiedEventType, CGM_SCHEMA
 
 # Constants - relative to project root
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data" / "input"
 
 
 @pytest.fixture(scope="session")

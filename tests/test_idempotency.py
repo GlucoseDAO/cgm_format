@@ -24,7 +24,7 @@ from cgm_format.interface.cgm_interface import (
 from cgm_format.formats.unified import CGM_SCHEMA
 
 
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 
 

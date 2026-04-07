@@ -20,7 +20,7 @@ from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 
 # Stage 1-3: Parse vendor-specific data to unified format
-unified_df = FormatParser.parse_file("data/dexcom_export.csv")
+unified_df = FormatParser.parse_file("data/input/dexcom_export.csv")
 
 # Stage 4: Process unified format
 # FormatProcessor uses classmethods - call directly on the class
@@ -29,14 +29,14 @@ unified_df = FormatParser.parse_file("data/dexcom_export.csv")
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19
+    large_gap_threshold_minutes=15
 )
 
 # Step 2: Fill small gaps within sequences
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 
 # Step 3: Align to grid (optional but recommended)
@@ -123,7 +123,7 @@ Converts vendor-specific CSV to unified format. This stage handles:
 
 **Input:** Preprocessed string data and detected format type
 
-**Output:** Polars DataFrame in unified format (see `formats/UNIFIED_FORMAT.md`) with `sequence_id=0` (unassigned)
+**Output:** Polars DataFrame in unified format (see `UNIFIED_FORMAT.md`) with `sequence_id=0` (unassigned)
 
 **Note**: Sequence detection is now handled by `FormatProcessor.detect_and_assign_sequences()` (Stage 4), not during parsing. The parser initializes `sequence_id` to 0 (unassigned) for the processor to fill in.
 
@@ -140,7 +140,7 @@ After Stage 3, all vendor-specific processing is complete. The following operati
 
 #### Sequence Detection and Assignment
 
-**Method:** `FormatProcessor.detect_and_assign_sequences(dataframe, expected_interval_minutes=5, large_gap_threshold_minutes=19) -> UnifiedFormat`
+**Method:** `FormatProcessor.detect_and_assign_sequences(dataframe, expected_interval_minutes=5, large_gap_threshold_minutes=15) -> UnifiedFormat`
 
 This method detects large gaps in **glucose events only** and assigns `sequence_id` values. It should be called **explicitly as the first processing step** for clarity and control.
 
@@ -151,7 +151,7 @@ This method detects large gaps in **glucose events only** and assigns `sequence_
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19  # Gaps > 19 min create new sequences
+    large_gap_threshold_minutes=15  # Gaps > 15 min create new sequences
 )
 
 # Step 2: Then interpolate, synchronize, etc.
@@ -181,7 +181,7 @@ unified_df = FormatProcessor.interpolate_gaps(unified_df, ...)
 
 #### Gap Interpolation
 
-**Method:** `FormatProcessor.interpolate_gaps(dataframe, expected_interval_minutes=5, small_gap_max_minutes=19, snap_to_grid=True) -> UnifiedFormat`
+**Method:** `FormatProcessor.interpolate_gaps(dataframe, expected_interval_minutes=5, small_gap_max_minutes=15, snap_to_grid=True) -> UnifiedFormat`
 
 Fills small gaps in continuous glucose data with linearly interpolated values.
 
@@ -192,14 +192,14 @@ Fills small gaps in continuous glucose data with linearly interpolated values.
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=5,
-    large_gap_threshold_minutes=19
+    large_gap_threshold_minutes=15
 )
 
 # Step 2: Interpolate gaps within sequences
 unified_df = FormatProcessor.interpolate_gaps(
     unified_df,
     expected_interval_minutes=5,
-    small_gap_max_minutes=19
+    small_gap_max_minutes=15
 )
 ```
 
@@ -422,7 +422,7 @@ data_only = FormatProcessor.to_data_only_df(
 | Constant                          | Value                  | Description                                                     | Stage               |
 | --------------------------------- | ---------------------- | --------------------------------------------------------------- | ------------------- |
 | `EXPECTED_INTERVAL_MINUTES`       | 5                      | Expected data collection interval                               | All stages          |
-| `SMALL_GAP_MAX_MINUTES`           | 19.0                   | Maximum gap size to interpolate (3 intervals + 80% tolerance)   | Stage 4 (Processor) |
+| `SMALL_GAP_MAX_MINUTES`           | 15                     | Maximum gap size to interpolate (3 intervals, matches glucose_data_processing) | Stage 4 (Processor) |
 | `CALIBRATION_GAP_THRESHOLD`       | 9900 seconds (2:45:00) | Minimum gap duration to trigger sensor calibration quality flag | Stage 4 (Processor) |
 | `CALIBRATION_PERIOD_HOURS`        | 24                     | Duration of calibration period after large gap                  | Stage 4 (Processor) |
 | `MINIMUM_DURATION_MINUTES`        | 60                     | Default minimum sequence duration for inference                 | Stage 5 (Processor) |
@@ -630,7 +630,7 @@ Parse CGM data directly from file path. Automatically detects format and handles
 from cgm_format.format_parser import FormatParser
 
 # Parse from file path
-df = FormatParser.parse_file("data/dexcom_export.csv")
+df = FormatParser.parse_file("data/input/dexcom_export.csv")
 ```
 
 ### Base64 Input

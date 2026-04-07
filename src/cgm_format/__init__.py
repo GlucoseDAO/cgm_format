@@ -11,7 +11,7 @@ Quick Start:
     >>> from cgm_format import FormatParser, FormatProcessor
     >>> 
     >>> # Parse any supported CGM file
-    >>> unified_df = FormatParser.parse_from_file("data/dexcom_export.csv")
+    >>> unified_df = FormatParser.parse_from_file("data/input/dexcom_export.csv")
     >>> 
     >>> # Process for inference
     >>> processor = FormatProcessor()
@@ -90,6 +90,19 @@ from cgm_format.formats.medtronic import (
     MedtronicColumn,
 )
 
+from cgm_format.formats.nightscout import (
+    NIGHTSCOUT_ENTRIES_SCHEMA,
+    NIGHTSCOUT_TREATMENTS_SCHEMA,
+    NightscoutEntryColumn,
+    NightscoutTreatmentColumn,
+    NightscoutTreatmentEventType,
+    NightscoutDirection,
+)
+
+from cgm_format.nightscout_downloader import (
+    download_nightscout,
+)
+
 __all__ = [
     # Main classes
     "FormatParser",
@@ -153,6 +166,17 @@ __all__ = [
     # Medtronic format
     "MEDTRONIC_SCHEMA",
     "MedtronicColumn",
+    
+    # Nightscout format
+    "NIGHTSCOUT_ENTRIES_SCHEMA",
+    "NIGHTSCOUT_TREATMENTS_SCHEMA",
+    "NightscoutEntryColumn",
+    "NightscoutTreatmentColumn",
+    "NightscoutTreatmentEventType",
+    "NightscoutDirection",
+    
+    # Nightscout downloader
+    "download_nightscout",
     
     # Version
     "__version__",

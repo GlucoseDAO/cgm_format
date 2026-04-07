@@ -11,8 +11,13 @@ from typing import List
 import pytest
 import polars as pl
 
+from cgm_format.interface.cgm_interface import (
+    EXPECTED_INTERVAL_MINUTES,
+    SMALL_GAP_MAX_MINUTES,
+)
+
 # Data directory relative to project root
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 TEST_OUTPUT_DIR = Path(__file__).parent.parent / "data" / "cli_test_output"
 
 
@@ -72,7 +77,7 @@ class TestCLIDetect:
         # Should succeed for supported formats
         if result.returncode == 0:
             assert "Detected format:" in result.stdout
-            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "medtronic", "unified"])
+            assert any(fmt in result.stdout for fmt in ["dexcom", "libre", "medtronic", "nightscout", "unified"])
         else:
             # Should fail gracefully for unsupported formats
             assert "Unknown format" in result.stdout or "Error" in result.stdout
@@ -160,10 +165,10 @@ class TestCLIProcess:
             "--output", str(output_file),
             "--interpolate",
             "--sync",
-            "--interval", "5",
-            "--max-gap", "19",
+            "--interval", str(int(EXPECTED_INTERVAL_MINUTES)),
+            "--max-gap", str(int(SMALL_GAP_MAX_MINUTES)),
         ])
-        
+
         if result.returncode == 0:
             assert "Detected" in result.stdout and "sequence" in result.stdout
             assert "Interpolated" in result.stdout or "Synchronized" in result.stdout
@@ -192,9 +197,9 @@ class TestCLIPipeline:
             "pipeline",
             str(file_path),
             "--output", str(output_file),
-            "--interval", "5",
-            "--max-gap", "19",
-            "--min-duration", "15",
+            "--interval", str(int(EXPECTED_INTERVAL_MINUTES)),
+            "--max-gap", str(int(SMALL_GAP_MAX_MINUTES)),
+            "--min-duration", str(int(SMALL_GAP_MAX_MINUTES)),
             "--max-duration", "1440",
             "--drop-duplicates",
             "--warnings",

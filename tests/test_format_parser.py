@@ -1,7 +1,7 @@
 """Pytest tests for format_parser module.
 
 Tests cover:
-1. Format detection for all files in data/
+1. Format detection for all files in data/input/
 2. Parsing to unified format
 3. Saving parsed results to data/parsed/
 
@@ -32,7 +32,7 @@ from cgm_format.formats.unified import UNIFIED_TIMESTAMP_FORMATS
 
 # Constants - relative to project root
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data" / "input"
 PARSED_DIR = PROJECT_ROOT / "data" / "parsed"
 
 
@@ -46,7 +46,7 @@ def setup_parsed_directory():
 
 @pytest.fixture(scope="session")
 def all_data_files():
-    """Get all CSV files from the data directory."""
+    """Get all CSV files from the data/input directory."""
     csv_files = sorted(DATA_DIR.glob("*.csv"))
     assert len(csv_files) > 0, f"No CSV files found in {DATA_DIR}"
     return csv_files
@@ -95,7 +95,7 @@ class TestFormatDetection:
         
         # Report results
         print(f"\n\n=== Format Detection Summary ===")
-        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Total files in data/input/: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully detected: {sum(format_counts.values())}")
@@ -215,7 +215,7 @@ class TestUnifiedParsing:
         
         # Report results
         print(f"\n\n=== Unified Parsing Summary ===")
-        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Total files in data/input/: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully parsed: {len(successful_parses)}")
@@ -319,7 +319,7 @@ class TestSaveToDirectory:
         
         # Report results
         print(f"\n\n=== Save to Parsed Directory Summary ===")
-        print(f"Total files in data/: {len(all_data_files)}")
+        print(f"Total files in data/input/: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully saved: {len(saved_files)}")

@@ -23,25 +23,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-extra = [
-    "pandas>=2.3.3",
-    "pyarrow>=23.0.1",
-    "frictionless>=5.18.1",
-]
 cli = [
     "typer>=0.24.1",
     "rich>=14.3.3",
+    "httpx>=0.28.1",
     "pandas>=2.3.3",
     "pyarrow>=23.0.1",
     "frictionless>=5.18.1",
 ]
 dev = [
-    "pandas>=2.3.3",
-    "pyarrow>=23.0.1",
-    "frictionless>=5.18.1",
+    "cgm-format[cli]",
     "pytest>=8.0.0",
-    "typer>=0.24.1",
-    "rich>=14.3.3",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

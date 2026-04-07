@@ -2,7 +2,7 @@
 
 This document defines the unified data format used to standardize CGM data across different vendors (Dexcom, Libre, etc.).
 
-> For information about the processing pipeline that produces this format, see `interface/PIPELINE.md`
+> For information about the processing pipeline that produces this format, see `PIPELINE.md`
 
 ## Overview
 

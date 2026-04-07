@@ -436,7 +436,7 @@ def test_interpolate_gaps_with_small_gap(sample_data_with_gaps):
     
     result = FormatProcessor.interpolate_gaps(sample_data_with_gaps)
     
-    # interpolate_gaps should interpolate the gap (15 min < 19 min threshold)
+    # interpolate_gaps should interpolate the gap (15 min <= SMALL_GAP_MAX_MINUTES threshold)
     # Expected: 4 original points + 2 interpolated points (at 12:15 and 12:20) = 6 total
     assert len(result) > len(sample_data_with_gaps), \
         f"Expected interpolation to add records, got {len(result)} vs {len(sample_data_with_gaps)}"
@@ -989,12 +989,12 @@ def test_sequence_creation_with_no_sequence_id():
             'exercise': None,
         })
     
-    # Large gap (20 minutes) - should create new sequence
-    # Next point at 30 minutes
+    # Large gap (> SMALL_GAP_MAX_MINUTES) - should create new sequence
+    last_point = EXPECTED_INTERVAL_MINUTES * 2
     data.append({
         'event_type': UnifiedEventType.GLUCOSE.value,
         'quality': GOOD_QUALITY.value,
-        'datetime': base_time + timedelta(minutes=30),
+        'datetime': base_time + timedelta(minutes=last_point + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES),
         'glucose': 110.0,
         'carbs': None,
         'insulin_slow': None,
@@ -1034,29 +1034,32 @@ def test_large_gap_creates_new_sequence():
             'exercise': None,
         })
     
-    # Large gap (20 minutes, > 15 minutes threshold)
-    # Second sequence: 3 points at 30, 35, 40 minutes
+    # Large gap (> SMALL_GAP_MAX_MINUTES threshold)
+    # Second sequence: 3 points starting after a large gap from the first segment's last point (minute 10)
+    seg2_start = EXPECTED_INTERVAL_MINUTES * 2 + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     for i in range(3):
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(minutes=30 + 5 * i),
+            'datetime': base_time + timedelta(minutes=seg2_start + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 110.0 + i * 2,
             'carbs': None,
             'insulin_slow': None,
             'insulin_fast': None,
             'exercise': None,
         })
-    
-    # Another large gap (25 minutes)
-    # Third sequence: 2 points at 65, 70 minutes
+
+    # Another large gap (> SMALL_GAP_MAX_MINUTES)
+    # Third sequence: 2 points starting after a large gap from second segment's last point
+    seg2_end = seg2_start + EXPECTED_INTERVAL_MINUTES * 2
+    seg3_start = seg2_end + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     for i in range(2):
         data.append({
             'sequence_id': 0,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(minutes=65 + 5 * i),
+            'datetime': base_time + timedelta(minutes=seg3_start + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 120.0 + i * 2,
             'carbs': None,
             'insulin_slow': None,
@@ -1113,14 +1116,15 @@ def test_multiple_existing_sequences_with_internal_gaps():
             'exercise': None,
         })
     
-    # Large gap (20 minutes) within sequence 1
-    # Part B: 30-40 minutes (3 points)
+    # Large gap (> SMALL_GAP_MAX_MINUTES) within sequence 1
+    # Part B: 3 points starting after large gap from Part A's last point (minute 10)
+    seq1_b_start = EXPECTED_INTERVAL_MINUTES * 2 + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     for i in range(3):
         data.append({
             'sequence_id': 1,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(minutes=30 + 5 * i),
+            'datetime': base_time + timedelta(minutes=seq1_b_start + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 105.0,
             'carbs': None,
             'insulin_slow': None,
@@ -1157,29 +1161,32 @@ def test_multiple_existing_sequences_with_internal_gaps():
             'exercise': None,
         })
     
-    # Large gap (25 minutes)
-    # Part B: 30-35 minutes (2 points)
+    # Large gap (> SMALL_GAP_MAX_MINUTES)
+    # Part B: 2 points after large gap from Part A's last point (minute 5)
+    seq3_b_start = EXPECTED_INTERVAL_MINUTES + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     for i in range(2):
         data.append({
             'sequence_id': 3,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(hours=4, minutes=30 + 5 * i),
+            'datetime': base_time + timedelta(hours=4, minutes=seq3_b_start + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 125.0,
             'carbs': None,
             'insulin_slow': None,
             'insulin_fast': None,
             'exercise': None,
         })
-    
-    # Another large gap (20 minutes)
-    # Part C: 55-60 minutes (2 points)
+
+    # Another large gap (> SMALL_GAP_MAX_MINUTES)
+    # Part C: 2 points after large gap from Part B's last point
+    seq3_b_end = seq3_b_start + EXPECTED_INTERVAL_MINUTES
+    seq3_c_start = seq3_b_end + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     for i in range(2):
         data.append({
             'sequence_id': 3,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(hours=4, minutes=55 + 5 * i),
+            'datetime': base_time + timedelta(hours=4, minutes=seq3_c_start + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 130.0,
             'carbs': None,
             'insulin_slow': None,
@@ -1188,12 +1195,14 @@ def test_multiple_existing_sequences_with_internal_gaps():
         })
     
     # Sequence 4: continuous, no gaps (should stay as one sequence)
+    # Start well after sequence 3's last point to guarantee a large inter-sequence gap
+    seq4_offset = 4 * 60 + seq3_c_start + EXPECTED_INTERVAL_MINUTES + SMALL_GAP_MAX_MINUTES * 2
     for i in range(3):
         data.append({
             'sequence_id': 4,
             'event_type': UnifiedEventType.GLUCOSE.value,
             'quality': GOOD_QUALITY.value,
-            'datetime': base_time + timedelta(hours=6, minutes=5 * i),
+            'datetime': base_time + timedelta(minutes=seq4_offset + EXPECTED_INTERVAL_MINUTES * i),
             'glucose': 140.0,
             'carbs': None,
             'insulin_slow': None,
@@ -1226,8 +1235,8 @@ def test_multiple_existing_sequences_with_internal_gaps():
         if len(seq_data) > 1:
             time_diffs = seq_data['datetime'].diff().dt.total_seconds() / 60.0
             max_gap = time_diffs.drop_nulls().max()
-            assert max_gap <= 15, \
-                f"Sequence {seq_id} has gap {max_gap} minutes > 15 minutes threshold"
+            assert max_gap <= SMALL_GAP_MAX_MINUTES, \
+                f"Sequence {seq_id} has gap {max_gap} minutes > {SMALL_GAP_MAX_MINUTES} minutes threshold"
     
     # Verify we have the expected number of data points
     total_points = sum(len(result.filter(pl.col('sequence_id') == seq_id)) 
@@ -1255,25 +1264,27 @@ def test_small_vs_large_gap_handling():
         'exercise': None,
     })
     
-    # Small gap (12 minutes, < 15 minutes threshold) - should be interpolated
+    # Small gap (< SMALL_GAP_MAX_MINUTES threshold) - should be interpolated
+    small_gap_point = SMALL_GAP_MAX_MINUTES - EXPECTED_INTERVAL_MINUTES
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
         'quality': GOOD_QUALITY.value,
-        'datetime': base_time + timedelta(minutes=12),
+        'datetime': base_time + timedelta(minutes=small_gap_point),
         'glucose': 105.0,
         'carbs': None,
         'insulin_slow': None,
         'insulin_fast': None,
         'exercise': None,
     })
-    
-    # Large gap (20 minutes, > 15 minutes threshold) - should create new sequence
+
+    # Large gap (> SMALL_GAP_MAX_MINUTES threshold) - should create new sequence
+    large_gap_point = small_gap_point + SMALL_GAP_MAX_MINUTES * 2 + EXPECTED_INTERVAL_MINUTES
     data.append({
         'sequence_id': 0,
         'event_type': UnifiedEventType.GLUCOSE.value,
         'quality': GOOD_QUALITY.value,
-        'datetime': base_time + timedelta(minutes=32),
+        'datetime': base_time + timedelta(minutes=large_gap_point),
         'glucose': 110.0,
         'carbs': None,
         'insulin_slow': None,
@@ -1535,7 +1546,7 @@ def test_full_pipeline(sample_data_with_gaps):
     """Test full processing pipeline.
     
     Note: sample_data_with_gaps has a 15-minute gap which is less than 
-    SMALL_GAP_MAX_MINUTES (19 minutes), so it may be interpolated depending on implementation.
+    SMALL_GAP_MAX_MINUTES, so it may be interpolated depending on implementation.
     """
     
     # Step 1: Interpolate gaps
@@ -1565,7 +1576,7 @@ def test_full_pipeline_with_synchronization(sample_data_with_gaps):
     """Test full processing pipeline including timestamp synchronization.
     
     Note: sample_data_with_gaps has a 15-minute gap which is less than 
-    SMALL_GAP_MAX_MINUTES (19 minutes), so behavior depends on implementation.
+    SMALL_GAP_MAX_MINUTES, so behavior depends on implementation.
     """
     
     # Step 1: Interpolate gaps
@@ -1813,7 +1824,7 @@ def test_synchronize_timestamps_is_lossless():
     from cgm_format.format_parser import FormatParser
     
     # Get test data directory
-    data_dir = Path(__file__).parent.parent / "data"
+    data_dir = Path(__file__).parent.parent / "data" / "input"
     if not data_dir.exists():
         pytest.skip(f"Data directory not found: {data_dir}")
     
@@ -2148,7 +2159,7 @@ class TestSequenceDetection:
             'exercise': pl.Series([None, None, None, None, None, None, None, None, None], dtype=pl.Int64),
         })
         
-        # Run sequence detection with 19-minute threshold (as in the example)
+        # Run sequence detection with custom 19-minute threshold
         result = FormatProcessor.detect_and_assign_sequences(
             test_data,
             expected_interval_minutes=5,

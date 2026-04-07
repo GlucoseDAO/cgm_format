@@ -23,7 +23,7 @@ from cgm_format.formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
 
 
 # Test data directory
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 
 def get_test_files_by_format():

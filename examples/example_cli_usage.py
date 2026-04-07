@@ -56,7 +56,7 @@ def run_cli_command(args: List[str], description: str = "") -> subprocess.Comple
 @app.command()
 def main(
     data_dir: Path = typer.Option(
-        Path(__file__).parent.parent / "data",
+        Path(__file__).parent.parent / "data" / "input",
         "--data-dir",
         "-d",
         help="Directory containing CGM data files"
@@ -181,7 +181,7 @@ def main(
                 "--interpolate",
                 "--sync",
                 "--interval", "5",
-                "--max-gap", "19",
+                "--max-gap", "15",
                 "--stats"
             ],
             "Process unified file with interpolation and synchronization"
@@ -198,7 +198,7 @@ def main(
             "pipeline", str(test_file),
             "--output", str(pipeline_file),
             "--interval", "5",
-            "--max-gap", "19",
+            "--max-gap", "15",
             "--min-duration", "15",
             "--max-duration", "1440",
             "--drop-duplicates",

@@ -1,0 +1,669 @@
+[
+  {
+    "_id": "69d21e483f734430fdeeb1cc",
+    "profile": "default",
+    "units": "mmol",
+    "enteredBy": "iAPS",
+    "store": {
+      "default": {
+        "units": "mmol",
+        "timezone": "Europe/Moscow",
+        "target_low": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 7.5
+          },
+          {
+            "time": "03:00",
+            "timeAsSeconds": 10800,
+            "value": 8
+          },
+          {
+            "time": "09:00",
+            "timeAsSeconds": 32400,
+            "value": 7.5
+          }
+        ],
+        "delay": 0,
+        "target_high": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 7.5
+          },
+          {
+            "time": "03:00",
+            "timeAsSeconds": 10800,
+            "value": 8
+          },
+          {
+            "time": "09:00",
+            "timeAsSeconds": 32400,
+            "value": 7.5
+          }
+        ],
+        "sens": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 8
+          }
+        ],
+        "carbs_hr": 6,
+        "carbratio": [
+          {
+            "time": "00:00",
+            "value": 10,
+            "timeAsSeconds": 0
+          }
+        ],
+        "dia": 6,
+        "basal": [
+          {
+            "value": 1,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          },
+          {
+            "value": 1.3,
+            "time": "03:00",
+            "timeAsSeconds": 10800
+          },
+          {
+            "value": 1.5,
+            "time": "06:00",
+            "timeAsSeconds": 21600
+          },
+          {
+            "value": 1.2,
+            "time": "09:00",
+            "timeAsSeconds": 32400
+          },
+          {
+            "value": 1,
+            "time": "15:00",
+            "timeAsSeconds": 54000
+          }
+        ]
+      }
+    },
+    "startDate": "2026-04-05T08:33:12.213Z",
+    "defaultProfile": "default",
+    "mills": 1775377992000,
+    "created_at": "2026-04-05T08:33:12.299Z"
+  },
+  {
+    "_id": "69d21d153f734430fdeeb1c9",
+    "mills": 1775377685000,
+    "store": {
+      "default": {
+        "target_low": [
+          {
+            "value": 7.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          },
+          {
+            "value": 8,
+            "time": "03:00",
+            "timeAsSeconds": 10800
+          },
+          {
+            "value": 7.5,
+            "time": "09:00",
+            "timeAsSeconds": 32400
+          }
+        ],
+        "carbs_hr": 5,
+        "delay": 0,
+        "dia": 6,
+        "sens": [
+          {
+            "value": 9,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "timezone": "Europe/Moscow",
+        "basal": [
+          {
+            "value": 1,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          },
+          {
+            "value": 1.3,
+            "time": "03:00",
+            "timeAsSeconds": 10800
+          },
+          {
+            "value": 1.5,
+            "time": "06:00",
+            "timeAsSeconds": 21600
+          },
+          {
+            "value": 1.2,
+            "time": "09:00",
+            "timeAsSeconds": 32400
+          },
+          {
+            "value": 1,
+            "time": "15:00",
+            "timeAsSeconds": 54000
+          }
+        ],
+        "units": "mmol",
+        "target_high": [
+          {
+            "value": 7.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          },
+          {
+            "value": 8,
+            "time": "03:00",
+            "timeAsSeconds": 10800
+          },
+          {
+            "value": 7.5,
+            "time": "09:00",
+            "timeAsSeconds": 32400
+          }
+        ],
+        "carbratio": [
+          {
+            "value": 10,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ]
+      }
+    },
+    "startDate": "2026-04-05T08:28:05.150Z",
+    "defaultProfile": "default",
+    "units": "mmol",
+    "profile": "default",
+    "enteredBy": "iAPS",
+    "created_at": "2026-04-05T08:28:05.495Z"
+  },
+  {
+    "_id": "69d21bee3f734430fdeeb1c6",
+    "store": {
+      "default": {
+        "carbratio": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 10
+          }
+        ],
+        "timezone": "Europe/Moscow",
+        "dia": 6,
+        "units": "mmol",
+        "target_low": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 7.5
+          }
+        ],
+        "basal": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 1
+          },
+          {
+            "time": "03:00",
+            "timeAsSeconds": 10800,
+            "value": 1.3
+          },
+          {
+            "time": "06:00",
+            "timeAsSeconds": 21600,
+            "value": 1.5
+          },
+          {
+            "time": "09:00",
+            "timeAsSeconds": 32400,
+            "value": 1.2
+          },
+          {
+            "time": "15:00",
+            "timeAsSeconds": 54000,
+            "value": 1
+          }
+        ],
+        "carbs_hr": 5,
+        "delay": 0,
+        "target_high": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 7.5
+          }
+        ],
+        "sens": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 9
+          }
+        ]
+      }
+    },
+    "units": "mmol",
+    "defaultProfile": "default",
+    "startDate": "2026-04-05T08:23:09.938Z",
+    "enteredBy": "iAPS",
+    "profile": "default",
+    "mills": 1775377389000,
+    "created_at": "2026-04-05T08:23:10.016Z"
+  },
+  {
+    "_id": "69d213a23f734430fdeeb1b7",
+    "enteredBy": "iAPS",
+    "defaultProfile": "default",
+    "mills": 1775375264000,
+    "startDate": "2026-04-05T07:47:44.824Z",
+    "store": {
+      "default": {
+        "timezone": "Europe/Moscow",
+        "dia": 6,
+        "units": "mmol",
+        "target_low": [
+          {
+            "value": 5.5,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "target_high": [
+          {
+            "value": 5.5,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "basal": [
+          {
+            "value": 1,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          },
+          {
+            "value": 1.3,
+            "timeAsSeconds": 10800,
+            "time": "03:00"
+          },
+          {
+            "value": 1.5,
+            "timeAsSeconds": 21600,
+            "time": "06:00"
+          },
+          {
+            "value": 1.2,
+            "timeAsSeconds": 32400,
+            "time": "09:00"
+          },
+          {
+            "value": 1,
+            "timeAsSeconds": 54000,
+            "time": "15:00"
+          }
+        ],
+        "sens": [
+          {
+            "value": 9,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "delay": 0,
+        "carbs_hr": 5,
+        "carbratio": [
+          {
+            "value": 10,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ]
+      }
+    },
+    "profile": "default",
+    "units": "mmol",
+    "created_at": "2026-04-05T07:47:46.203Z"
+  },
+  {
+    "_id": "69befa513f734430fdeea094",
+    "defaultProfile": "default",
+    "mills": 1774123597000,
+    "units": "mmol",
+    "profile": "default",
+    "store": {
+      "default": {
+        "dia": 6,
+        "sens": [
+          {
+            "value": 6,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "carbratio": [
+          {
+            "time": "00:00",
+            "value": 10,
+            "timeAsSeconds": 0
+          }
+        ],
+        "basal": [
+          {
+            "time": "00:00",
+            "value": 1,
+            "timeAsSeconds": 0
+          },
+          {
+            "time": "03:00",
+            "value": 1.3,
+            "timeAsSeconds": 10800
+          },
+          {
+            "time": "06:00",
+            "value": 1.5,
+            "timeAsSeconds": 21600
+          },
+          {
+            "time": "09:00",
+            "value": 1.2,
+            "timeAsSeconds": 32400
+          },
+          {
+            "time": "15:00",
+            "value": 1,
+            "timeAsSeconds": 54000
+          }
+        ],
+        "timezone": "Europe/Moscow",
+        "units": "mmol",
+        "delay": 0,
+        "target_high": [
+          {
+            "value": 5.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "target_low": [
+          {
+            "value": 5.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "carbs_hr": 8
+      }
+    },
+    "enteredBy": "iAPS",
+    "startDate": "2026-03-21T20:06:37.413Z",
+    "created_at": "2026-03-21T20:06:41.740Z"
+  },
+  {
+    "_id": "69b8d7da3f734430fdee999a",
+    "store": {
+      "default": {
+        "carbratio": [
+          {
+            "timeAsSeconds": 0,
+            "value": 10,
+            "time": "00:00"
+          }
+        ],
+        "units": "mmol",
+        "target_low": [
+          {
+            "value": 5.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "sens": [
+          {
+            "value": 6,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "delay": 0,
+        "dia": 6,
+        "timezone": "Asia/Tashkent",
+        "target_high": [
+          {
+            "value": 5.5,
+            "time": "00:00",
+            "timeAsSeconds": 0
+          }
+        ],
+        "carbs_hr": 8,
+        "basal": [
+          {
+            "timeAsSeconds": 0,
+            "value": 1,
+            "time": "00:00"
+          },
+          {
+            "timeAsSeconds": 10800,
+            "value": 1.3,
+            "time": "03:00"
+          },
+          {
+            "timeAsSeconds": 21600,
+            "value": 1.5,
+            "time": "06:00"
+          },
+          {
+            "timeAsSeconds": 32400,
+            "value": 1.2,
+            "time": "09:00"
+          },
+          {
+            "timeAsSeconds": 54000,
+            "value": 1,
+            "time": "15:00"
+          }
+        ]
+      }
+    },
+    "enteredBy": "iAPS",
+    "units": "mmol",
+    "mills": 1773721562000,
+    "profile": "default",
+    "defaultProfile": "default",
+    "startDate": "2026-03-17T04:26:02.301Z",
+    "created_at": "2026-03-17T04:26:02.358Z"
+  },
+  {
+    "_id": "696471573f734430fdee4e08",
+    "mills": 1768190295000,
+    "units": "mmol",
+    "profile": "default",
+    "enteredBy": "iAPS",
+    "store": {
+      "default": {
+        "target_low": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 5.5
+          }
+        ],
+        "target_high": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 5.5
+          }
+        ],
+        "dia": 6,
+        "sens": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 6
+          }
+        ],
+        "units": "mmol",
+        "carbratio": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 10
+          }
+        ],
+        "basal": [
+          {
+            "time": "00:00",
+            "timeAsSeconds": 0,
+            "value": 1
+          },
+          {
+            "time": "03:00",
+            "timeAsSeconds": 10800,
+            "value": 1.3
+          },
+          {
+            "time": "06:00",
+            "timeAsSeconds": 21600,
+            "value": 1.5
+          },
+          {
+            "time": "09:00",
+            "timeAsSeconds": 32400,
+            "value": 1.2
+          },
+          {
+            "time": "15:00",
+            "timeAsSeconds": 54000,
+            "value": 1
+          }
+        ],
+        "timezone": "Europe/Moscow",
+        "carbs_hr": 8,
+        "delay": 0
+      }
+    },
+    "defaultProfile": "default",
+    "startDate": "2026-01-12T03:58:15.093Z",
+    "created_at": "2026-01-12T03:58:15.989Z"
+  },
+  {
+    "_id": "695f1cd63f734430fdee4910",
+    "startDate": "2026-01-08T02:56:00.000Z",
+    "mills": 1767840982712,
+    "profile": "default",
+    "store": {
+      "default": {
+        "timezone": "UTC",
+        "carbratio": [
+          {
+            "time": "00:00",
+            "value": 10,
+            "timeAsSeconds": 0
+          }
+        ],
+        "basal": [
+          {
+            "time": "00:00",
+            "value": 1,
+            "timeAsSeconds": 0
+          }
+        ],
+        "dia": 6,
+        "carbs_hr": 8,
+        "delay": 20,
+        "sens": [
+          {
+            "value": 6,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "target_high": [
+          {
+            "value": 5.5,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "target_low": [
+          {
+            "value": 5.5,
+            "timeAsSeconds": 0,
+            "time": "00:00"
+          }
+        ],
+        "startDate": "1970-01-01T00:00:00.000Z",
+        "units": "mmol"
+      }
+    },
+    "defaultProfile": "default",
+    "units": "mmol",
+    "enteredBy": "iAPS",
+    "created_at": "2026-01-08T02:58:58.812Z",
+    "srvModified": 1767841138812
+  },
+  {
+    "_id": "695f1b973f734430fdee490f",
+    "defaultProfile": "Default",
+    "store": {
+      "Default": {
+        "dia": 3,
+        "carbratio": [
+          {
+            "time": "00:00",
+            "value": 30,
+            "timeAsSeconds": 0
+          }
+        ],
+        "carbs_hr": 20,
+        "delay": 20,
+        "sens": [
+          {
+            "time": "00:00",
+            "value": 100,
+            "timeAsSeconds": 0
+          }
+        ],
+        "timezone": "Europe/Moscow",
+        "basal": [
+          {
+            "time": "00:00",
+            "value": 0.1,
+            "timeAsSeconds": 0
+          }
+        ],
+        "target_low": [
+          {
+            "time": "00:00",
+            "value": 0,
+            "timeAsSeconds": 0
+          }
+        ],
+        "target_high": [
+          {
+            "time": "00:00",
+            "value": 0,
+            "timeAsSeconds": 0
+          }
+        ],
+        "units": "mmol"
+      }
+    },
+    "startDate": "1970-01-01T00:00:00.000Z",
+    "mills": 0,
+    "created_at": "2026-01-08T02:51:10.092Z",
+    "srvModified": 1767840670092,
+    "units": "mmol"
+  }
+]
