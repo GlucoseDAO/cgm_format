@@ -5,5 +5,5 @@
 !.gitignore
 
 # Fixtures and imports (see also: add new !<dir>/ + !<dir>/** when committing another top-level subtree).
-!input/
-!input/**
+input/
+input/**
