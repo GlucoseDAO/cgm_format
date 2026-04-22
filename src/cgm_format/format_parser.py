@@ -27,11 +27,16 @@ from cgm_format.formats.unified import (
     CGM_SCHEMA,
 )
 from cgm_format.formats.dexcom import (
-    DexcomColumn, 
+    DexcomColumn,
     DEXCOM_METADATA_LINES,
     DEXCOM_TIMESTAMP_FORMATS,
     DEXCOM_HIGH_GLUCOSE_DEFAULT,
     DEXCOM_LOW_GLUCOSE_DEFAULT,
+)
+from cgm_format.formats.dexcom_eu import (
+    DexcomEUColumn,
+    DEXCOM_EU_METADATA_LINES,
+    MMOL_TO_MGDL,
 )
 from cgm_format.formats.libre import (
     LibreColumn, 
@@ -199,6 +204,8 @@ class FormatParser(CGMParser):
             unified_df = cls._process_unified(text_data)
         elif format_type == SupportedCGMFormat.DEXCOM:
             unified_df = cls._process_dexcom(text_data)
+        elif format_type == SupportedCGMFormat.DEXCOM_EU:
+            unified_df = cls._process_dexcom(text_data, european=True)
         elif format_type == SupportedCGMFormat.LIBRE:
             unified_df = cls._process_libre(text_data)
         elif format_type == SupportedCGMFormat.MEDTRONIC:
@@ -343,49 +350,51 @@ class FormatParser(CGMParser):
     @classmethod
     def _process_dexcom(
         cls,
-        text_data: str, 
-        high_glucose_value: int = DEXCOM_HIGH_GLUCOSE_DEFAULT, 
+        text_data: str,
+        european: bool = False,
+        high_glucose_value: int = DEXCOM_HIGH_GLUCOSE_DEFAULT,
         low_glucose_value: int = DEXCOM_LOW_GLUCOSE_DEFAULT
     ) -> UnifiedFormat:
         """Process Dexcom CSV to unified format.
-        
+
         Args:
             text_data: Dexcom CSV string
+            european: If True, glucose is in mmol/L and will be converted to mg/dL
             high_glucose_value: Value to replace 'High' readings (default 401 mg/dL)
             low_glucose_value: Value to replace 'Low' readings (default 39 mg/dL)
-            
+
         Returns:
             DataFrame in unified format
-            
+
         Raises:
             MalformedDataError: If parsing fails
         """
+        Col = DexcomEUColumn if european else DexcomColumn
+        metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
         try:
-            # Dexcom has: Row 1 = column headers, Rows 2-11 = metadata, Row 12+ = data
-            # Use skip_rows_after_header to skip the metadata rows
-            # Note: truncate_ragged_lines=True handles variable-length rows (non-EGV events
-            # missing Transmitter ID/Time columns). Polars pads missing trailing cells with nulls.
+            # Dexcom has: Row 1 = column headers, Rows 2-N = metadata, Row N+1 = data
+            # EU exports have an extra "Sensor" metadata row (11 vs 10 rows)
             df = pl.read_csv(
                 StringIO(text_data),
-                skip_rows_after_header=len(DEXCOM_METADATA_LINES),  # Skip metadata rows after header
+                skip_rows_after_header=len(metadata_lines),  # Skip metadata rows after header
                 truncate_ragged_lines=True,  # Handle Dexcom's variable-length rows
                 infer_schema_length=None,
                 ignore_errors=False
             )
-            
+
             # Clean column names
-            df = df.rename({col: col.strip().replace('"', '').replace('"', '') for col in df.columns})
-            
+            df = df.rename({col: col.strip().replace('“', '').replace('”', '').replace('"', '') for col in df.columns})
+
             # Probe timestamp format once for this file
-            timestamp_format = FormatParser._probe_timestamp_format(df, DexcomColumn.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
-            
-            # Process EGV (glucose) rows
+            timestamp_format = FormatParser._probe_timestamp_format(df, Col.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
+
+            # Process EGV (glucose) rows — includes "Fasting Glucose" (G7)
             egv_data = (df
-                .filter(pl.col(DexcomColumn.EVENT_TYPE).str.to_lowercase() == "egv")
+                .filter(pl.col(Col.EVENT_TYPE).str.to_lowercase().is_in(["egv", "fasting glucose"]))
                 .select([
-                    pl.col(DexcomColumn.TIMESTAMP).alias("datetime"),
-                    pl.col(DexcomColumn.GLUCOSE_VALUE).alias("glucose"),
-                    pl.col(DexcomColumn.EVENT_SUBTYPE).alias("subtype"),
+                    pl.col(Col.TIMESTAMP).alias("datetime"),
+                    pl.col(Col.GLUCOSE_VALUE).alias("glucose"),
+                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
                 ])
                 .with_columns([
                     # Track if glucose was High/Low BEFORE replacement (sensor out-of-range error)
@@ -397,7 +406,7 @@ class FormatParser(CGMParser):
                     .alias("is_out_of_range"),
                 ])
                 .with_columns([
-                    # Replace High/Low with numeric placeholders for processing
+                    # Replace High/Low with numeric placeholders (mg/dL) for processing
                     # High = >400 mg/dL (sensor max), Low = <50 mg/dL (sensor min)
                     pl.col("glucose")
                     .cast(pl.Utf8)
@@ -406,26 +415,37 @@ class FormatParser(CGMParser):
                     .cast(pl.Float64, strict=False)
                     .alias("glucose"),
                     # Mark out-of-range readings with OUT_OF_RANGE flag (sensor error, not real data)
-                    # Values of 50 or 400 mg/dL would indicate severe hypo/hyperglycemia
                     pl.when(pl.col("is_out_of_range"))
                     .then(pl.lit(Quality.OUT_OF_RANGE.value))
                     .otherwise(pl.lit(0))  # 0 = GOOD (no flags)
                     .alias("quality"),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
                 ])
+            )
+
+            # Convert mmol/L → mg/dL for real readings; High/Low are already mg/dL
+            if european:
+                egv_data = egv_data.with_columns([
+                    pl.when(pl.col("is_out_of_range"))
+                    .then(pl.col("glucose"))
+                    .otherwise(pl.col("glucose") * MMOL_TO_MGDL)
+                    .alias("glucose"),
+                ])
+
+            egv_data = (egv_data
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
                 ])
                 .drop(["subtype", "is_out_of_range"])
             )
-            
+
             # Process insulin events
             insulin_data = (df
-                .filter(pl.col(DexcomColumn.EVENT_TYPE) == "Insulin")
+                .filter(pl.col(Col.EVENT_TYPE) == "Insulin")
                 .select([
-                    pl.col(DexcomColumn.TIMESTAMP).alias("datetime"),
-                    pl.col(DexcomColumn.EVENT_SUBTYPE).alias("subtype"),
-                    pl.col(DexcomColumn.INSULIN_VALUE).alias("insulin_value"),
+                    pl.col(Col.TIMESTAMP).alias("datetime"),
+                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
+                    pl.col(Col.INSULIN_VALUE).alias("insulin_value"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
@@ -449,13 +469,13 @@ class FormatParser(CGMParser):
                 ])
                 .drop(["subtype", "insulin_value"])
             )
-            
+
             # Process carbohydrate events
             carb_data = (df
-                .filter(pl.col(DexcomColumn.EVENT_TYPE) == "Carbs")
+                .filter(pl.col(Col.EVENT_TYPE) == "Carbs")
                 .select([
-                    pl.col(DexcomColumn.TIMESTAMP).alias("datetime"),
-                    pl.col(DexcomColumn.CARB_VALUE).alias("carbs"),
+                    pl.col(Col.TIMESTAMP).alias("datetime"),
+                    pl.col(Col.CARB_VALUE).alias("carbs"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
@@ -463,14 +483,14 @@ class FormatParser(CGMParser):
                     pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
-            
-            # Process exercise events
+
+            # Process exercise events — includes "Activity" (G7)
             exercise_data = (df
-                .filter(pl.col(DexcomColumn.EVENT_TYPE) == "Exercise")
+                .filter(pl.col(Col.EVENT_TYPE).is_in(["Exercise", "Activity"]))
                 .select([
-                    pl.col(DexcomColumn.TIMESTAMP).alias("datetime"),
-                    pl.col(DexcomColumn.DURATION).alias("duration_str"),
-                    pl.col(DexcomColumn.EVENT_SUBTYPE).alias("subtype"),
+                    pl.col(Col.TIMESTAMP).alias("datetime"),
+                    pl.col(Col.DURATION).alias("duration_str"),
+                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
@@ -491,7 +511,7 @@ class FormatParser(CGMParser):
                 ])
                 .drop(["duration_str", "subtype"])
             )
-            
+
             # Combine all data types
             all_data = [egv_data]
             if len(insulin_data) > 0:
@@ -500,17 +520,17 @@ class FormatParser(CGMParser):
                 all_data.append(carb_data)
             if len(exercise_data) > 0:
                 all_data.append(exercise_data)
-            
+
             # Concatenate with alignment
             unified = pl.concat(all_data, how="diagonal")
-            
+
             # Add sequence_id
             unified = unified.with_columns([
                 pl.lit(0).alias("sequence_id")
             ])
-            
+
             return cls._postprocess_unified(unified)
-            
+
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse Dexcom CSV: {e}"
             raise MalformedDataError(cls._truncate_error_message(error_msg))

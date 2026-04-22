@@ -79,6 +79,12 @@ from cgm_format.formats.dexcom import (
     DexcomColumn,
 )
 
+from cgm_format.formats.dexcom_eu import (
+    DEXCOM_EU_SCHEMA,
+    DexcomEUColumn,
+    MMOL_TO_MGDL,
+)
+
 from cgm_format.formats.libre import (
     LIBRE_SCHEMA,
     LibreRecordType,
@@ -157,6 +163,11 @@ __all__ = [
     "DexcomEventType",
     "DexcomEventSubtype",
     "DexcomColumn",
+
+    # Dexcom EU format (mmol/L)
+    "DEXCOM_EU_SCHEMA",
+    "DexcomEUColumn",
+    "MMOL_TO_MGDL",
     
     # Libre format
     "LIBRE_SCHEMA",

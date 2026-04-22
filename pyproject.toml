@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cgm-format"
-version = "0.8.1"
+version = "0.8.2"
 description = "Unified CGM data format converter for ML training and inference"
 authors = [
     {name = "Newton Winter", email = "isoutthere@gmail.com"},

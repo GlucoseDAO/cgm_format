@@ -68,10 +68,10 @@
       }
     },
     {
-      "name": "Glucose Value (mg/dL)",
+      "name": "Glucose Value (mmol/L)",
       "type": "number",
       "description": "Blood glucose reading from CGM sensor",
-      "unit": "mg/dL",
+      "unit": "mmol/L",
       "constraints": {
         "minimum": 0
       }
@@ -104,10 +104,10 @@
       }
     },
     {
-      "name": "Glucose Rate of Change (mg/dL/min)",
+      "name": "Glucose Rate of Change (mmol/L/min)",
       "type": "number",
       "description": "Rate of change of glucose levels",
-      "unit": "mg/dL/min",
+      "unit": "mmol/L/min",
       "constraints": {
         "required": false
       }

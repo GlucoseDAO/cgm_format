@@ -4,6 +4,7 @@ from cgm_format.interface.cgm_interface import SupportedCGMFormat
 from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.formats.unified import CGM_SCHEMA, UNIFIED_DETECTION_PATTERNS, UNIFIED_DATA_START_LINE
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DEXCOM_DETECTION_PATTERNS, DEXCOM_DATA_START_LINE
+from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DEXCOM_EU_DETECTION_PATTERNS, DEXCOM_EU_DATA_START_LINE
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
 from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
@@ -14,13 +15,18 @@ from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_
 SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.UNIFIED_CGM: CGM_SCHEMA,
     SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
+    SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_SCHEMA,
     SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
 }
 
+# DEXCOM_EU must precede DEXCOM: the EU header also matches generic Dexcom
+# patterns (e.g. "Timestamp (YYYY-MM-DDThh:mm:ss)"), so the more specific
+# mmol/L check must win first.
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
+    SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
@@ -30,6 +36,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DATA_START_LINE,
     SupportedCGMFormat.DEXCOM: DEXCOM_DATA_START_LINE,
+    SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DATA_START_LINE,
     SupportedCGMFormat.LIBRE: LIBRE_DATA_START_LINE,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
@@ -49,6 +56,13 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         ('type-error', 'Glucose Value (mg/dL)', 'Low'),
         ('type-error', 'Glucose Value (mg/dL)', 'High'),
         # Some Dexcom exports include UTF-8 BOM marker in header
+        ('incorrect-label', 'Index', None),
+    ],
+    SupportedCGMFormat.DEXCOM_EU: [
+        ('missing-cell', 'Transmitter ID', None),
+        ('missing-cell', 'Transmitter Time (Long Integer)', None),
+        ('type-error', 'Glucose Value (mmol/L)', 'Low'),
+        ('type-error', 'Glucose Value (mmol/L)', 'High'),
         ('incorrect-label', 'Index', None),
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed

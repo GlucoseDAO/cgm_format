@@ -62,11 +62,13 @@ DEXCOM_DETECTION_PATTERNS = [
 
 class DexcomEventType(EnumLiteral):
     """Type of recorded event in Dexcom data (Event Type column)."""
+    ACTIVITY = "Activity"
     ALERT = "Alert"
     CALIBRATION = "Calibration"
     CARBOHYDRATES = "Carbs"
     EGV = "EGV"
     EXERCISE = "Exercise"
+    FASTING_GLUCOSE = "Fasting Glucose"
     HEALTH = "Health"
     INSULIN = "Insulin"
 
@@ -108,7 +110,12 @@ class DexcomEventSubtype(EnumLiteral):
 
 class DexcomEventTypeSubtype(Enum):
     """Combined Event Type + Subtype pairs for mapping to unified format."""
-    
+
+    # Activity (G7)
+    ACTIVITY_HEAVY = (DexcomEventType.ACTIVITY, DexcomEventSubtype.EXERCISE_HEAVY)
+    ACTIVITY_LIGHT = (DexcomEventType.ACTIVITY, DexcomEventSubtype.EXERCISE_LIGHT)
+    ACTIVITY_MEDIUM = (DexcomEventType.ACTIVITY, DexcomEventSubtype.EXERCISE_MEDIUM)
+
     # Alerts
     ALERT_FALL = (DexcomEventType.ALERT, DexcomEventSubtype.ALERT_FALL)
     ALERT_HIGH = (DexcomEventType.ALERT, DexcomEventSubtype.ALERT_HIGH)
@@ -128,6 +135,9 @@ class DexcomEventTypeSubtype(Enum):
     EGV = (DexcomEventType.EGV, DexcomEventSubtype.EMPTY)
     EGV_HIGH = (DexcomEventType.EGV, DexcomEventSubtype.EGV_HIGH)
     EGV_LOW = (DexcomEventType.EGV, DexcomEventSubtype.EGV_LOW)
+
+    # Fasting Glucose (G7)
+    FASTING_GLUCOSE = (DexcomEventType.FASTING_GLUCOSE, DexcomEventSubtype.EMPTY)
     
     # Exercise
     EXERCISE_HEAVY = (DexcomEventType.EXERCISE, DexcomEventSubtype.EXERCISE_HEAVY)

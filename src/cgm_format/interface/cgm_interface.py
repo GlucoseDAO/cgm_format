@@ -51,6 +51,7 @@ UnifiedFormat = pl.DataFrame
 class SupportedCGMFormat(Enum):
     """Supported CGM vendor formats."""
     DEXCOM = "dexcom"
+    DEXCOM_EU = "dexcom_eu"  # European Dexcom exports with mmol/L units
     LIBRE = "libre"
     MEDTRONIC = "medtronic"
     NIGHTSCOUT = "nightscout"
