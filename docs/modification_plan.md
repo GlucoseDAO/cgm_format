@@ -235,35 +235,37 @@ Documented in both READMEs and `AGENTS.md`:
 - **Content:** EGV + insulin events (25,340 EGV, 291 fast, 86 slow in cgm_format parse)
 - **Not copied** into cgm_format; test reads sibling repo path.
 
-### 8.2 Comparison test
+### 8.2 Reference alignment test (committed fixtures)
 
-**File:** `tests/test_livia_gdp_cgm_comparison.py`
+**Fixtures** in `data/comparison/` (git-tracked):
 
-Runs four snapshots:
+| File | Purpose |
+|------|---------|
+| `livia_test.csv` | Raw Dexcom input (copy of GDP `data/livia_test.csv`) |
+| `glucose_config_livia_reference.yaml` | GDP config; cgm-like columns; **`remove_calibration: true`**, **`remove_after_calibration: false`**, **`remove_after_calibration_hours: 0`** |
+| `livia_reference.csv` | Training-grid reference (generated; commit after regen) |
 
-1. **GDP ML-ready** — `uv run glucose-process <temp_folder>` in GDP repo, `min_sequence_len=200`
-2. **cgm parsed** — `FormatParser.parse_file`
-3. **cgm processed** — detect sequences → interpolate → synchronize
-4. **cgm inference** — processed + `prepare_for_inference` + `to_data_only_df` (matches `cgm-cli pipeline` defaults)
-
-**Run:**
-
-```powershell
-cd D:\dev\cgm_format
-uv sync --extra dev
-uv run pytest tests/test_livia_gdp_cgm_comparison.py -s -v
-```
-
-**Save report to file:**
+**Regenerate reference:**
 
 ```powershell
-uv run pytest tests/test_livia_gdp_cgm_comparison.py::test_livia_comparison_report -s -v `
-  2>&1 | Out-File -Encoding utf8 data/comparison/livia_gdp_cgm_comparison_report.txt
+uv run python scripts/generate_livia_reference.py --force
 ```
 
-Skips if `../glucose_data_processing/data/livia_test.csv` is missing.
+**Run alignment gate (expected to FAIL until Phase 1+2):**
 
-### 8.3 Measured results (2026-06-17 run)
+```powershell
+uv run pytest tests/test_livia_reference_alignment.py -s -v
+```
+
+**Logic:** `tests/comparison/livia_alignment.py` compares GDP reference (latest sequence, last 1440 min) vs `cgm-cli pipeline` output on the same input. Thresholds from Phase 0 (`glucose_mae <= 0.1`, row count ratio ~1, etc.).
+
+**Baseline failure (2026-06-17):** row counts match in window (289) but **zero timestamp overlap** — GDP grid at `:02/:07/.../:12` phase vs cgm sync at `:01/:06/.../:16` phase (`GRID_PHASE_OFFSET`).
+
+### 8.3 Exploratory cross-repo test
+
+**File:** `tests/test_livia_gdp_cgm_comparison.py` — runs GDP subprocess live; skips without sibling repo.
+
+### 8.4 Measured results (2026-06-17 exploratory run)
 
 | Snapshot | Rows | Sequences | Time range | Glucose mean |
 |----------|------|-----------|------------|--------------|
@@ -404,7 +406,11 @@ Phase 0 (metrics) → Phase 1 (fixed-frequency) → Phase 2 (ML export)
 | `src/cgm_format/cgm_cli.py` | `pipeline` command orchestration |
 | `src/cgm_format/interface/cgm_interface.py` | Constants, warnings, `CGMProcessor` ABC |
 | `src/cgm_format/formats/unified.py` | Schema, `Quality`, `UnifiedEventType` |
-| `tests/test_livia_gdp_cgm_comparison.py` | Cross-repo comparison test |
+| `tests/test_livia_reference_alignment.py` | **Regression gate** vs committed GDP reference |
+| `tests/comparison/livia_alignment.py` | Alignment metrics and report builder |
+| `tests/test_livia_gdp_cgm_comparison.py` | Exploratory live GDP comparison |
+| `scripts/generate_livia_reference.py` | Regenerate `data/comparison/livia_reference.csv` |
+| `data/comparison/glucose_config_livia_reference.yaml` | GDP config for reference generation |
 | `pyproject.toml` | `[tool.uv] native-tls = true` (corporate PyPI TLS fix) |
 
 ### glucose_data_processing
