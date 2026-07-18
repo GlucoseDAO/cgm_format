@@ -10,7 +10,7 @@ Tests parametrized for all CSV files in the data/input directory.
 
 import pytest
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
@@ -88,13 +88,23 @@ def get_detectable_files():
     return detectable
 
 
-def should_suppress_error(error: Any, format_type: SupportedCGMFormat) -> bool:
+def should_suppress_error(
+    error: Any,
+    format_type: SupportedCGMFormat,
+    suppression_counts: Optional[dict] = None,
+) -> bool:
     """Check if an error should be suppressed based on known format issues.
-    
+
     Args:
         error: Frictionless error object or dict
         format_type: The CGM format type
-        
+        suppression_counts: Optional mutable dict tracking how many times each
+            capped rule has already suppressed within the current file. Required
+            for rules that specify a max occurrence count (4-tuples); if omitted,
+            capped rules fall back to a fresh per-call counter (effectively
+            unlimited across calls), so callers validating a whole file should
+            pass a shared dict.
+
     Returns:
         True if error should be suppressed (known issue), False otherwise
     """
@@ -132,11 +142,16 @@ def should_suppress_error(error: Any, format_type: SupportedCGMFormat) -> bool:
     if not error_type:
         return False
 
-    # Check if this error matches any suppression rule
-    # Suppression rules are tuples: (error_type, field_name, cell_value)
-    # If field_name or cell_value in rule is None, that field is not checked
+    # Check if this error matches any suppression rule.
+    # Suppression rules are tuples: (error_type, field_name, cell_value) or
+    # (error_type, field_name, cell_value, max_count). If field_name or
+    # cell_value in a rule is None, that field is not checked. max_count, when
+    # present, caps how many matching errors the rule may suppress per file.
+    if suppression_counts is None:
+        suppression_counts = {}
     for rule in suppressions:
-        rule_error_type, rule_field_name, rule_cell_value = rule
+        rule_error_type, rule_field_name, rule_cell_value = rule[0], rule[1], rule[2]
+        rule_max_count = rule[3] if len(rule) > 3 else None
 
         # Check error type match
         if error_type != rule_error_type:
@@ -146,13 +161,19 @@ def should_suppress_error(error: Any, format_type: SupportedCGMFormat) -> bool:
         if rule_field_name is not None and field_name != rule_field_name:
             continue
 
-        # If rule doesn't care about cell value (None), it's a match
-        if rule_cell_value is None:
-            return True
-        # Otherwise, check if cell value matches
-        if cell_value == rule_cell_value:
-            return True
-    
+        # Check cell value (None in rule means match any cell value)
+        if rule_cell_value is not None and cell_value != rule_cell_value:
+            continue
+
+        # Rule matches. Enforce an optional per-file suppression cap so that,
+        # e.g., exactly one leaked blank-timestamp metadata row is tolerated
+        # while a second genuine occurrence still surfaces as a real error.
+        if rule_max_count is not None:
+            if suppression_counts.get(rule, 0) >= rule_max_count:
+                continue  # Cap reached — let this occurrence fail
+            suppression_counts[rule] = suppression_counts.get(rule, 0) + 1
+        return True
+
     return False
 
 
@@ -266,12 +287,15 @@ class TestSchemaValidation:
         errors = []
         error_count = 0
         suppressed_count = 0
-        
+        # Per-file counter shared across all errors so capped suppression rules
+        # (e.g. tolerate exactly one leaked blank-timestamp metadata row) work.
+        suppression_counts: dict = {}
+
         for task in report.tasks:
             if hasattr(task, 'errors') and task.errors:
                 for error in task.errors:
                     # Check if this is a known issue we should suppress
-                    if should_suppress_error(error, format_type):
+                    if should_suppress_error(error, format_type, suppression_counts):
                         suppressed_count += 1
                         continue
                     
@@ -297,7 +321,7 @@ class TestSchemaValidation:
             print(f"\n4. Known issues suppressed:")
             suppressions = KNOWN_ISSUES_TO_SUPPRESS[format_type]
             for rule in suppressions:
-                error_type, field_name, cell_value = rule
+                error_type, field_name, cell_value = rule[0], rule[1], rule[2]
                 if cell_value:
                     print(f"   - {error_type} on '{field_name}' with value '{cell_value}'")
                 else:

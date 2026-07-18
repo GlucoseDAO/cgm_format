@@ -57,6 +57,14 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         ('type-error', 'Glucose Value (mg/dL)', 'High'),
         # Some Dexcom exports include UTF-8 BOM marker in header
         ('incorrect-label', 'Index', None),
+        # Newer Clarity exports add an extra metadata row (e.g. "Sensor") beyond
+        # the static comment-row count, so exactly ONE blank-timestamp
+        # metadata/alert row leaks past the fixed dialect skip. The parser drops
+        # it dynamically; here we tolerate the resulting required-constraint
+        # error on that single blank cell. The optional 4th element caps how many
+        # times the rule may suppress per file — a second blank timestamp would
+        # be a real data issue and must still fail.
+        ('constraint-error', 'Timestamp (YYYY-MM-DDThh:mm:ss)', None, 1),
     ],
     SupportedCGMFormat.DEXCOM_EU: [
         ('missing-cell', 'Transmitter ID', None),
@@ -64,6 +72,9 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         ('type-error', 'Glucose Value (mmol/L)', 'Low'),
         ('type-error', 'Glucose Value (mmol/L)', 'High'),
         ('incorrect-label', 'Index', None),
+        # Same single-row metadata-drift tolerance as standard Dexcom (see above):
+        # the EU export may likewise gain/lose a metadata row across versions.
+        ('constraint-error', 'Timestamp (YYYY-MM-DDThh:mm:ss)', None, 1),
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
     SupportedCGMFormat.LIBRE: [],

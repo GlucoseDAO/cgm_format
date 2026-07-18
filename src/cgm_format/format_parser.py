@@ -1,11 +1,14 @@
 """Format converter for CGM vendor formats working on text data."""
 
+import logging
 from typing import Dict, List, Union, ClassVar, Optional
 from io import StringIO
 from typing import Union
 import polars as pl
 from pathlib import Path
-from base64 import b64decode   
+from base64 import b64decode
+
+logger = logging.getLogger(__name__)
 
 from cgm_format.formats.supported import FORMAT_DETECTION_PATTERNS, DETECTION_LINE_COUNT
 from cgm_format.interface.cgm_interface import (
@@ -286,8 +289,18 @@ class FormatParser(CGMParser):
         Raises:
             MalformedDataError: If no format works
         """
-        # Get first non-null timestamp value for probing
-        sample = df.filter(pl.col(column_name).is_not_null()).select(column_name).head(1)
+        # Get first non-null, non-blank timestamp value for probing.
+        # Blank strings ("") can survive filtering when a vendor leaves the
+        # timestamp field empty (e.g. Dexcom metadata/alert rows), so exclude
+        # them explicitly — probing an empty string would spuriously fail.
+        sample = (
+            df.filter(
+                pl.col(column_name).is_not_null()
+                & (pl.col(column_name).cast(pl.Utf8).str.strip_chars() != "")
+            )
+            .select(column_name)
+            .head(1)
+        )
         if len(sample) == 0:
             raise MalformedDataError("No timestamp values found for format probing")
         
@@ -371,12 +384,18 @@ class FormatParser(CGMParser):
         """
         Col = DexcomEUColumn if european else DexcomColumn
         metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
+        expected_metadata_rows = len(metadata_lines)
         try:
-            # Dexcom has: Row 1 = column headers, Rows 2-N = metadata, Row N+1 = data
-            # EU exports have an extra "Sensor" metadata row (11 vs 10 rows)
+            # Dexcom/Clarity layout: Row 1 = column headers, then a number of
+            # metadata rows (FirstName, LastName, Device, an optional Sensor
+            # row, and one row per configured Alert), then the data rows.
+            #
+            # Static minimal skip: skip the known number of metadata rows for
+            # this format variant (10 for standard mg/dL exports, 11 for the EU
+            # mmol/L exports that include a "Sensor" row).
             df = pl.read_csv(
                 StringIO(text_data),
-                skip_rows_after_header=len(metadata_lines),  # Skip metadata rows after header
+                skip_rows_after_header=expected_metadata_rows,  # Skip known metadata rows
                 truncate_ragged_lines=True,  # Handle Dexcom's variable-length rows
                 infer_schema_length=None,
                 ignore_errors=False
@@ -385,7 +404,32 @@ class FormatParser(CGMParser):
             # Clean column names
             df = df.rename({col: col.strip().replace('“', '').replace('”', '').replace('"', '') for col in df.columns})
 
-            # Probe timestamp format once for this file
+            # Dynamic post-handler: these proprietary Clarity exports are not
+            # perfectly stable — newer G6/G7 exports emit an extra metadata row
+            # (e.g. "Sensor") beyond the static count, which then survives the
+            # skip above. Every real data row carries a Timestamp while metadata
+            # rows leave it blank, so drop any blank-timestamp rows that slipped
+            # through and warn if the real metadata length differs from expected.
+            rows_before = len(df)
+            df = df.filter(
+                pl.col(Col.TIMESTAMP).is_not_null()
+                & (pl.col(Col.TIMESTAMP).cast(pl.Utf8).str.strip_chars() != "")
+            )
+            extra_metadata_rows = rows_before - len(df)
+            if extra_metadata_rows > 0:
+                logger.warning(
+                    "Dexcom%s export metadata length mismatch: expected %d metadata "
+                    "row(s) after the header but found %d extra blank-timestamp "
+                    "row(s); dropped them dynamically. The Clarity export format may "
+                    "have changed.",
+                    " EU" if european else "",
+                    expected_metadata_rows,
+                    extra_metadata_rows,
+                )
+
+            # Probe timestamp format once for this file. Supports both the older
+            # space form ("2025-05-01 0:01:47") and the newer ISO "T" form
+            # ("2026-07-13T00:01:37") emitted by recent Clarity exports.
             timestamp_format = FormatParser._probe_timestamp_format(df, Col.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
 
             # Process EGV (glucose) rows — includes "Fasting Glucose" (G7)

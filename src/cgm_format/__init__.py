@@ -24,7 +24,7 @@ try:
     __version__ = version("cgm-format")
 except Exception:
     # Fallback if package not installed (e.g., during development)
-    __version__ = "0.7.0"  # Keep in sync with pyproject.toml
+    __version__ = "0.8.3"  # Keep in sync with pyproject.toml
 
 # Core classes
 from cgm_format.format_parser import FormatParser
