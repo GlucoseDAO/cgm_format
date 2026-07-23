@@ -15,7 +15,7 @@ Can be used as:
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 import typer
 import polars as pl
@@ -820,36 +820,47 @@ def _get_warning_description(warning: ProcessingWarning) -> str:
     return descriptions.get(warning, "Unknown warning")
 
 
-def _should_suppress_error(error: any, format_type: SupportedCGMFormat, suppress_known: bool) -> bool:
+def _should_suppress_error(
+    error: any,
+    format_type: SupportedCGMFormat,
+    suppress_known: bool,
+    counts: Optional[Dict[int, int]] = None,
+) -> bool:
     """Check if an error should be suppressed based on known format issues.
-    
+
     Args:
         error: Frictionless error object or dict
         format_type: The CGM format type
         suppress_known: Whether to suppress known issues
-        
+        counts: Mutable per-file tally of how many times each capped rule has
+            already fired, keyed by the rule's index in the suppression list.
+            Pass the same dict across every error of one file so a rule with a
+            count cap (its optional 4th element) stops suppressing once the cap
+            is reached — a second occurrence is then a real error again. When
+            omitted, capped rules suppress without enforcing the cap.
+
     Returns:
         True if error should be suppressed, False otherwise
     """
     if not suppress_known:
         return False
-    
+
     suppressions = KNOWN_ISSUES_TO_SUPPRESS.get(format_type, [])
     if not suppressions:
         return False
-    
+
     # Extract error type, field name, and cell value from error
     error_type = None
     field_name = None
     cell_value = None
-    
+
     if hasattr(error, 'type'):
         error_type = error.type
     elif hasattr(error, 'code'):
         error_type = error.code
     elif isinstance(error, dict):
         error_type = error.get('type') or error.get('code', '')
-    
+
     if hasattr(error, 'fieldName'):
         field_name = error.fieldName
     elif hasattr(error, 'field_name'):
@@ -858,25 +869,34 @@ def _should_suppress_error(error: any, format_type: SupportedCGMFormat, suppress
         field_name = error.label
     elif isinstance(error, dict):
         field_name = error.get('fieldName') or error.get('field_name') or error.get('label', '')
-    
+
     if hasattr(error, 'cell'):
         cell_value = error.cell
     elif isinstance(error, dict):
         cell_value = error.get('cell', '')
-    
+
     if not error_type or not field_name:
         return False
-    
-    # Check if this error matches any suppression rule
-    for rule in suppressions:
-        rule_error_type, rule_field_name, rule_cell_value = rule
-        
-        if error_type == rule_error_type and field_name == rule_field_name:
-            if rule_cell_value is None:
-                return True
-            if cell_value == rule_cell_value:
-                return True
-    
+
+    # Check if this error matches any suppression rule. A rule is
+    # (error_type, field_name, cell_value) with an optional 4th element capping
+    # how many times it may fire per file (None field/cell means "match any").
+    for idx, rule in enumerate(suppressions):
+        rule_error_type, rule_field_name, rule_cell_value, *rest = rule
+        cap = rest[0] if rest else None
+
+        if error_type != rule_error_type or field_name != rule_field_name:
+            continue
+        if rule_cell_value is not None and cell_value != rule_cell_value:
+            continue
+
+        # Matched. Enforce the per-file cap if this rule has one and we're tracking.
+        if cap is not None and counts is not None:
+            if counts.get(idx, 0) >= cap:
+                return False  # cap exhausted → treat as a real error
+            counts[idx] = counts.get(idx, 0) + 1
+        return True
+
     return False
 
 
@@ -932,11 +952,13 @@ def _validate_with_frictionless(
         error_count = 0
         suppressed_count = 0
         errors = []
-        
+        # Per-file tally so capped suppression rules stop firing at their limit.
+        suppression_counts: Dict[int, int] = {}
+
         for task in report.tasks:
             if hasattr(task, 'errors') and task.errors:
                 for error in task.errors:
-                    if _should_suppress_error(error, format_type, suppress_known):
+                    if _should_suppress_error(error, format_type, suppress_known, suppression_counts):
                         suppressed_count += 1
                         continue
                     

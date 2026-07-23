@@ -14,6 +14,7 @@ import polars as pl
 from cgm_format.interface.cgm_interface import (
     EXPECTED_INTERVAL_MINUTES,
     SMALL_GAP_MAX_MINUTES,
+    SupportedCGMFormat,
 )
 
 # Data directory relative to project root
@@ -466,6 +467,60 @@ class TestCLIHelp:
         assert result.returncode == 0
         assert "pipeline" in result.stdout.lower()
         assert "input" in result.stdout.lower() or "file" in result.stdout.lower()
+
+
+class TestSuppressionCap:
+    """Frictionless known-issue suppression, including the per-file count cap.
+
+    Suppression rules in KNOWN_ISSUES_TO_SUPPRESS are
+    (error_type, field, cell) with an optional 4th element capping how many
+    times the rule may fire per file. These test _should_suppress_error directly
+    (fast, no subprocess) against the real Dexcom rules.
+    """
+
+    def _err(self, error_type: str, field_name: str, cell: str = "") -> dict:
+        return {"type": error_type, "fieldName": field_name, "cell": cell}
+
+    def test_capped_rule_does_not_crash(self) -> None:
+        """A 4-element (capped) rule must not raise when unpacked (regression)."""
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        ts_err = self._err("constraint-error", "Timestamp (YYYY-MM-DDThh:mm:ss)")
+        # Previously raised ValueError: too many values to unpack (expected 3).
+        assert _should_suppress_error(ts_err, SupportedCGMFormat.DEXCOM, True) is True
+
+    def test_cap_enforced_across_a_file(self) -> None:
+        """The Dexcom Timestamp rule caps at 1: first suppressed, second is real."""
+        from cgm_format.cgm_cli import _should_suppress_error
+        from cgm_format.formats.supported import KNOWN_ISSUES_TO_SUPPRESS
+
+        # Confirm the rule under test actually carries a cap of 1.
+        caps = [r for r in KNOWN_ISSUES_TO_SUPPRESS[SupportedCGMFormat.DEXCOM]
+                if r[0] == "constraint-error" and len(r) == 4]
+        assert caps and caps[0][3] == 1
+
+        ts_err = self._err("constraint-error", "Timestamp (YYYY-MM-DDThh:mm:ss)")
+        counts: dict = {}
+        first = _should_suppress_error(ts_err, SupportedCGMFormat.DEXCOM, True, counts)
+        second = _should_suppress_error(ts_err, SupportedCGMFormat.DEXCOM, True, counts)
+        assert (first, second) == (True, False)
+
+    def test_uncapped_rule_suppresses_repeatedly(self) -> None:
+        """A 3-element rule (missing-cell) keeps suppressing regardless of count."""
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        mc = self._err("missing-cell", "Transmitter ID")
+        counts: dict = {}
+        results = [_should_suppress_error(mc, SupportedCGMFormat.DEXCOM, True, counts)
+                   for _ in range(3)]
+        assert results == [True, True, True]
+
+    def test_unrelated_error_not_suppressed(self) -> None:
+        """An error matching no rule (bad glucose value) is never suppressed."""
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        bad = self._err("type-error", "Glucose Value (mg/dL)", "garbage")
+        assert _should_suppress_error(bad, SupportedCGMFormat.DEXCOM, True, {}) is False
 
 
 if __name__ == "__main__":
