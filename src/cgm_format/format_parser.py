@@ -24,10 +24,11 @@ from cgm_format.interface.cgm_interface import (
 
 # Import detection patterns from format modules
 from cgm_format.formats.unified import (
-    UnifiedEventType, 
-    Quality, 
+    UnifiedEventType,
+    Quality,
     UNIFIED_TIMESTAMP_FORMATS,
     CGM_SCHEMA,
+    UNIT_CONVERSIONS,
 )
 from cgm_format.formats.dexcom import (
     DexcomColumn,
@@ -35,17 +36,19 @@ from cgm_format.formats.dexcom import (
     DEXCOM_TIMESTAMP_FORMATS,
     DEXCOM_HIGH_GLUCOSE_DEFAULT,
     DEXCOM_LOW_GLUCOSE_DEFAULT,
+    DEXCOM_SCHEMA,
 )
 from cgm_format.formats.dexcom_eu import (
     DexcomEUColumn,
     DEXCOM_EU_METADATA_LINES,
-    MMOL_TO_MGDL,
+    DEXCOM_EU_SCHEMA,
 )
 from cgm_format.formats.libre import (
-    LibreColumn, 
-    LibreRecordType, 
+    LibreColumn,
+    LibreRecordType,
     LIBRE_HEADER_LINE,
-    LIBRE_TIMESTAMP_FORMATS
+    LIBRE_TIMESTAMP_FORMATS,
+    LIBRE_SCHEMA,
 )
 from cgm_format.formats.medtronic import (
     MedtronicColumn,
@@ -314,8 +317,23 @@ class FormatParser(CGMParser):
         
         error_msg = f"Could not parse timestamps with any known format: {formats}"
         raise MalformedDataError(cls._truncate_error_message(error_msg))
-    
-    
+
+    @classmethod
+    def _to_canonical_unit(
+        cls, col_expr: pl.Expr, source_unit: str | None, target_unit: str
+    ) -> pl.Expr:
+        """Scale a value expression from its source unit to the canonical unit.
+
+        Declarative: the factor is looked up in UNIT_CONVERSIONS keyed by
+        (source_unit, target_unit). Identity when the units are equal or when no
+        factor is registered — so a mg/dL glucose column passes through untouched
+        while a mmol/L one is multiplied, with no per-variant branch in the parser.
+        """
+        if source_unit is None or source_unit == target_unit:
+            return col_expr
+        factor = UNIT_CONVERSIONS.get((source_unit, target_unit))
+        return col_expr * factor if factor is not None else col_expr
+
     @classmethod
     def _process_unified(cls, text_data: str) -> UnifiedFormat:
         """Process data already in unified format (validation only).
@@ -383,6 +401,7 @@ class FormatParser(CGMParser):
             MalformedDataError: If parsing fails
         """
         Col = DexcomEUColumn if european else DexcomColumn
+        eff_schema = DEXCOM_EU_SCHEMA if european else DEXCOM_SCHEMA
         metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
         expected_metadata_rows = len(metadata_lines)
         try:
@@ -403,6 +422,9 @@ class FormatParser(CGMParser):
 
             # Clean column names
             df = df.rename({col: col.strip().replace('“', '').replace('”', '').replace('"', '') for col in df.columns})
+
+            # Absorb benign header drift (any registered alias -> canonical name)
+            df = eff_schema.normalize_headers(df)
 
             # Dynamic post-handler: these proprietary Clarity exports are not
             # perfectly stable — newer G6/G7 exports emit an extra metadata row
@@ -467,14 +489,17 @@ class FormatParser(CGMParser):
                 ])
             )
 
-            # Convert mmol/L → mg/dL for real readings; High/Low are already mg/dL
-            if european:
-                egv_data = egv_data.with_columns([
-                    pl.when(pl.col("is_out_of_range"))
-                    .then(pl.col("glucose"))
-                    .otherwise(pl.col("glucose") * MMOL_TO_MGDL)
-                    .alias("glucose"),
-                ])
+            # Convert glucose to the canonical unit (mg/dL) based on the column's
+            # declared unit in the effective schema — mmol/L exports are scaled,
+            # mg/dL pass through, with no format-specific branch. High/Low markers
+            # are already substituted with mg/dL placeholders, so leave them as-is.
+            glucose_unit = eff_schema.get_unit(Col.GLUCOSE_VALUE)
+            egv_data = egv_data.with_columns([
+                pl.when(pl.col("is_out_of_range"))
+                .then(pl.col("glucose"))
+                .otherwise(cls._to_canonical_unit(pl.col("glucose"), glucose_unit, "mg/dL"))
+                .alias("glucose"),
+            ])
 
             egv_data = (egv_data
                 .with_columns([
@@ -605,7 +630,12 @@ class FormatParser(CGMParser):
             
             # Clean column names
             df = df.rename({col: col.strip().replace('"', '').replace('"', '') for col in df.columns})
-            
+
+            # Absorb benign header drift (e.g. newer LibreView renamed the
+            # long-acting insulin column) by mapping any registered alias to its
+            # canonical name, so the enum-driven selects below resolve.
+            df = LIBRE_SCHEMA.normalize_headers(df)
+
             # Probe timestamp format once for this file
             timestamp_format = FormatParser._probe_timestamp_format(df, LibreColumn.DEVICE_TIMESTAMP, LIBRE_TIMESTAMP_FORMATS)
             

@@ -603,6 +603,64 @@ class TestInputHelpers:
 
 
 
+class TestLibreviewHeaderDrift:
+    """A newer LibreView export renamed one column; the alias mechanism must
+    absorb it without a new format or a parser branch (regression: it used to
+    crash with polars ColumnNotFound)."""
+
+    LIBREVIEW = DATA_DIR / "Libreview2026-07-23-17_55_12.csv"
+
+    def _skip_if_missing(self):
+        if not self.LIBREVIEW.exists():
+            pytest.skip(f"Fixture not found: {self.LIBREVIEW}")
+
+    def test_detects_as_libre(self):
+        self._skip_if_missing()
+        raw = self.LIBREVIEW.read_bytes()
+        fmt = FormatParser.detect_format(FormatParser.decode_raw_data(raw))
+        assert fmt == SupportedCGMFormat.LIBRE
+
+    def test_parses_without_crashing(self):
+        """The renamed long-acting-insulin column must not raise even though the
+        file has zero insulin rows (the crash was in the insulin sub-frame)."""
+        self._skip_if_missing()
+        df = FormatParser.parse_file(self.LIBREVIEW)
+        assert df.height > 0
+        # schema-clean output
+        from cgm_format.formats.unified import CGM_SCHEMA
+        CGM_SCHEMA.validate_dataframe(df, enforce=False)
+        # this fixture is glucose-only
+        assert set(df["event_type"].unique().to_list()) == {"EGV_READ"}
+        g = df.filter(pl.col("event_type") == "EGV_READ")["glucose"]
+        assert g.len() == df.height
+        assert 20 <= g.min() and g.max() <= 500  # sane mg/dL range
+
+
+class TestUnitConversion:
+    """The declarative _to_canonical_unit helper replaces the european fork."""
+
+    def test_mmol_to_mgdl_factor(self):
+        expr = FormatParser._to_canonical_unit(pl.col("g"), "mmol/L", "mg/dL")
+        out = pl.DataFrame({"g": [5.0]}).select(expr.alias("g"))["g"][0]
+        assert out == pytest.approx(5.0 * 18.0182)
+
+    def test_identity_when_units_equal(self):
+        expr = FormatParser._to_canonical_unit(pl.col("g"), "mg/dL", "mg/dL")
+        out = pl.DataFrame({"g": [123.0]}).select(expr.alias("g"))["g"][0]
+        assert out == 123.0
+
+    def test_passthrough_when_no_factor(self):
+        # unknown unit pair -> unchanged (no crash, no scaling)
+        expr = FormatParser._to_canonical_unit(pl.col("g"), "weird", "mg/dL")
+        out = pl.DataFrame({"g": [7.0]}).select(expr.alias("g"))["g"][0]
+        assert out == 7.0
+
+    def test_none_source_unit_passthrough(self):
+        expr = FormatParser._to_canonical_unit(pl.col("g"), None, "mg/dL")
+        out = pl.DataFrame({"g": [7.0]}).select(expr.alias("g"))["g"][0]
+        assert out == 7.0
+
+
 if __name__ == "__main__":
     # Allow running as script for quick testing
     pytest.main([__file__, "-v", "-s"])

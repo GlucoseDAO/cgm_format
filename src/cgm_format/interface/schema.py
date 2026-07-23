@@ -5,7 +5,7 @@ that can be used to define any CGM data format schema.
 """
 
 import polars as pl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from enum import Enum
 from typing import Dict, Any, List, Union, Type, TypedDict, NotRequired
@@ -54,6 +54,12 @@ class ColumnSchema(TypedDict):
     description: str
     unit: NotRequired[str]
     constraints: NotRequired[Dict[str, Any]]
+    # Alternative header spellings this column has worn across vendor export
+    # versions/regions. The parser normalizes any present alias to `name`
+    # (the canonical spelling) via CGMSchemaDefinition.normalize_headers before
+    # doing anything else, so a renamed-but-otherwise-identical export needs no
+    # new format or parser branch. Never emitted to the Frictionless schema.
+    aliases: NotRequired[tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -124,7 +130,55 @@ class CGMSchemaDefinition:
         """
         columns = self.data_columns if data_only else self.service_columns + self.data_columns
         return [col["name"] for col in columns]
-    
+
+    @cached_property
+    def _alias_map(self) -> Dict[str, tuple[str, ...]]:
+        """Map each canonical column name to its registered alias spellings.
+
+        Cached per-instance (mirrors `_dialect`); recomputes on schemas derived
+        via `dataclasses.replace` / `derive_schema`.
+        """
+        return {
+            col["name"]: col.get("aliases", ())
+            for col in self.service_columns + self.data_columns
+        }
+
+    def get_aliases(self, field_name: str) -> tuple[str, ...]:
+        """Return the registered alias spellings for a canonical column name."""
+        return self._alias_map.get(field_name, ())
+
+    def get_unit(self, field_name: str) -> str | None:
+        """Return the declared unit for a column, or None if it has none."""
+        for col in self.service_columns + self.data_columns:
+            if col["name"] == field_name:
+                return col.get("unit")
+        return None
+
+    def normalize_headers(self, dataframe: pl.DataFrame) -> pl.DataFrame:
+        """Rename any present *alias* headers to their canonical schema names.
+
+        Absorbs benign vendor header drift (a column renamed across export
+        versions) so the rest of the enum-driven parser can reference the
+        canonical name unchanged.
+
+        Pure, deterministic, lossless: only column labels change — no rows are
+        added, dropped, or reordered. Idempotent: if the canonical name is
+        already present the alias is left untouched (canonical always wins; any
+        stray alias column is dropped later by validate_columns(enforce=True)),
+        so running twice is a no-op.
+        """
+        present = set(dataframe.columns)
+        rename_map: Dict[str, str] = {}
+        for col in self.service_columns + self.data_columns:
+            canonical = col["name"]
+            if canonical in present:
+                continue  # canonical already there -> never create a duplicate
+            for alias in col.get("aliases", ()):
+                if alias in present:
+                    rename_map[alias] = canonical
+                    break  # first matching alias wins (schema order = deterministic)
+        return dataframe.rename(rename_map) if rename_map else dataframe
+
     def get_stable_sort_keys(self) -> List[str]:
         """Get stable sort keys for deterministic row ordering.
         
@@ -423,8 +477,65 @@ class CGMSchemaDefinition:
         print(f"✓ Regenerated {schema_file}")
 
 
+def derive_schema(
+    base: CGMSchemaDefinition,
+    *,
+    renames: Dict[str, str] | None = None,
+    units: Dict[str, str] | None = None,
+    metadata_lines: tuple[int, ...] | None = None,
+    data_start_line: int | None = None,
+    header_line: int | None = None,
+    primary_key: tuple[str, ...] | None = None,
+) -> CGMSchemaDefinition:
+    """Derive a variant schema from a base by patching columns + file geometry.
+
+    A thin wrapper over ``dataclasses.replace`` plus a column-dict mapper, so a
+    regional/version variant is expressed as its handful of real deltas instead
+    of a full re-declaration. Everything not patched is inherited from ``base``.
+
+    Args:
+        base: The schema to derive from (left unmutated — frozen dataclass).
+        renames: Map of base canonical column name -> new name (e.g. a mg/dL
+            column relabeled mmol/L). Applied to both service and data columns.
+        units: Map of column name (AFTER any rename) -> unit string. Pairs with
+            the declarative unit-conversion table so the parser knows to scale
+            the column to the canonical unified unit.
+        metadata_lines / data_start_line / header_line: File-geometry overrides
+            (e.g. an export that gained a metadata row).
+        primary_key: Override the primary key.
+
+    Returns:
+        A new frozen CGMSchemaDefinition. Its `_dialect` / `_alias_map` recompute
+        lazily on the derived instance.
+    """
+    def patch(cols: tuple[ColumnSchema, ...]) -> tuple[ColumnSchema, ...]:
+        out: List[ColumnSchema] = []
+        for col in cols:
+            new = dict(col)
+            if renames and col["name"] in renames:
+                new["name"] = renames[col["name"]]
+            if units and new["name"] in units:
+                new["unit"] = units[new["name"]]
+            out.append(new)  # type: ignore[arg-type]
+        return tuple(out)
+
+    changes: Dict[str, Any] = {
+        "service_columns": patch(base.service_columns),
+        "data_columns": patch(base.data_columns),
+    }
+    if metadata_lines is not None:
+        changes["metadata_lines"] = metadata_lines
+    if data_start_line is not None:
+        changes["data_start_line"] = data_start_line
+    if header_line is not None:
+        changes["header_line"] = header_line
+    if primary_key is not None:
+        changes["primary_key"] = primary_key
+    return replace(base, **changes)
+
+
 def regenerate_schema_json(
-    schema: CGMSchemaDefinition, 
+    schema: CGMSchemaDefinition,
     calling_module_file: str,
     primary_key: List[str] | tuple[str, ...] | None = None,
     dialect: Dict[str, Any] | None = None

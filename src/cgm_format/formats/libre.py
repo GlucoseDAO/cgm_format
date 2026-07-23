@@ -205,7 +205,11 @@ LIBRE_SCHEMA = CGMSchemaDefinition(
             "dtype": pl.Float64,
             "description": "Long-acting (basal) insulin dose",
             "unit": "units",
-            "constraints": {"minimum": 0}
+            "constraints": {"minimum": 0},
+            # Newer LibreView exports drop "Value" from this column header
+            # ("Long-Acting Insulin (units)"); normalize_headers maps it back to
+            # the canonical name so the same LIBRE parse path handles both.
+            "aliases": ("Long-Acting Insulin (units)",),
         },
         {
             "name": LibreColumn.NOTES,

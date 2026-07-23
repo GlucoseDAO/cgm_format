@@ -15,6 +15,7 @@ from typing import Any, Optional
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
+from cgm_format.cgm_cli import _should_suppress_error
 
 # Optional: Use frictionless library if available
 try:
@@ -93,88 +94,20 @@ def should_suppress_error(
     format_type: SupportedCGMFormat,
     suppression_counts: Optional[dict] = None,
 ) -> bool:
-    """Check if an error should be suppressed based on known format issues.
+    """Thin wrapper over the production suppressor so this test exercises the
+    real logic (including alias-aware header-drift suppression) rather than a
+    drifting copy.
 
     Args:
         error: Frictionless error object or dict
         format_type: The CGM format type
-        suppression_counts: Optional mutable dict tracking how many times each
-            capped rule has already suppressed within the current file. Required
-            for rules that specify a max occurrence count (4-tuples); if omitted,
-            capped rules fall back to a fresh per-call counter (effectively
-            unlimited across calls), so callers validating a whole file should
-            pass a shared dict.
+        suppression_counts: Optional mutable per-file tally for capped rules;
+            pass the same dict across every error of one file.
 
     Returns:
         True if error should be suppressed (known issue), False otherwise
     """
-    suppressions = KNOWN_ISSUES_TO_SUPPRESS.get(format_type, [])
-    if not suppressions:
-        return False
-    
-    # Extract error type, field name, and cell value from error
-    # Try various attribute names that Frictionless uses
-    error_type = None
-    field_name = None
-    cell_value = None
-    
-    if hasattr(error, 'type'):
-        error_type = error.type
-    elif hasattr(error, 'code'):
-        error_type = error.code
-    elif isinstance(error, dict):
-        error_type = error.get('type') or error.get('code', '')
-    
-    if hasattr(error, 'fieldName'):
-        field_name = error.fieldName
-    elif hasattr(error, 'field_name'):
-        field_name = error.field_name
-    elif hasattr(error, 'label'):
-        field_name = error.label
-    elif isinstance(error, dict):
-        field_name = error.get('fieldName') or error.get('field_name') or error.get('label', '')
-    
-    if hasattr(error, 'cell'):
-        cell_value = error.cell
-    elif isinstance(error, dict):
-        cell_value = error.get('cell', '')
-    
-    if not error_type:
-        return False
-
-    # Check if this error matches any suppression rule.
-    # Suppression rules are tuples: (error_type, field_name, cell_value) or
-    # (error_type, field_name, cell_value, max_count). If field_name or
-    # cell_value in a rule is None, that field is not checked. max_count, when
-    # present, caps how many matching errors the rule may suppress per file.
-    if suppression_counts is None:
-        suppression_counts = {}
-    for rule in suppressions:
-        rule_error_type, rule_field_name, rule_cell_value = rule[0], rule[1], rule[2]
-        rule_max_count = rule[3] if len(rule) > 3 else None
-
-        # Check error type match
-        if error_type != rule_error_type:
-            continue
-
-        # Check field name (None in rule means match any field, including no field)
-        if rule_field_name is not None and field_name != rule_field_name:
-            continue
-
-        # Check cell value (None in rule means match any cell value)
-        if rule_cell_value is not None and cell_value != rule_cell_value:
-            continue
-
-        # Rule matches. Enforce an optional per-file suppression cap so that,
-        # e.g., exactly one leaked blank-timestamp metadata row is tolerated
-        # while a second genuine occurrence still surfaces as a real error.
-        if rule_max_count is not None:
-            if suppression_counts.get(rule, 0) >= rule_max_count:
-                continue  # Cap reached — let this occurrence fail
-            suppression_counts[rule] = suppression_counts.get(rule, 0) + 1
-        return True
-
-    return False
+    return _should_suppress_error(error, format_type, True, suppression_counts)
 
 
 class TestFormatDetection:

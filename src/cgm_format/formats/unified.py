@@ -37,6 +37,25 @@ UNIFIED_DETECTION_PATTERNS = [
 ]
 
 # =============================================================================
+# Unit conversion (declarative)
+# =============================================================================
+
+# mmol/L → mg/dL conversion factor (standard clinical value).
+MMOL_TO_MGDL = 18.0182
+
+# Factors to scale a vendor column from its declared source unit to the
+# canonical unified unit (glucose in mg/dL, exercise in seconds). A vendor/
+# regional variant that only differs in units is then expressed purely as a
+# `unit` in its (derived) schema — the parser reads the declared unit and
+# applies the factor here, so no per-variant conversion code is needed.
+# Keyed (source_unit, target_unit); equal units / missing pairs are a no-op.
+UNIT_CONVERSIONS: dict[tuple[str, str], float] = {
+    ("mmol/L", "mg/dL"): MMOL_TO_MGDL,
+    ("min", "s"): 60.0,
+    ("h", "s"): 3600.0,
+}
+
+# =============================================================================
 # Unified Event Type Enums
 # =============================================================================
 

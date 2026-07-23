@@ -180,9 +180,51 @@ the cap is enforced across all of a file's errors; uncapped (3-element) rules su
 
 ---
 
+## Handling format drift — alias vs variant vs new format
+
+Vendor exports mutate over time: a column gets renamed, a metadata row appears, a timestamp layout
+changes, units differ by region. Most of the time this is **not** a new format — it's drift on one you
+already support, and the library has declarative knobs for it so you don't write a new module or a
+parser branch. Reach for a new format only when the layout is genuinely different.
+
+| The export differs by… | Do this | Where |
+|---|---|---|
+| A **column name** (same meaning) | Add the spelling to that column's `aliases` tuple | `formats/<vendor>.py` `ColumnSchema` |
+| A **timestamp layout** | Append a `strptime` string to the format tuple | `<V>_TIMESTAMP_FORMATS` |
+| **Units** (mmol/L, minutes, …) | Give the column its `unit`; add the factor if new | schema `unit` + `UNIT_CONVERSIONS` (`formats/unified.py`) |
+| A **metadata-row count** | Override `metadata_lines` / `data_start_line` | `derive_schema(...)` or the format constants |
+| Several of the above, as a **distinct labelled variant** (own detection + identity) | `derive_schema(base, …)` + register it | `formats/<variant>.py`, `supported.py` |
+| A **genuinely different layout** (new columns, different record model) | A full new format (the checklist below) | new `formats/<vendor>.py` |
+
+The two mechanisms in detail:
+
+- **Aliases (same format identity).** A `ColumnSchema` may list alternative header spellings in
+  `aliases`. Each `_process_*` calls `<SCHEMA>.normalize_headers(df)` right after cleaning headers,
+  which renames any present alias to the canonical name — so the enum-driven body downstream is
+  untouched. It's a pure `df.rename` (lossless, idempotent, canonical always wins). Frictionless
+  validation of the raw file stays clean automatically: an `incorrect-label` whose actual header is a
+  registered alias of the expected field is suppressed, driven by the alias data (no
+  `KNOWN_ISSUES_TO_SUPPRESS` entry). This is how the newer LibreView export — identical to Libre but
+  with `Long-Acting Insulin (units)` instead of `Long-Acting Insulin Value (units)` — is supported by
+  one line of data, no new format.
+
+- **`derive_schema` (distinct variant).** Express a variant as a patch over a base schema instead of
+  re-declaring every column: `derive_schema(base, renames={...}, units={...}, metadata_lines=...,
+  data_start_line=...)` returns a new frozen schema. `DEXCOM_EU_SCHEMA` is derived from `DEXCOM_SCHEMA`
+  this way — two renamed glucose columns (relabeled mmol/L), their units, and one extra metadata row,
+  in ~10 lines. The mmol/L→mg/dL conversion is **not** variant-specific code: the parser reads the
+  glucose column's declared `unit` and scales to the canonical mg/dL via `UNIT_CONVERSIONS`
+  (`FormatParser._to_canonical_unit`). A future Libre-in-mmol/L is then `derive_schema(LIBRE_SCHEMA,
+  units={...})` plus detection — with zero parser changes.
+
+Where does genuinely irregular *code* go? In the vendor's `_process_*` method — that is the sanctioned
+home for anything a declaration can't express (combining `Date`+`Time` into one timestamp, Euro-decimal
+parsing, epoch handling, ragged rows). Schemas stay pure data; they never carry callables.
+
 ## Checklist — adding a new vendor format
 
-Work top to bottom; each step references the pattern to copy.
+First confirm you actually need one — see *Handling format drift* above; a renamed column or an extra
+metadata row is drift, not a new format. Work top to bottom; each step references the pattern to copy.
 
 - [ ] **1. Register the identity.** Add a member to `SupportedCGMFormat` in
   `interface/cgm_interface.py` (e.g. `MYVENDOR = "myvendor"`).
@@ -272,3 +314,11 @@ The processor, schema validation, and CLI need **no changes** — they only ever
   `commentRows`/`headerRows` dialect come straight from your `header_line`/`data_start_line`/
   `metadata_lines`. If those file-geometry constants are wrong, the validator reads the wrong row as the
   header and every column errors at once.
+- **A missing column crashes even when the filtered slice is empty.** A `.select(pl.col(X))` is
+  evaluated regardless of an upstream `.filter(...)` that leaves zero rows, so a renamed column raises
+  `ColumnNotFound` even in a file that has none of the affected records (this is exactly how the newer
+  LibreView export used to crash the insulin sub-frame). Absorb the rename with a column `alias` +
+  `normalize_headers` rather than guarding every select. See *Handling format drift*.
+- **Drift has declarative knobs — use them before adding code.** Column renames → `aliases`; timestamp
+  layouts → the `*_TIMESTAMP_FORMATS` tuple; units → the column `unit` + `UNIT_CONVERSIONS`; metadata
+  rows → `derive_schema`. New per-format *code* belongs only in `_process_*`, never on the schema.

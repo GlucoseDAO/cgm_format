@@ -11,22 +11,20 @@ All other columns, event types, metadata layout, and timestamp formats are ident
 """
 
 from typing import List
-import polars as pl
 from cgm_format.interface.schema import (
-    CGMSchemaDefinition,
     EnumLiteral,
+    derive_schema,
     regenerate_schema_json as _regenerate,
 )
 
-# Shared Dexcom constants
+# Base schema to derive from + its column vocabulary (for the rename keys)
 from cgm_format.formats.dexcom import (
-    DEXCOM_TIMESTAMP_FORMATS,
-    DEXCOM_HIGH_GLUCOSE_DEFAULT,
-    DEXCOM_LOW_GLUCOSE_DEFAULT,
-    DexcomEventType,
-    DexcomEventSubtype,
-    DexcomEventTypeSubtype,
+    DexcomColumn,
+    DEXCOM_SCHEMA,
 )
+# Re-exported for backward compatibility (public symbol); the canonical
+# definition now lives with the unit-conversion table in unified.py.
+from cgm_format.formats.unified import MMOL_TO_MGDL
 
 # EU exports include an extra "Sensor" metadata row (G7), so data starts
 # one line later than the standard mg/dL export.
@@ -34,9 +32,6 @@ from cgm_format.formats.dexcom import (
 DEXCOM_EU_HEADER_LINE = 1
 DEXCOM_EU_DATA_START_LINE = 13
 DEXCOM_EU_METADATA_LINES = tuple(range(DEXCOM_EU_HEADER_LINE + 1, DEXCOM_EU_DATA_START_LINE))  # Rows 2-12
-
-# mmol/L → mg/dL conversion factor (standard clinical value)
-MMOL_TO_MGDL = 18.0182
 
 # Detection patterns — "Glucose Value (mmol/L)" uniquely identifies the EU variant
 DEXCOM_EU_DETECTION_PATTERNS = [
@@ -81,106 +76,23 @@ class DexcomEUColumn(EnumLiteral):
 # EU Raw File Format Schema
 # =============================================================================
 
-DEXCOM_EU_SCHEMA = CGMSchemaDefinition(
-    service_columns=(
-        {
-            "name": DexcomEUColumn.INDEX,
-            "dtype": pl.Int64,
-            "description": "Sequential index of the record in the export",
-            "constraints": {"required": True}
-        },
-        {
-            "name": DexcomEUColumn.TIMESTAMP,
-            "dtype": pl.Utf8,
-            "description": "Timestamp of the event in YYYY-MM-DD HH:MM:SS format",
-            "constraints": {"required": True}
-        },
-        {
-            "name": DexcomEUColumn.EVENT_TYPE,
-            "dtype": pl.Utf8,
-            "description": "Type of recorded event",
-            "constraints": {
-                "required": True,
-                "enum": [e.value for e in DexcomEventType]
-            }
-        },
-        {
-            "name": DexcomEUColumn.EVENT_SUBTYPE,
-            "dtype": pl.Utf8,
-            "description": "Subtype of recorded event (may be empty)",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.PATIENT_INFO,
-            "dtype": pl.Utf8,
-            "description": "Patient information field",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.DEVICE_INFO,
-            "dtype": pl.Utf8,
-            "description": "Device information (e.g., 'android G6', 'iOS G7')",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.SOURCE_DEVICE_ID,
-            "dtype": pl.Utf8,
-            "description": "Source device identifier",
-            "constraints": {"required": False}
-        },
-    ),
-    data_columns=(
-        {
-            "name": DexcomEUColumn.GLUCOSE_VALUE,
-            "dtype": pl.Float64,
-            "description": "Blood glucose reading from CGM sensor",
-            "unit": "mmol/L",
-            "constraints": {"minimum": 0}
-        },
-        {
-            "name": DexcomEUColumn.INSULIN_VALUE,
-            "dtype": pl.Float64,
-            "description": "Insulin dose (type determined by Event Subtype)",
-            "unit": "u",
-            "constraints": {"minimum": 0}
-        },
-        {
-            "name": DexcomEUColumn.CARB_VALUE,
-            "dtype": pl.Float64,
-            "description": "Carbohydrate intake",
-            "unit": "grams",
-            "constraints": {"minimum": 0}
-        },
-        {
-            "name": DexcomEUColumn.DURATION,
-            "dtype": pl.Utf8,
-            "description": "Duration of exercise activity in HH:MM:SS format",
-            "unit": "hh:mm:ss",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.GLUCOSE_RATE_OF_CHANGE,
-            "dtype": pl.Float64,
-            "description": "Rate of change of glucose levels",
-            "unit": "mmol/L/min",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.TRANSMITTER_TIME,
-            "dtype": pl.Int64,
-            "description": "Transmitter time as long integer (epoch-like timestamp)",
-            "constraints": {"required": False}
-        },
-        {
-            "name": DexcomEUColumn.TRANSMITTER_ID,
-            "dtype": pl.Utf8,
-            "description": "Transmitter identifier (e.g., '8AM1EY')",
-            "constraints": {"required": False}
-        },
-    ),
-    header_line=DEXCOM_EU_HEADER_LINE,
+# The EU export is standard Dexcom with two glucose columns relabeled to mmol/L
+# and one extra metadata row. Rather than re-declare all 14 columns, derive it
+# from DEXCOM_SCHEMA and patch only the real deltas. The mmol/L `unit` is what
+# drives the parser's declarative mmol/L→mg/dL conversion (UNIT_CONVERSIONS);
+# there is no EU-specific conversion code.
+DEXCOM_EU_SCHEMA = derive_schema(
+    DEXCOM_SCHEMA,
+    renames={
+        DexcomColumn.GLUCOSE_VALUE: DexcomEUColumn.GLUCOSE_VALUE.value,
+        DexcomColumn.GLUCOSE_RATE_OF_CHANGE: DexcomEUColumn.GLUCOSE_RATE_OF_CHANGE.value,
+    },
+    units={
+        DexcomEUColumn.GLUCOSE_VALUE.value: "mmol/L",
+        DexcomEUColumn.GLUCOSE_RATE_OF_CHANGE.value: "mmol/L/min",
+    },
     data_start_line=DEXCOM_EU_DATA_START_LINE,
-    metadata_lines=DEXCOM_EU_METADATA_LINES
+    metadata_lines=DEXCOM_EU_METADATA_LINES,
 )
 
 

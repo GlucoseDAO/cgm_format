@@ -845,14 +845,12 @@ def _should_suppress_error(
     if not suppress_known:
         return False
 
-    suppressions = KNOWN_ISSUES_TO_SUPPRESS.get(format_type, [])
-    if not suppressions:
-        return False
-
-    # Extract error type, field name, and cell value from error
+    # Extract error type, field name, cell value, and (for label errors) the
+    # actual header label that was found in the file.
     error_type = None
     field_name = None
     cell_value = None
+    actual_label = None
 
     if hasattr(error, 'type'):
         error_type = error.type
@@ -875,17 +873,39 @@ def _should_suppress_error(
     elif isinstance(error, dict):
         cell_value = error.get('cell', '')
 
-    if not error_type or not field_name:
+    if hasattr(error, 'label'):
+        actual_label = error.label
+    elif isinstance(error, dict):
+        actual_label = error.get('label')
+
+    # Only error_type is mandatory: some errors carry no field (e.g. a
+    # 'blank-row' has no fieldName), and a rule with field_name=None is meant to
+    # match those. Requiring a field here would make such rules un-suppressable.
+    if not error_type:
         return False
+
+    # Alias-aware suppression, driven purely by the schema's alias data (works
+    # even for formats with no KNOWN_ISSUES entries): an 'incorrect-label' whose
+    # actual header (error.label) is a REGISTERED alias of the expected field
+    # (error.field_name) is benign vendor header drift, not corruption. This is
+    # specific — this field, this spelling — not a blanket incorrect-label pass.
+    if error_type == 'incorrect-label' and actual_label:
+        schema = SCHEMA_MAP.get(format_type)
+        if schema is not None and actual_label in schema.get_aliases(field_name):
+            return True
 
     # Check if this error matches any suppression rule. A rule is
     # (error_type, field_name, cell_value) with an optional 4th element capping
     # how many times it may fire per file (None field/cell means "match any").
+    suppressions = KNOWN_ISSUES_TO_SUPPRESS.get(format_type, [])
     for idx, rule in enumerate(suppressions):
         rule_error_type, rule_field_name, rule_cell_value, *rest = rule
         cap = rest[0] if rest else None
 
-        if error_type != rule_error_type or field_name != rule_field_name:
+        if error_type != rule_error_type:
+            continue
+        # None in a rule means "match any" for that field/cell.
+        if rule_field_name is not None and field_name != rule_field_name:
             continue
         if rule_cell_value is not None and cell_value != rule_cell_value:
             continue

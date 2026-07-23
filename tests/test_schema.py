@@ -10,11 +10,15 @@ Tests cover the pitfalls discovered during implementation:
 import pytest
 from pathlib import Path
 import json
+import polars as pl
 
-from cgm_format.interface.schema import EnumLiteral, CGMSchemaDefinition
+from cgm_format.interface.schema import EnumLiteral, CGMSchemaDefinition, derive_schema
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DexcomColumn, DexcomEventType
+from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DexcomEUColumn
 from cgm_format.formats.libre import LIBRE_SCHEMA, LibreColumn
 from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType
+
+FORMATS_DIR = Path(__file__).parent.parent / "src" / "cgm_format" / "formats"
 
 
 class TestEnumLiteral:
@@ -328,6 +332,115 @@ class TestRegressionPrevention:
         assert "Timestamp (YYYY-MM-DDThh:mm:ss)" not in data_col_names, (
             "Timestamp must not be in data_columns"
         )
+
+
+class TestDeriveSchema:
+    """derive_schema builds a variant as a patch over a base schema."""
+
+    def test_rename_swaps_column_name(self):
+        derived = derive_schema(
+            DEXCOM_SCHEMA,
+            renames={DexcomColumn.GLUCOSE_VALUE: "Glucose Value (mmol/L)"},
+        )
+        names = derived.get_column_names()
+        assert "Glucose Value (mmol/L)" in names
+        assert "Glucose Value (mg/dL)" not in names
+        # every other column carried through unchanged
+        base_others = [n for n in DEXCOM_SCHEMA.get_column_names() if n != "Glucose Value (mg/dL)"]
+        assert base_others == [n for n in names if n != "Glucose Value (mmol/L)"]
+
+    def test_units_applied_after_rename(self):
+        derived = derive_schema(
+            DEXCOM_SCHEMA,
+            renames={DexcomColumn.GLUCOSE_VALUE: "Glucose Value (mmol/L)"},
+            units={"Glucose Value (mmol/L)": "mmol/L"},
+        )
+        assert derived.get_unit("Glucose Value (mmol/L)") == "mmol/L"
+        # base glucose column is mg/dL and untouched
+        assert DEXCOM_SCHEMA.get_unit("Glucose Value (mg/dL)") == "mg/dL"
+
+    def test_geometry_overrides(self):
+        derived = derive_schema(
+            DEXCOM_SCHEMA,
+            metadata_lines=(2, 3, 4),
+            data_start_line=5,
+        )
+        assert derived.metadata_lines == (2, 3, 4)
+        assert derived.data_start_line == 5
+        # unspecified geometry inherited
+        assert derived.header_line == DEXCOM_SCHEMA.header_line
+
+    def test_base_left_unmutated(self):
+        before = DEXCOM_SCHEMA.get_column_names()
+        before_unit = DEXCOM_SCHEMA.get_unit("Glucose Value (mg/dL)")
+        derive_schema(
+            DEXCOM_SCHEMA,
+            renames={DexcomColumn.GLUCOSE_VALUE: "X"},
+            units={"X": "zzz"},
+            metadata_lines=(1, 2, 3),
+        )
+        assert DEXCOM_SCHEMA.get_column_names() == before
+        assert DEXCOM_SCHEMA.get_unit("Glucose Value (mg/dL)") == before_unit
+
+    def test_dexcom_eu_equals_committed_json(self):
+        """The derived EU schema must reproduce the committed dexcom_eu.json."""
+        committed = json.loads((FORMATS_DIR / "dexcom_eu.json").read_text())
+        assert DEXCOM_EU_SCHEMA.to_frictionless_schema() == committed
+
+    def test_dexcom_eu_deltas_vs_base(self):
+        """EU differs from base only in the two glucose columns + geometry."""
+        assert DEXCOM_EU_SCHEMA.get_unit(DexcomEUColumn.GLUCOSE_VALUE.value) == "mmol/L"
+        assert DEXCOM_EU_SCHEMA.get_unit(DexcomEUColumn.GLUCOSE_RATE_OF_CHANGE.value) == "mmol/L/min"
+        # EU export has one extra metadata row vs base
+        assert len(DEXCOM_EU_SCHEMA.metadata_lines) == len(DEXCOM_SCHEMA.metadata_lines) + 1
+        # non-glucose columns share the base names
+        assert DexcomColumn.INSULIN_VALUE.value in DEXCOM_EU_SCHEMA.get_column_names()
+
+
+class TestColumnAliases:
+    """Aliases + normalize_headers absorb benign header drift."""
+
+    def test_libre_long_insulin_alias_registered(self):
+        aliases = LIBRE_SCHEMA.get_aliases(LibreColumn.LONG_INSULIN.value)
+        assert "Long-Acting Insulin (units)" in aliases
+
+    def test_get_aliases_empty_for_plain_column(self):
+        assert LIBRE_SCHEMA.get_aliases(LibreColumn.DEVICE.value) == ()
+        assert LIBRE_SCHEMA.get_aliases("does-not-exist") == ()
+
+    def test_get_unit(self):
+        assert LIBRE_SCHEMA.get_unit(LibreColumn.LONG_INSULIN.value) == "units"
+        assert LIBRE_SCHEMA.get_unit(LibreColumn.DEVICE.value) is None
+
+    def test_normalize_alias_to_canonical(self):
+        df = pl.DataFrame({"Long-Acting Insulin (units)": [1.0], "Device": ["x"]})
+        out = LIBRE_SCHEMA.normalize_headers(df)
+        assert LibreColumn.LONG_INSULIN.value in out.columns
+        assert "Long-Acting Insulin (units)" not in out.columns
+        # pure rename: no row/value change
+        assert out.height == df.height
+        assert out[LibreColumn.LONG_INSULIN.value].to_list() == [1.0]
+
+    def test_normalize_canonical_present_is_noop(self):
+        df = pl.DataFrame({LibreColumn.LONG_INSULIN.value: [2.0]})
+        out = LIBRE_SCHEMA.normalize_headers(df)
+        assert out.columns == df.columns
+
+    def test_normalize_both_present_canonical_wins(self):
+        # canonical already there -> alias left untouched, canonical not clobbered
+        df = pl.DataFrame({
+            LibreColumn.LONG_INSULIN.value: [1.0],
+            "Long-Acting Insulin (units)": [9.0],
+        })
+        out = LIBRE_SCHEMA.normalize_headers(df)
+        assert out[LibreColumn.LONG_INSULIN.value].to_list() == [1.0]
+        assert "Long-Acting Insulin (units)" in out.columns  # stray alias not renamed onto canonical
+
+    def test_normalize_idempotent(self):
+        df = pl.DataFrame({"Long-Acting Insulin (units)": [1.0]})
+        once = LIBRE_SCHEMA.normalize_headers(df)
+        twice = LIBRE_SCHEMA.normalize_headers(once)
+        assert once.columns == twice.columns
 
 
 if __name__ == "__main__":

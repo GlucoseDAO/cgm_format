@@ -523,6 +523,64 @@ class TestSuppressionCap:
         assert _should_suppress_error(bad, SupportedCGMFormat.DEXCOM, True, {}) is False
 
 
+class TestAliasAwareSuppression:
+    """An incorrect-label whose actual header is a registered alias of the
+    expected field is benign drift and is suppressed — driven by the schema's
+    alias data, not a KNOWN_ISSUES entry, so it works even for LIBRE (empty
+    suppression list)."""
+
+    LIBREVIEW = DATA_DIR / "Libreview2026-07-23-17_55_12.csv"
+
+    def _label_err(self, field_name: str, label: str) -> dict:
+        # frictionless IncorrectLabelError exposes field_name (expected) + label (actual)
+        return {"type": "incorrect-label", "field_name": field_name, "label": label}
+
+    def test_registered_alias_is_suppressed(self) -> None:
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        err = self._label_err("Long-Acting Insulin Value (units)", "Long-Acting Insulin (units)")
+        assert _should_suppress_error(err, SupportedCGMFormat.LIBRE, True) is True
+
+    def test_non_alias_label_not_suppressed(self) -> None:
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        err = self._label_err("Long-Acting Insulin Value (units)", "Totally Different Header")
+        assert _should_suppress_error(err, SupportedCGMFormat.LIBRE, True) is False
+
+    def test_alias_suppression_respects_suppress_known_flag(self) -> None:
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        err = self._label_err("Long-Acting Insulin Value (units)", "Long-Acting Insulin (units)")
+        assert _should_suppress_error(err, SupportedCGMFormat.LIBRE, False) is False
+
+    def test_existing_rule_suppression_unaffected(self) -> None:
+        """The alias branch must not shadow the explicit Dexcom Index rule."""
+        from cgm_format.cgm_cli import _should_suppress_error
+
+        # Dexcom has ('incorrect-label', 'Index', None) — 'Index' is not an alias,
+        # so this must still be suppressed by the rule list, not the alias branch.
+        err = {"type": "incorrect-label", "field_name": "Index", "label": "﻿Index"}
+        assert _should_suppress_error(err, SupportedCGMFormat.DEXCOM, True) is True
+
+    def test_raw_frictionless_suppresses_libreview(self) -> None:
+        """End-to-end raw-file validation: the renamed header is 1 error without
+        suppression and alias-suppressed to a clean report with it."""
+        from cgm_format.cgm_cli import _validate_with_frictionless, HAS_FRICTIONLESS
+
+        if not HAS_FRICTIONLESS:
+            pytest.skip("frictionless not installed")
+        if not self.LIBREVIEW.exists():
+            pytest.skip(f"Fixture not found: {self.LIBREVIEW}")
+
+        ok0, _, errs0, sup0 = _validate_with_frictionless(
+            self.LIBREVIEW, SupportedCGMFormat.LIBRE, suppress_known=False)
+        ok1, _, errs1, sup1 = _validate_with_frictionless(
+            self.LIBREVIEW, SupportedCGMFormat.LIBRE, suppress_known=True)
+
+        assert (ok0, errs0) == (False, 1)
+        assert (ok1, errs1, sup1) == (True, 0, 1)
+
+
 if __name__ == "__main__":
     # Allow running tests directly
     pytest.main([__file__, "-v", "-s"])
