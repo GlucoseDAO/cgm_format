@@ -43,6 +43,11 @@ UNIFIED_DETECTION_PATTERNS = [
 # mmol/L → mg/dL conversion factor (standard clinical value).
 MMOL_TO_MGDL = 18.0182
 
+# Canonical unified glucose unit. Vendor parsers scale to this via
+# FormatParser._glucose_to_canonical, which reads the column's declared unit
+# from its schema and looks up the factor in UNIT_CONVERSIONS.
+CANONICAL_GLUCOSE_UNIT = "mg/dL"
+
 # Factors to scale a vendor column from its declared source unit to the
 # canonical unified unit (glucose in mg/dL, exercise in seconds). A vendor/
 # regional variant that only differs in units is then expressed purely as a

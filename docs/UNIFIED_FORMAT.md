@@ -25,11 +25,12 @@ Each event type uses a 7-8 character code:
 
 **Core Glucose Readings:**
 
-- `EGV_READ` - Normal CGM value (Estimated Glucose Value)
+- `EGV_READ` - Normal CGM value (Estimated Glucose Value). Libre historic (Record Type 0) and
+  scan (Record Type 1) readings both map here.
 
 **Calibration:**
 
-- `CALIBRAT` - Sensor calibration event
+- `CALIBRAT` - Sensor calibration event. Libre strip / finger-prick readings (Record Type 2) map here.
 
 **Carbohydrates:**
 

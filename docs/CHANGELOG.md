@@ -11,6 +11,18 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.9.0 — 2026-08-13
+
+- European / mmol/L FreeStyle Libre exports (`LIBRE_EU`, RM5): glucose columns relabeled mmol/L, two
+  ketone columns appended. Detected ahead of `LIBRE` the same way `DEXCOM_EU` sits ahead of `DEXCOM`.
+- Libre historic and scan readings both parse as `EGV_READ`. Libre files now yield more glucose
+  rows than before — a consumer comparing row counts across versions should expect the scan
+  readings that used to be dropped. Duplicate timestamps (a scan landing on a historic minute) are
+  flagged `TIME_DUPLICATE`, not dropped.
+- Libre strip (finger-prick) readings parse as `CALIBRAT`.
+- Shared `_glucose_to_canonical` helper: both Dexcom and Libre scale glucose from the unit declared
+  in the vendor schema. `derive_schema` can append data columns.
+
 ## 0.8.4 — 2026-07-24
 
 - Schema-drift primitives: column aliases, `derive_schema`, declarative units.

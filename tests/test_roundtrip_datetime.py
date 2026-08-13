@@ -5,7 +5,7 @@ vendor CSV -> unified DataFrame -> unified CSV -> unified DataFrame
 
 Tests parametrized for:
 - Dexcom format
-- Libre format  
+- Libre / Libre EU format (EU is included when the local mmol/L fixture is present)
 - Unified format (direct roundtrip)
 
 Also tests DataFrame equality (both Polars and Pandas) to ensure data is preserved exactly.
@@ -338,6 +338,27 @@ class TestDatetimeRoundtrip:
                     f"Should parse {datetime_column} as Datetime, got {df[datetime_column].dtype}"
             except Exception as e:
                 pytest.fail(f"Failed to parse {datetime_column} with format '{datetime_str}': {e}")
+
+
+class TestLibreCoverageInGlob:
+    """The glob must see scan-row Libre (CI) and LIBRE_EU when the local fixture exists."""
+
+    def test_synthetic_libre_is_discovered(self) -> None:
+        files = get_test_files_by_format()
+        names = {fp.name for fp, _fmt in files}
+        formats = {fmt for _fp, fmt in files}
+        assert "FreeStyle_Libre_3_synthetic.csv" in names
+        assert SupportedCGMFormat.LIBRE in formats
+
+    def test_libre_eu_fixture_discovered_when_present(self) -> None:
+        jongrove = DATA_DIR / "JonGrove_glucose_13-8-2026.csv"
+        if not jongrove.exists():
+            pytest.skip(f"Fixture not found: {jongrove}")
+        by_format = get_test_files_by_format()
+        names = {fp.name for fp, _fmt in by_format}
+        assert jongrove.name in names
+        formats = {fmt for fp, fmt in by_format if fp.name == jongrove.name}
+        assert formats == {SupportedCGMFormat.LIBRE_EU}
 
 
 if __name__ == "__main__":

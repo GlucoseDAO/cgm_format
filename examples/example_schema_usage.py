@@ -3,11 +3,12 @@
 from pathlib import Path
 from collections import Counter
 from datetime import datetime
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple
 
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
+from cgm_format.cgm_cli import FrictionlessError
 
 # Optional: Use frictionless library if available
 try:
@@ -17,7 +18,7 @@ except ImportError:
     HAS_FRICTIONLESS = False
 
 
-def should_suppress_error(error: Any, format_type: SupportedCGMFormat) -> bool:
+def should_suppress_error(error: FrictionlessError, format_type: SupportedCGMFormat) -> bool:
     """Check if an error should be suppressed based on known format issues.
     
     Args:

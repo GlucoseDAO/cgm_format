@@ -11,6 +11,7 @@ from base64 import b64decode
 logger = logging.getLogger(__name__)
 
 from cgm_format.formats.supported import FORMAT_DETECTION_PATTERNS, DETECTION_LINE_COUNT
+from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.interface.cgm_interface import (
     CGMParser,
     SupportedCGMFormat,
@@ -29,6 +30,7 @@ from cgm_format.formats.unified import (
     UNIFIED_TIMESTAMP_FORMATS,
     CGM_SCHEMA,
     UNIT_CONVERSIONS,
+    CANONICAL_GLUCOSE_UNIT,
 )
 from cgm_format.formats.dexcom import (
     DexcomColumn,
@@ -49,6 +51,10 @@ from cgm_format.formats.libre import (
     LIBRE_HEADER_LINE,
     LIBRE_TIMESTAMP_FORMATS,
     LIBRE_SCHEMA,
+)
+from cgm_format.formats.libre_eu import (
+    LibreEUColumn,
+    LIBRE_EU_SCHEMA,
 )
 from cgm_format.formats.medtronic import (
     MedtronicColumn,
@@ -214,6 +220,8 @@ class FormatParser(CGMParser):
             unified_df = cls._process_dexcom(text_data, european=True)
         elif format_type == SupportedCGMFormat.LIBRE:
             unified_df = cls._process_libre(text_data)
+        elif format_type == SupportedCGMFormat.LIBRE_EU:
+            unified_df = cls._process_libre(text_data, european=True)
         elif format_type == SupportedCGMFormat.MEDTRONIC:
             unified_df = cls._process_medtronic(text_data)
         elif format_type == SupportedCGMFormat.NIGHTSCOUT:
@@ -333,6 +341,15 @@ class FormatParser(CGMParser):
             return col_expr
         factor = UNIT_CONVERSIONS.get((source_unit, target_unit))
         return col_expr * factor if factor is not None else col_expr
+
+    @classmethod
+    def _glucose_to_canonical(
+        cls, schema: CGMSchemaDefinition, source_column: str, expr: pl.Expr
+    ) -> pl.Expr:
+        """Scale a vendor glucose column to mg/dL using the unit declared in its schema."""
+        return cls._to_canonical_unit(
+            expr, schema.get_unit(source_column), CANONICAL_GLUCOSE_UNIT
+        )
 
     @classmethod
     def _process_unified(cls, text_data: str) -> UnifiedFormat:
@@ -493,11 +510,12 @@ class FormatParser(CGMParser):
             # declared unit in the effective schema — mmol/L exports are scaled,
             # mg/dL pass through, with no format-specific branch. High/Low markers
             # are already substituted with mg/dL placeholders, so leave them as-is.
-            glucose_unit = eff_schema.get_unit(Col.GLUCOSE_VALUE)
             egv_data = egv_data.with_columns([
                 pl.when(pl.col("is_out_of_range"))
                 .then(pl.col("glucose"))
-                .otherwise(cls._to_canonical_unit(pl.col("glucose"), glucose_unit, "mg/dL"))
+                .otherwise(cls._glucose_to_canonical(
+                    eff_schema, Col.GLUCOSE_VALUE, pl.col("glucose")
+                ))
                 .alias("glucose"),
             ])
 
@@ -605,18 +623,21 @@ class FormatParser(CGMParser):
             raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     @classmethod
-    def _process_libre(cls, text_data: str) -> UnifiedFormat:
+    def _process_libre(cls, text_data: str, european: bool = False) -> UnifiedFormat:
         """Process FreeStyle Libre CSV to unified format.
-        
+
         Args:
             text_data: Libre CSV string
-            
+            european: If True, glucose is in mmol/L and will be converted to mg/dL
+
         Returns:
             DataFrame in unified format
-            
+
         Raises:
             MalformedDataError: If parsing fails
         """
+        Col = LibreEUColumn if european else LibreColumn
+        eff_schema = LIBRE_EU_SCHEMA if european else LIBRE_SCHEMA
         try:
             # Libre has: Row 1 = metadata, Row 2 = columns, Row 3+ = data
             # Use skip_rows to skip the first metadata row
@@ -634,33 +655,76 @@ class FormatParser(CGMParser):
             # Absorb benign header drift (e.g. newer LibreView renamed the
             # long-acting insulin column) by mapping any registered alias to its
             # canonical name, so the enum-driven selects below resolve.
-            df = LIBRE_SCHEMA.normalize_headers(df)
+            df = eff_schema.normalize_headers(df)
 
             # Probe timestamp format once for this file
-            timestamp_format = FormatParser._probe_timestamp_format(df, LibreColumn.DEVICE_TIMESTAMP, LIBRE_TIMESTAMP_FORMATS)
-            
-            # Process historic glucose data (Record Type = 0)
+            timestamp_format = FormatParser._probe_timestamp_format(df, Col.DEVICE_TIMESTAMP, LIBRE_TIMESTAMP_FORMATS)
+
+            # Process historic glucose data (Record Type = 0) — automatic CGM interval
             glucose_data = (df
-                .filter(pl.col(LibreColumn.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.HISTORIC_GLUCOSE.value)
+                .filter(pl.col(Col.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.HISTORIC_GLUCOSE.value)
                 .select([
-                    pl.col(LibreColumn.DEVICE_TIMESTAMP).alias("datetime"),
-                    pl.col(LibreColumn.HISTORIC_GLUCOSE).alias("glucose"),
+                    pl.col(Col.DEVICE_TIMESTAMP).alias("datetime"),
+                    pl.col(Col.HISTORIC_GLUCOSE).alias("glucose"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                    pl.col("glucose").cast(pl.Float64, strict=False),
+                    cls._glucose_to_canonical(
+                        eff_schema,
+                        Col.HISTORIC_GLUCOSE,
+                        pl.col("glucose").cast(pl.Float64, strict=False),
+                    ).alias("glucose"),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                ])
+            )
+
+            # Process scan glucose data (Record Type = 1) — user-initiated sensor scan.
+            # Same sensor glucose as historic, so it joins the EGV_READ series.
+            scan_data = (df
+                .filter(pl.col(Col.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.SCAN_GLUCOSE.value)
+                .select([
+                    pl.col(Col.DEVICE_TIMESTAMP).alias("datetime"),
+                    pl.col(Col.SCAN_GLUCOSE).alias("glucose"),
+                ])
+                .with_columns([
+                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+                    cls._glucose_to_canonical(
+                        eff_schema,
+                        Col.SCAN_GLUCOSE,
+                        pl.col("glucose").cast(pl.Float64, strict=False),
+                    ).alias("glucose"),
+                    pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+                ])
+            )
+
+            # Process strip glucose data (Record Type = 2) — finger-prick calibration
+            strip_data = (df
+                .filter(pl.col(Col.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.STRIP_GLUCOSE.value)
+                .select([
+                    pl.col(Col.DEVICE_TIMESTAMP).alias("datetime"),
+                    pl.col(Col.STRIP_GLUCOSE).alias("glucose"),
+                ])
+                .with_columns([
+                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+                    cls._glucose_to_canonical(
+                        eff_schema,
+                        Col.STRIP_GLUCOSE,
+                        pl.col("glucose").cast(pl.Float64, strict=False),
+                    ).alias("glucose"),
+                    pl.lit(UnifiedEventType.CALIBRATION.value).alias("event_type"),
                     pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
                 ])
             )
             
             # Process insulin events (Record Type = 4)
             insulin_data = (df
-                .filter(pl.col(LibreColumn.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.INSULIN.value)
+                .filter(pl.col(Col.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.INSULIN.value)
                 .select([
-                    pl.col(LibreColumn.DEVICE_TIMESTAMP).alias("datetime"),
-                    pl.col(LibreColumn.RAPID_INSULIN).alias("insulin_fast"),
-                    pl.col(LibreColumn.LONG_INSULIN).alias("insulin_slow"),
+                    pl.col(Col.DEVICE_TIMESTAMP).alias("datetime"),
+                    pl.col(Col.RAPID_INSULIN).alias("insulin_fast"),
+                    pl.col(Col.LONG_INSULIN).alias("insulin_slow"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
@@ -677,10 +741,10 @@ class FormatParser(CGMParser):
             
             # Process food/carb events (Record Type = 5)
             carb_data = (df
-                .filter(pl.col(LibreColumn.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.FOOD.value)
+                .filter(pl.col(Col.RECORD_TYPE).cast(pl.Int64) == LibreRecordType.FOOD.value)
                 .select([
-                    pl.col(LibreColumn.DEVICE_TIMESTAMP).alias("datetime"),
-                    pl.col(LibreColumn.CARBOHYDRATES_GRAMS).alias("carbs"),
+                    pl.col(Col.DEVICE_TIMESTAMP).alias("datetime"),
+                    pl.col(Col.CARBOHYDRATES_GRAMS).alias("carbs"),
                 ])
                 .with_columns([
                     pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
@@ -691,6 +755,10 @@ class FormatParser(CGMParser):
             
             # Combine all data types
             all_data = [glucose_data]
+            if len(scan_data) > 0:
+                all_data.append(scan_data)
+            if len(strip_data) > 0:
+                all_data.append(strip_data)
             if len(insulin_data) > 0:
                 all_data.append(insulin_data)
             if len(carb_data) > 0:

@@ -1,0 +1,406 @@
+{
+  "fields": [
+    {
+      "name": "Index",
+      "type": "string",
+      "description": "Row index (European decimal format, e.g. '0,0', '1,00000')",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Date",
+      "type": "string",
+      "description": "Date of the event (e.g. '2021/07/25')",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Time",
+      "type": "string",
+      "description": "Time of the event (e.g. '09:35:28')",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "New Device Time",
+      "type": "string",
+      "description": "New device time after time change",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BG Reading (mg/dL)",
+      "type": "string",
+      "description": "Fingerstick BG meter reading (may contain '-------' placeholders)",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Linked BG Meter ID",
+      "type": "string",
+      "description": "Linked blood glucose meter identifier",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Basal Rate (U/h)",
+      "type": "string",
+      "description": "Programmed basal insulin rate (may contain '-------')",
+      "unit": "U/h",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Amount",
+      "type": "string",
+      "description": "Temporary basal rate amount",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Type",
+      "type": "string",
+      "description": "Temporary basal type",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Duration (h:mm:ss)",
+      "type": "string",
+      "description": "Duration of temporary basal in h:mm:ss",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Type",
+      "type": "string",
+      "description": "Type of bolus delivery",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Volume Selected (U)",
+      "type": "string",
+      "description": "Selected bolus volume (may contain '-------')",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Volume Delivered (U)",
+      "type": "string",
+      "description": "Delivered bolus volume (may contain '-------')",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Duration (h:mm:ss)",
+      "type": "string",
+      "description": "Duration of extended bolus in h:mm:ss",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Prime Type",
+      "type": "string",
+      "description": "Type of infusion set prime",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Prime Volume Delivered (U)",
+      "type": "string",
+      "description": "Volume delivered during prime",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Alarm",
+      "type": "string",
+      "description": "Alarm event text (e.g. 'LOW SG', 'CAL NOW', 'RISE RATE')",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Suspend",
+      "type": "string",
+      "description": "Pump suspend event",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Rewind",
+      "type": "string",
+      "description": "Reservoir rewind event",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Estimate (U)",
+      "type": "string",
+      "description": "Bolus Wizard estimated dose",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Target High BG (mg/dL)",
+      "type": "string",
+      "description": "Bolus Wizard target high BG",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Target Low BG (mg/dL)",
+      "type": "string",
+      "description": "Bolus Wizard target low BG",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Carb Ratio (g/U)",
+      "type": "string",
+      "description": "Bolus Wizard carb ratio",
+      "unit": "g/U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Insulin Sensitivity (mg/dL/U)",
+      "type": "string",
+      "description": "Bolus Wizard insulin sensitivity factor",
+      "unit": "mg/dL/U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Carb Input (grams)",
+      "type": "string",
+      "description": "Carbohydrate grams entered into Bolus Wizard (may contain '-------')",
+      "unit": "grams",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ BG Input (mg/dL)",
+      "type": "string",
+      "description": "BG value entered into Bolus Wizard",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Correction Estimate (U)",
+      "type": "string",
+      "description": "Bolus Wizard correction dose estimate",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Food Estimate (U)",
+      "type": "string",
+      "description": "Bolus Wizard food dose estimate",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Active Insulin (U)",
+      "type": "string",
+      "description": "Bolus Wizard active insulin on board",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Status",
+      "type": "string",
+      "description": "Bolus Wizard status",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Calibration BG (mg/dL)",
+      "type": "string",
+      "description": "BG value used for sensor calibration (may contain '-------')",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Glucose (mg/dL)",
+      "type": "string",
+      "description": "CGM sensor glucose reading (may contain '-------')",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "ISIG Value",
+      "type": "string",
+      "description": "Raw sensor signal value",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Event Marker",
+      "type": "string",
+      "description": "Free-text event marker (e.g. 'Insulin: 27,00', 'Meal: 60,00grams')",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Number",
+      "type": "string",
+      "description": "Bolus delivery number",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Cancellation Reason",
+      "type": "string",
+      "description": "Reason for bolus cancellation",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Unabsorbed Insulin Total (U)",
+      "type": "string",
+      "description": "Total unabsorbed insulin from Bolus Wizard",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Final Bolus Estimate",
+      "type": "string",
+      "description": "Final bolus estimate after adjustments",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Scroll Step Size",
+      "type": "string",
+      "description": "Scroll step size setting",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Insulin Action Curve Time",
+      "type": "string",
+      "description": "Insulin action curve time setting",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Calibration Rejected Reason",
+      "type": "string",
+      "description": "Reason for sensor calibration rejection",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Preset Bolus",
+      "type": "string",
+      "description": "Preset bolus configuration",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Source",
+      "type": "string",
+      "description": "Source of bolus command",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Associated Reason",
+      "type": "string",
+      "description": "Reason for network device association",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Disassociated Reason",
+      "type": "string",
+      "description": "Reason for network device disassociation",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Disconnected Reason",
+      "type": "string",
+      "description": "Reason for network device disconnection",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Exception",
+      "type": "string",
+      "description": "Sensor exception event",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Preset Temp Basal Name",
+      "type": "string",
+      "description": "Name of preset temporary basal pattern",
+      "constraints": {
+        "required": false
+      }
+    }
+  ]
+}

@@ -22,6 +22,7 @@ from cgm_format.interface.cgm_interface import (
     TOLERANCE_INTERVAL_MINUTES,
 )
 from cgm_format.formats.unified import CGM_SCHEMA
+from cgm_format.interface.cgm_interface import SupportedCGMFormat
 
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "input"
@@ -31,8 +32,11 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 def get_supported_test_files() -> List[Path]:
     """Get only supported CSV files from the data directory.
-    
-    Uses format_supported to filter out unsupported formats.
+
+    Uses format_supported to filter out unsupported formats. Discovers every
+    ``*.csv`` under data/input/, so the committed synthetic Libre (now with
+    scan rows) always participates, and the local mmol/L ``LIBRE_EU`` fixture
+    participates when present.
     """
     if not DATA_DIR.exists():
         pytest.skip(f"Data directory not found: {DATA_DIR}")
@@ -526,6 +530,24 @@ class TestProcessingIdempotency:
             f"Row count changed from {len(unified_df)} to {len(result1)}"
         
         print("✅ PASSED: Triple sequence detection is idempotent")
+
+
+class TestLibreCoverageInGlob:
+    """The glob must see scan-row Libre (CI) and LIBRE_EU when the local fixture exists."""
+
+    def test_synthetic_libre_is_discovered(self) -> None:
+        names = {p.name for p in get_supported_test_files()}
+        assert "FreeStyle_Libre_3_synthetic.csv" in names
+
+    def test_libre_eu_fixture_discovered_when_present(self) -> None:
+        jongrove = DATA_DIR / "JonGrove_glucose_13-8-2026.csv"
+        if not jongrove.exists():
+            pytest.skip(f"Fixture not found: {jongrove}")
+        files = get_supported_test_files()
+        assert jongrove in files
+        raw = jongrove.read_bytes()
+        fmt = FormatParser.detect_format(FormatParser.decode_raw_data(raw))
+        assert fmt == SupportedCGMFormat.LIBRE_EU
 
 
 if __name__ == "__main__":

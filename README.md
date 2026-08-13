@@ -603,6 +603,8 @@ cgm_format/
 │           ├── dexcom.json      # Frictionless schema for Dexcom
 │           ├── libre.py         # Libre format schema and constants
 │           ├── libre.json       # Frictionless schema for Libre
+│           ├── libre_eu.py      # Libre mmol/L variant
+│           ├── libre_eu.json    # Frictionless schema for Libre EU
 ├── docs/                        # Documentation
 │   ├── PHILOSOPHY.md            # Design principles and new sensor guide
 │   ├── USAGE.md                 # Complete usage guide for inference
@@ -615,7 +617,7 @@ cgm_format/
 │   ├── test_format_parser.py # Parsing and conversion tests
 │   ├── test_format_processor.py # Processing tests
 │   └── test_schema.py           # Schema validation tests
-├── data/                        # Local data (gitignored except allowlisted paths)
+├── data/                        # Local data (gitignored; already-tracked fixtures stay in git)
 │   ├── input/                   # Committed test fixtures (vendor CSV/JSON)
 │   └── parsed/                  # Converted unified format files (generated)
 ├── pyproject.toml               # Package configuration (hatchling)

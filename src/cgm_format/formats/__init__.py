@@ -46,6 +46,16 @@ from cgm_format.formats.libre import (
     LIBRE_TIMESTAMP_FORMATS,
 )
 
+# Libre EU format (mmol/L)
+from cgm_format.formats.libre_eu import (
+    LIBRE_EU_SCHEMA,
+    LibreEUColumn,
+    LIBRE_EU_DETECTION_PATTERNS,
+    LIBRE_EU_HEADER_LINE,
+    LIBRE_EU_DATA_START_LINE,
+    LIBRE_EU_METADATA_LINES,
+)
+
 # Medtronic format
 from cgm_format.formats.medtronic import (
     MEDTRONIC_SCHEMA,
@@ -123,6 +133,14 @@ __all__ = [
     "LIBRE_DATA_START_LINE",
     "LIBRE_METADATA_LINES",
     "LIBRE_TIMESTAMP_FORMATS",
+
+    # Libre EU format (mmol/L)
+    "LIBRE_EU_SCHEMA",
+    "LibreEUColumn",
+    "LIBRE_EU_DETECTION_PATTERNS",
+    "LIBRE_EU_HEADER_LINE",
+    "LIBRE_EU_DATA_START_LINE",
+    "LIBRE_EU_METADATA_LINES",
     
     # Medtronic format
     "MEDTRONIC_SCHEMA",

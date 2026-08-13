@@ -105,11 +105,17 @@ class TestMainPackageExports:
         from cgm_format import (
             EnumLiteral,
             ColumnSchema,
+            ColumnConstraints,
+            FrictionlessDialect,
+            FrictionlessTableSchema,
             CGMSchemaDefinition,
         )
         
         assert EnumLiteral is not None
         assert ColumnSchema is not None
+        assert ColumnConstraints is not None
+        assert FrictionlessDialect is not None
+        assert FrictionlessTableSchema is not None
         assert CGMSchemaDefinition is not None
 
     def test_unified_format_imports(self) -> None:
@@ -154,6 +160,16 @@ class TestMainPackageExports:
         assert LIBRE_SCHEMA is not None
         assert LibreRecordType is not None
         assert LibreColumn is not None
+
+    def test_libre_eu_format_imports(self) -> None:
+        """Test that Libre EU format schema and enums are available."""
+        from cgm_format import (
+            LIBRE_EU_SCHEMA,
+            LibreEUColumn,
+        )
+
+        assert LIBRE_EU_SCHEMA is not None
+        assert LibreEUColumn is not None
 
     def test_enum_values_work(self) -> None:
         """Test that imported enums have correct values."""

@@ -15,7 +15,7 @@ Can be used as:
 """
 
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Union, Protocol, TypedDict
 
 import typer
 import polars as pl
@@ -306,39 +306,41 @@ def pipeline(
 @app.command()
 def validate(
     input_file: Path = typer.Argument(..., help="Input CSV file to validate"),
-    format_type: Optional[str] = typer.Option(None, "--format", "-f", help="Format type (unified, dexcom, libre)"),
+    format_type: Optional[str] = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Format type (a SupportedCGMFormat value, e.g. libre_eu); omit to auto-detect",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed validation results"),
 ) -> None:
     """Validate a CSV file against its schema."""
+    format_choices = {member.value: member for member in SupportedCGMFormat}
     try:
         if not input_file.exists():
             console.print(f"[red]Error: File not found: {input_file}[/red]")
             raise typer.Exit(1)
-        
-        # Detect format if not provided
+
+        with open(input_file, "rb") as f:
+            raw_data = f.read()
+        text_data = FormatParser.decode_raw_data(raw_data)
+
         if not format_type:
-            with console.status("[bold green]Detecting format..."):
-                with open(input_file, 'rb') as f:
-                    raw_data = f.read()
-                text_data = FormatParser.decode_raw_data(raw_data)
-                detected_format = FormatParser.detect_format(text_data)
+            detected_format = FormatParser.detect_format(text_data)
             console.print(f"[green]✓[/green] Detected format: {detected_format.value}")
         else:
-            format_map = {
-                "unified": SupportedCGMFormat.UNIFIED_CGM,
-                "dexcom": SupportedCGMFormat.DEXCOM,
-                "libre": SupportedCGMFormat.LIBRE,
-            }
-            if format_type.lower() not in format_map:
-                console.print(f"[red]Error: Unknown format '{format_type}'. Use: unified, dexcom, or libre[/red]")
+            key = format_type.lower()
+            if key not in format_choices:
+                known = ", ".join(sorted(format_choices))
+                console.print(
+                    f"[red]Error: Unknown format '{format_type}'. Use: {known}[/red]"
+                )
                 raise typer.Exit(1)
-            detected_format = format_map[format_type.lower()]
-        
-        # Parse and validate
+            detected_format = format_choices[key]
+
         with console.status("[bold green]Validating..."):
             try:
-                df = FormatParser.parse_file(input_file)
-                # Validate schema
+                df = FormatParser.parse_to_unified(text_data, detected_format)
                 CGM_SCHEMA.validate_dataframe(df, enforce=False)
                 validation_passed = True
             except Exception as e:
@@ -360,7 +362,9 @@ def validate(
             console.print(f"\n[red]✗ Validation failed![/red]")
             console.print(f"  Error: {validation_error}")
             raise typer.Exit(1)
-        
+
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
@@ -820,8 +824,31 @@ def _get_warning_description(warning: ProcessingWarning) -> str:
     return descriptions.get(warning, "Unknown warning")
 
 
+class FrictionlessErrorDict(TypedDict, total=False):
+    """Dict form of a Frictionless table error (the keys we actually read)."""
+    type: str
+    code: str
+    fieldName: str
+    field_name: str
+    label: str
+    cell: Union[str, int, float, bool, None]
+
+
+class FrictionlessErrorObject(Protocol):
+    """Object form of a Frictionless table error (the attrs we actually read)."""
+    type: str
+    code: str
+    fieldName: str
+    field_name: str
+    label: str
+    cell: Union[str, int, float, bool, None]
+
+
+FrictionlessError = Union[FrictionlessErrorDict, FrictionlessErrorObject]
+
+
 def _should_suppress_error(
-    error: any,
+    error: FrictionlessError,
     format_type: SupportedCGMFormat,
     suppress_known: bool,
     counts: Optional[Dict[int, int]] = None,

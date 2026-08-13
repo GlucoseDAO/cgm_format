@@ -8,7 +8,7 @@ import polars as pl
 from dataclasses import dataclass, replace
 from functools import cached_property
 from enum import Enum
-from typing import Dict, Any, List, Union, Type, TypedDict, NotRequired
+from typing import Dict, List, Union, Type, TypedDict, NotRequired
 from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     MissingColumnError,
@@ -47,19 +47,61 @@ class EnumLiteral(str, Enum):
         return self.value
 
 
+class ColumnConstraints(TypedDict, total=False):
+    """Frictionless-style constraints on a single column."""
+    required: bool
+    unique: bool
+    enum: List[Union[str, int]]
+    minimum: Union[int, float]
+    maximum: Union[int, float]
+    minLength: int
+    maxLength: int
+    pattern: str
+
+
+class FrictionlessDialect(TypedDict, total=False):
+    """CSV dialect Frictionless needs when the header is not on line 1."""
+    headerRows: List[int]
+    commentRows: List[int]
+
+
+class FrictionlessField(TypedDict, total=False):
+    name: str
+    type: str
+    description: str
+    unit: str
+    constraints: ColumnConstraints
+
+
+class FrictionlessTableSchema(TypedDict, total=False):
+    fields: List[FrictionlessField]
+    primaryKey: List[str]
+    dialect: FrictionlessDialect
+
+
 class ColumnSchema(TypedDict):
     """Schema definition for a single column."""
     name: str
     dtype: Union[Type[pl.DataType], pl.DataType]
     description: str
     unit: NotRequired[str]
-    constraints: NotRequired[Dict[str, Any]]
+    constraints: NotRequired[ColumnConstraints]
     # Alternative header spellings this column has worn across vendor export
     # versions/regions. The parser normalizes any present alias to `name`
     # (the canonical spelling) via CGMSchemaDefinition.normalize_headers before
     # doing anything else, so a renamed-but-otherwise-identical export needs no
     # new format or parser branch. Never emitted to the Frictionless schema.
     aliases: NotRequired[tuple[str, ...]]
+
+
+class _SchemaReplace(TypedDict, total=False):
+    """Kwargs ``dataclasses.replace`` accepts when deriving a variant schema."""
+    service_columns: tuple[ColumnSchema, ...]
+    data_columns: tuple[ColumnSchema, ...]
+    metadata_lines: tuple[int, ...]
+    data_start_line: int
+    header_line: int
+    primary_key: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -81,7 +123,7 @@ class CGMSchemaDefinition:
     primary_key: tuple[str, ...] | None = None
     
     @cached_property
-    def _dialect(self) -> Dict[str, Any] | None:
+    def _dialect(self) -> FrictionlessDialect | None:
         """Lazily compute and cache the Frictionless dialect configuration.
         
         Returns:
@@ -212,7 +254,7 @@ class CGMSchemaDefinition:
         return [pl.col(col["name"]).cast(col["dtype"]) for col in columns]
     
     @staticmethod
-    def _generate_dialect(header_line: int, metadata_lines: tuple[int, ...]) -> Dict[str, Any] | None:
+    def _generate_dialect(header_line: int, metadata_lines: tuple[int, ...]) -> FrictionlessDialect | None:
         """Generate Frictionless dialect configuration from format constants.
         
         Args:
@@ -234,7 +276,7 @@ class CGMSchemaDefinition:
         if header_line == 1 and not metadata_lines:
             return None
         
-        dialect = {}
+        dialect: FrictionlessDialect = {}
         
         # Header is not on line 1 (e.g., Libre with header on row 2)
         if header_line != 1:
@@ -246,7 +288,7 @@ class CGMSchemaDefinition:
         
         return dialect if dialect else None
     
-    def get_dialect(self) -> Dict[str, Any] | None:
+    def get_dialect(self) -> FrictionlessDialect | None:
         """Get the Frictionless dialect for this schema.
         
         Returns:
@@ -257,8 +299,8 @@ class CGMSchemaDefinition:
     def to_frictionless_schema(
         self, 
         primary_key: List[str] | tuple[str, ...] | None = None,
-        dialect: Dict[str, Any] | None = None
-    ) -> Dict[str, Any]:
+        dialect: FrictionlessDialect | None = None
+    ) -> FrictionlessTableSchema:
         """Convert to Frictionless Data Table Schema format.
         
         Returns dictionary in Frictionless Data Table Schema format
@@ -275,10 +317,10 @@ class CGMSchemaDefinition:
         Returns:
             Dictionary in Frictionless Data Table Schema format
         """
-        fields = []
+        fields: List[FrictionlessField] = []
         
         for col in self.service_columns + self.data_columns:
-            field = {
+            field: FrictionlessField = {
                 "name": col["name"],
                 "type": self._polars_to_frictionless_type(col["dtype"]),
                 "description": col["description"],
@@ -289,7 +331,7 @@ class CGMSchemaDefinition:
                 field["constraints"] = col["constraints"]
             fields.append(field)
         
-        schema = {"fields": fields}
+        schema: FrictionlessTableSchema = {"fields": fields}
         
         # Use provided primary_key, or fall back to schema's primary_key
         effective_primary_key = primary_key if primary_key is not None else self.primary_key
@@ -457,7 +499,7 @@ class CGMSchemaDefinition:
         self, 
         output_path: str, 
         primary_key: List[str] | tuple[str, ...] | None = None,
-        dialect: Dict[str, Any] | None = None
+        dialect: FrictionlessDialect | None = None
     ) -> None:
         """Export schema to JSON file in Frictionless Data Table Schema format.
         
@@ -482,6 +524,7 @@ def derive_schema(
     *,
     renames: Dict[str, str] | None = None,
     units: Dict[str, str] | None = None,
+    append_data_columns: tuple[ColumnSchema, ...] | None = None,
     metadata_lines: tuple[int, ...] | None = None,
     data_start_line: int | None = None,
     header_line: int | None = None,
@@ -500,6 +543,9 @@ def derive_schema(
         units: Map of column name (AFTER any rename) -> unit string. Pairs with
             the declarative unit-conversion table so the parser knows to scale
             the column to the canonical unified unit.
+        append_data_columns: Extra data columns the variant adds after the
+            patched base columns (e.g. ketone fields a later LibreView export
+            grew). Passed through as-is; they are not renamed or re-united.
         metadata_lines / data_start_line / header_line: File-geometry overrides
             (e.g. an export that gained a metadata row).
         primary_key: Override the primary key.
@@ -519,9 +565,13 @@ def derive_schema(
             out.append(new)  # type: ignore[arg-type]
         return tuple(out)
 
-    changes: Dict[str, Any] = {
+    data_columns = patch(base.data_columns)
+    if append_data_columns:
+        data_columns = data_columns + append_data_columns
+
+    changes: _SchemaReplace = {
         "service_columns": patch(base.service_columns),
-        "data_columns": patch(base.data_columns),
+        "data_columns": data_columns,
     }
     if metadata_lines is not None:
         changes["metadata_lines"] = metadata_lines
@@ -538,7 +588,7 @@ def regenerate_schema_json(
     schema: CGMSchemaDefinition,
     calling_module_file: str,
     primary_key: List[str] | tuple[str, ...] | None = None,
-    dialect: Dict[str, Any] | None = None
+    dialect: FrictionlessDialect | None = None
 ) -> None:
     """Regenerate schema JSON file from a schema definition.
     

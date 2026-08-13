@@ -6,6 +6,7 @@ from cgm_format.formats.unified import CGM_SCHEMA, UNIFIED_DETECTION_PATTERNS, U
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DEXCOM_DETECTION_PATTERNS, DEXCOM_DATA_START_LINE
 from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DEXCOM_EU_DETECTION_PATTERNS, DEXCOM_EU_DATA_START_LINE
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
+from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LIBRE_EU_DETECTION_PATTERNS, LIBRE_EU_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
 from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
 
@@ -17,17 +18,21 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_SCHEMA,
     SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
+    SupportedCGMFormat.LIBRE_EU: LIBRE_EU_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
 }
 
 # DEXCOM_EU must precede DEXCOM: the EU header also matches generic Dexcom
 # patterns (e.g. "Timestamp (YYYY-MM-DDThh:mm:ss)"), so the more specific
-# mmol/L check must win first.
+# mmol/L check must win first. Same for LIBRE_EU before LIBRE: the mmol/L
+# export also matches generic Libre patterns ("Glucose Data,Generated",
+# "FreeStyle Libre"), so "Historic Glucose mmol/L" must win first.
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
+    SupportedCGMFormat.LIBRE_EU: LIBRE_EU_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DETECTION_PATTERNS,
@@ -38,6 +43,7 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_DATA_START_LINE,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DATA_START_LINE,
     SupportedCGMFormat.LIBRE: LIBRE_DATA_START_LINE,
+    SupportedCGMFormat.LIBRE_EU: LIBRE_EU_DATA_START_LINE,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
 }
@@ -78,6 +84,7 @@ KNOWN_ISSUES_TO_SUPPRESS = {
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
     SupportedCGMFormat.LIBRE: [],
+    SupportedCGMFormat.LIBRE_EU: [],
     SupportedCGMFormat.MEDTRONIC: [
         # Medtronic CareLink exports contain "-------" placeholders in numeric columns,
         # repeated header rows mid-file, and European decimal format (comma separator)

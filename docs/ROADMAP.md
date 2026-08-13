@@ -25,7 +25,7 @@ Legality: pure legibility, so a patch.
 
 **Severity:** low · **Status:** open · **Owner:** unassigned
 
-`src/cgm_format/__init__.py:27` carries `__version__ = "0.8.4"` as a fallback when
+`src/cgm_format/__init__.py:27` carries `__version__ = "0.9.0"` as a fallback when
 `importlib.metadata.version("cgm-format")` raises. That is a second source of truth for the version,
 and it is the one that gets read when the package is not installed — exactly when it is most likely
 to be stale.
@@ -47,7 +47,7 @@ The house layout puts committed fixtures in `assets/` and reserves `data/` for g
 `data/parsed/`, `data/cli_test_output/` and `data/cli_examples_output/`.
 
 Deferred on purpose, and out of scope for any task that is not this task: every integration test
-path, the `.gitignore` ignore-all + allowlist, the sdist exclusion and `tests/conftest.py`'s
+path, the `.gitignore` ignore-all (F2: `input/` is not allowlisted), the sdist exclusion and `tests/conftest.py`'s
 Nightscout download target are built on the current names and all work today. Doing it properly
 means one change that moves the fixtures, updates every test path, rewrites the allowlist, and fixes
 the docs that name these directories — planned as a unit, not smuggled into an unrelated edit.
@@ -72,6 +72,43 @@ adopting this moves it (or adds it) to the `cli` extra; and the credential-neutr
 because `load_dotenv(override=False)` skips a key that is merely present.
 
 Legality: additive (a new optional config path), so minor.
+
+---
+
+## RM6 — parse Libre ketone readings into UnifiedFormat
+
+**Severity:** medium · **Status:** open · **Owner:** unassigned
+
+Libre vendor schemas already declare ketone columns: `Ketone mmol/L` on `LIBRE_SCHEMA`, plus
+`Historic Ketone mmol/L` and `Scan Ketone mmol/L` appended on `LIBRE_EU_SCHEMA`. `_process_libre`
+never selects them. `CGM_SCHEMA` has no ketone field, so `validate_dataframe(enforce=True)` would
+drop any extra column the parser tried to smuggle through. The values are gone after Stage 3.
+
+The JonGrove mmol/L export (local, gitignored) carries all three headers and **zero populated
+cells**. The committed Libre fixtures are the same. There is no real ketone reading in the tree.
+Do not implement against an invented row.
+
+Left out of 0.9.0 on purpose: that release put the columns on the *vendor* schema so Frictionless
+accepts the 21-column header. Putting them on the *unified* schema is a shape a consumer reads —
+a design, not a parser follow-up.
+
+**Decisions to settle before writing code** (do not infer):
+
+1. **Shape.** A new optional data column (`ketones`, null = the vendor did not say) vs a new
+   8-char `UnifiedEventType` vs both. A column without an event type leaves a ketone row looking
+   like an empty glucose event; an event type without a column has nowhere to put the number.
+   Reusing `glucose` to hold ketones redefines a column a consumer already reads — that would be
+   major and silent.
+2. **Canonical unit.** Clinical ketones are already mmol/L. Routing them through
+   `_glucose_to_canonical` / `CANONICAL_GLUCOSE_UNIT` applies a glucose convention to a different
+   analyte. Stay mmol/L, or name a ketone target in `UNIT_CONVERSIONS` — pick one, don't borrow.
+3. **Historic vs scan vs the older `Ketone mmol/L` column.** Merge into one series (as scan
+   glucose merged into `EGV_READ`) or keep distinct event types. Merging re-opens F1 on a new
+   analyte.
+4. **Fixture.** Need a real export with nonempty ketone cells. Skip-if-absent until then.
+
+**Legality:** minor if we *add* a column and/or event type. Major if we reuse an existing unified
+column.
 
 ---
 

@@ -53,14 +53,15 @@ lines and returns the **first** format whose *any* pattern appears in *any* of t
 - **Iteration order is load-bearing.** `FORMAT_DETECTION_PATTERNS` is a plain dict; Python preserves
   insertion order, and detection returns on first match. `DEXCOM_EU` is registered **before** `DEXCOM`
   on purpose: the EU export also matches generic Dexcom patterns, so the more specific `mmol/L` check
-  must win first. Put more-specific formats earlier.
+  must win first. Same for `LIBRE_EU` before `LIBRE`. Put more-specific formats earlier.
 - `DETECTION_LINE_COUNT = max(per-format data_start_line) * 2`, so detection reads far enough to see
   the header even for formats where the header sits below metadata rows.
 - Detection works on the **raw string**, before any CSV parsing, to sidestep vendor CSV quirks.
 
 **Stage 3 — `parse_to_unified(text, format_type) -> UnifiedFormat`.** A dispatch `if/elif` on
 `format_type` calling the vendor's `_process_<vendor>()`. Note `DEXCOM_EU` reuses `_process_dexcom(...,
-european=True)` — a **variant** format sharing one parser.
+european=True)` and `LIBRE_EU` reuses `_process_libre(..., european=True)` — **variant** formats
+sharing one parser.
 
 Each `_process_<vendor>()` follows the same shape:
 1. `pl.read_csv(StringIO(text), ...)` with vendor-specific dialect knobs
@@ -209,13 +210,15 @@ The two mechanisms in detail:
   one line of data, no new format.
 
 - **`derive_schema` (distinct variant).** Express a variant as a patch over a base schema instead of
-  re-declaring every column: `derive_schema(base, renames={...}, units={...}, metadata_lines=...,
-  data_start_line=...)` returns a new frozen schema. `DEXCOM_EU_SCHEMA` is derived from `DEXCOM_SCHEMA`
-  this way — two renamed glucose columns (relabeled mmol/L), their units, and one extra metadata row,
-  in ~10 lines. The mmol/L→mg/dL conversion is **not** variant-specific code: the parser reads the
-  glucose column's declared `unit` and scales to the canonical mg/dL via `UNIT_CONVERSIONS`
-  (`FormatParser._to_canonical_unit`). A future Libre-in-mmol/L is then `derive_schema(LIBRE_SCHEMA,
-  units={...})` plus detection — with zero parser changes.
+  re-declaring every column: `derive_schema(base, renames={...}, units={...}, append_data_columns=...,
+  metadata_lines=..., data_start_line=...)` returns a new frozen schema. `DEXCOM_EU_SCHEMA` is derived
+  from `DEXCOM_SCHEMA` this way — two renamed glucose columns (relabeled mmol/L), their units, and
+  one extra metadata row, in ~10 lines. `LIBRE_EU_SCHEMA` is the same idea: three glucose columns
+  relabeled mmol/L plus two appended ketone columns. The mmol/L→mg/dL conversion is **not**
+  variant-specific code: the parser reads the glucose column's declared `unit` and scales to the
+  canonical mg/dL via `FormatParser._glucose_to_canonical` (which looks up `UNIT_CONVERSIONS`). A
+  variant that only differs in units still needs the parser to call that helper — `_process_libre`
+  did not, until the mmol/L export arrived, so "zero parser changes" was not true of the Libre path.
 
 Where does genuinely irregular *code* go? In the vendor's `_process_*` method — that is the sanctioned
 home for anything a declaration can't express (combining `Date`+`Time` into one timestamp, Euro-decimal
@@ -261,8 +264,9 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
 - [ ] **6. Regenerate the JSON schema** (optional but conventional): call the module's
   `regenerate_schema_json()`, or run `scripts/regenerate_all_schemas.py`, and commit `formats/<vendor>.json`.
 
-- [ ] **7. Add a real fixture** under `data/input/` and commit it (that subtree is allowlisted in
-  `data/.gitignore`; add `!<dir>/` + `!<dir>/**` if you introduce a new top-level `data/` subtree).
+- [ ] **7. Add a real fixture** under `data/input/`. Fixtures already in git history stay tracked;
+  `data/.gitignore` ignores `input/` outright (F2), so a *new* file needs `git add -f`. Do not
+  invent a row. Add `!<dir>/` + `!<dir>/**` if you introduce a new top-level `data/` subtree.
 
 - [ ] **8. Write real-data integration tests** in `tests/` (no mocking). The four things a supported
   format must demonstrably do — **recognized, parses, round-trips, Frictionless-validatable** — each get
@@ -303,7 +307,9 @@ The processor, schema validation, and CLI need **no changes** — they only ever
   by an existing one. Always add a cross-detection test against the other fixtures.
 - **`str` vs `bytes`.** BOM/encoding normalization only runs on `bytes`. Test the byte path.
 - **Units are the parser's responsibility.** The schema won't convert mmol/L→mg/dL or duration→seconds
-  for you; do it before `_postprocess_unified`.
+  for you; call `FormatParser._glucose_to_canonical(schema, column, expr)` (or `_to_canonical_unit`
+  for a non-glucose column) before `_postprocess_unified`. Do not write a per-vendor factor lookup —
+  the helper reads the column's declared unit and `UNIT_CONVERSIONS`.
 - **Timestamps vary by version and locale.** Use a probing tuple, never a single hardcoded format.
 - **`sequence_id` is `0` after parsing.** Real sequences come from the processor, not the parser —
   contra the ABC docstring.

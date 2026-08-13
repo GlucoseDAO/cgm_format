@@ -16,6 +16,7 @@ from cgm_format.interface.schema import EnumLiteral, CGMSchemaDefinition, derive
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DexcomColumn, DexcomEventType
 from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DexcomEUColumn
 from cgm_format.formats.libre import LIBRE_SCHEMA, LibreColumn
+from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LibreEUColumn
 from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType
 
 FORMATS_DIR = Path(__file__).parent.parent / "src" / "cgm_format" / "formats"
@@ -252,6 +253,7 @@ class TestSchemaConsistency:
         for schema_name, schema in [
             ("dexcom", DEXCOM_SCHEMA),
             ("libre", LIBRE_SCHEMA),
+            ("libre_eu", LIBRE_EU_SCHEMA),
             ("unified", CGM_SCHEMA),
         ]:
             schema_dict = schema.to_frictionless_schema()
@@ -267,6 +269,7 @@ class TestSchemaConsistency:
         for schema_name, schema in [
             ("dexcom", DEXCOM_SCHEMA),
             ("libre", LIBRE_SCHEMA),
+            ("libre_eu", LIBRE_EU_SCHEMA),
             ("unified", CGM_SCHEMA),
         ]:
             total_expected = len(schema.service_columns) + len(schema.data_columns)
@@ -282,6 +285,7 @@ class TestSchemaConsistency:
         for schema_name, schema in [
             ("dexcom", DEXCOM_SCHEMA),
             ("libre", LIBRE_SCHEMA),
+            ("libre_eu", LIBRE_EU_SCHEMA),
             ("unified", CGM_SCHEMA),
         ]:
             schema_dict = schema.to_frictionless_schema()
@@ -395,6 +399,42 @@ class TestDeriveSchema:
         assert len(DEXCOM_EU_SCHEMA.metadata_lines) == len(DEXCOM_SCHEMA.metadata_lines) + 1
         # non-glucose columns share the base names
         assert DexcomColumn.INSULIN_VALUE.value in DEXCOM_EU_SCHEMA.get_column_names()
+
+    def test_append_data_columns(self):
+        extra = (
+            {
+                "name": "Historic Ketone mmol/L",
+                "dtype": pl.Float64,
+                "description": "appended ketone",
+                "unit": "mmol/L",
+            },
+        )
+        derived = derive_schema(LIBRE_SCHEMA, append_data_columns=extra)
+        names = derived.get_column_names()
+        assert names[-1] == "Historic Ketone mmol/L"
+        assert derived.get_unit("Historic Ketone mmol/L") == "mmol/L"
+        # base columns carried through, base left unmutated
+        assert LibreColumn.HISTORIC_GLUCOSE.value in names
+        assert "Historic Ketone mmol/L" not in LIBRE_SCHEMA.get_column_names()
+
+    def test_libre_eu_equals_committed_json(self):
+        """The derived EU schema must reproduce the committed libre_eu.json."""
+        committed = json.loads((FORMATS_DIR / "libre_eu.json").read_text())
+        assert LIBRE_EU_SCHEMA.to_frictionless_schema() == committed
+
+    def test_libre_eu_deltas_vs_base(self):
+        assert LIBRE_EU_SCHEMA.get_unit(LibreEUColumn.HISTORIC_GLUCOSE.value) == "mmol/L"
+        assert LIBRE_EU_SCHEMA.get_unit(LibreEUColumn.SCAN_GLUCOSE.value) == "mmol/L"
+        assert LIBRE_EU_SCHEMA.get_unit(LibreEUColumn.STRIP_GLUCOSE.value) == "mmol/L"
+        assert LibreEUColumn.HISTORIC_KETONE.value in LIBRE_EU_SCHEMA.get_column_names()
+        assert LibreEUColumn.SCAN_KETONE.value in LIBRE_EU_SCHEMA.get_column_names()
+        # file geometry inherited
+        assert LIBRE_EU_SCHEMA.header_line == LIBRE_SCHEMA.header_line
+        assert LIBRE_EU_SCHEMA.data_start_line == LIBRE_SCHEMA.data_start_line
+        # long-acting insulin alias inherited
+        assert "Long-Acting Insulin (units)" in LIBRE_EU_SCHEMA.get_aliases(
+            LibreColumn.LONG_INSULIN.value
+        )
 
 
 class TestColumnAliases:

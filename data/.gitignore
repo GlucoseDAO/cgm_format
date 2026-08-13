@@ -1,9 +1,11 @@
 # Default: ignore all new/untracked paths under data/ (CLI output, local dumps, etc.).
-# Version control is limited to this file, the allowlisted directories below, and their contents.
+# Version control is limited to this file. `input/` is listed without `!` (F2), so
+# fixtures already in git history stay tracked; a new file under input/ needs `git add -f`.
 
 *
 !.gitignore
 
-# Fixtures and imports (see also: add new !<dir>/ + !<dir>/** when committing another top-level subtree).
+# input/ is ignored for *new* untracked files. See docs/dogfooding.md F2.
+# Add !<dir>/ + !<dir>/** only when committing another top-level subtree.
 input/
 input/**

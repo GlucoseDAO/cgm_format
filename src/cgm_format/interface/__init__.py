@@ -6,6 +6,9 @@ This package provides base interfaces and utilities for CGM data processing.
 from cgm_format.interface.schema import (
     EnumLiteral,
     ColumnSchema,
+    ColumnConstraints,
+    FrictionlessDialect,
+    FrictionlessTableSchema,
     CGMSchemaDefinition,
 )
 from cgm_format.interface.cgm_interface import (
@@ -38,6 +41,9 @@ __all__ = [
     # Schema definitions
     "EnumLiteral",
     "ColumnSchema",
+    "ColumnConstraints",
+    "FrictionlessDialect",
+    "FrictionlessTableSchema",
     "CGMSchemaDefinition",
     # Core interfaces
     "SupportedCGMFormat",

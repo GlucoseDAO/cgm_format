@@ -647,7 +647,7 @@ unified_df = FormatProcessor.interpolate_gaps(
 )
 
 # Match your CGM device specifications
-# Libre scans every 15 minutes
+# Libre historic readings are typically 5 or 15 minutes; scans are user-initiated
 unified_df = FormatProcessor.detect_and_assign_sequences(
     unified_df,
     expected_interval_minutes=15,

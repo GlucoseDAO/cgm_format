@@ -660,6 +660,44 @@ class TestUnitConversion:
         out = pl.DataFrame({"g": [7.0]}).select(expr.alias("g"))["g"][0]
         assert out == 7.0
 
+    def test_glucose_to_canonical_mgdl_schemas_identity(self):
+        from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DexcomColumn
+        from cgm_format.formats.libre import LIBRE_SCHEMA, LibreColumn
+
+        for schema, col in (
+            (DEXCOM_SCHEMA, DexcomColumn.GLUCOSE_VALUE),
+            (LIBRE_SCHEMA, LibreColumn.HISTORIC_GLUCOSE),
+            (LIBRE_SCHEMA, LibreColumn.SCAN_GLUCOSE),
+            (LIBRE_SCHEMA, LibreColumn.STRIP_GLUCOSE),
+        ):
+            expr = FormatParser._glucose_to_canonical(schema, col, pl.col("g"))
+            out = pl.DataFrame({"g": [123.0]}).select(expr.alias("g"))["g"][0]
+            assert out == 123.0
+
+    def test_glucose_to_canonical_mmol_schemas_scale(self):
+        from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DexcomEUColumn
+        from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LibreEUColumn
+        from cgm_format.formats.unified import MMOL_TO_MGDL
+
+        for schema, col in (
+            (DEXCOM_EU_SCHEMA, DexcomEUColumn.GLUCOSE_VALUE),
+            (LIBRE_EU_SCHEMA, LibreEUColumn.HISTORIC_GLUCOSE),
+            (LIBRE_EU_SCHEMA, LibreEUColumn.SCAN_GLUCOSE),
+            (LIBRE_EU_SCHEMA, LibreEUColumn.STRIP_GLUCOSE),
+        ):
+            expr = FormatParser._glucose_to_canonical(schema, col, pl.col("g"))
+            out = pl.DataFrame({"g": [5.0]}).select(expr.alias("g"))["g"][0]
+            assert out == pytest.approx(5.0 * MMOL_TO_MGDL)
+
+    def test_glucose_to_canonical_column_without_unit(self):
+        from cgm_format.formats.libre import LIBRE_SCHEMA, LibreColumn
+
+        expr = FormatParser._glucose_to_canonical(
+            LIBRE_SCHEMA, LibreColumn.DEVICE, pl.col("g")
+        )
+        out = pl.DataFrame({"g": [7.0]}).select(expr.alias("g"))["g"][0]
+        assert out == 7.0
+
 
 if __name__ == "__main__":
     # Allow running as script for quick testing

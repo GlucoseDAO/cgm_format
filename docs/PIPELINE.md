@@ -70,7 +70,10 @@ data_only = FormatProcessor.to_data_only_df(
 Raw CGM data from multiple vendors:
 
 - **Dexcom** - Dexcom CGM CSV exports
-- **Libre** - FreeStyle Libre CSV exports
+- **Libre** - FreeStyle Libre CSV exports (mg/dL). Historic (Record Type 0) and scan (Record Type 1)
+  readings both arrive as `EGV_READ`; scan bursts make duplicate and sub-interval timestamps normal
+  for Libre input. Strip (Record Type 2) readings arrive as `CALIBRAT`.
+- **Libre EU** - FreeStyle Libre CSV exports with glucose in mmol/L (converted to mg/dL at parse).
 - **Unified** - Pre-processed unified format (for deserialized data and roundtrip compatibility)
 
 ## Pipeline Stages
@@ -97,7 +100,8 @@ Identifies the vendor format based on header patterns in the CSV string.
 
 **Input:** Preprocessed string data
 
-**Output:** `SupportedCGMFormat` enum value (DEXCOM, LIBRE, or UNIFIED_CGM)
+**Output:** `SupportedCGMFormat` enum value (`DEXCOM`, `DEXCOM_EU`, `LIBRE`, `LIBRE_EU`,
+`MEDTRONIC`, `NIGHTSCOUT`, or `UNIFIED_CGM`)
 
 **Errors:**
 
@@ -668,7 +672,7 @@ df = FormatParser.parse_from_string(csv_string)
 ```
 
 All convenience methods automatically:
-- Detect format (Dexcom, Libre, or Unified)
+- Detect format (any `SupportedCGMFormat` member)
 - Handle encoding issues and BOM artifacts
 - Parse to unified format
 - Initialize sequence_id to 0 (sequences assigned during processing)

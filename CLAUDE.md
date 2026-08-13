@@ -62,7 +62,7 @@ The two public entry classes:
 Supporting modules:
 - `formats/unified.py` — `UnifiedEventType`, `Quality` flags, `CGM_SCHEMA` (the canonical
   `CGMSchemaDefinition`).
-- `formats/{dexcom,dexcom_eu,libre,medtronic,nightscout}.py` — vendor column enums, detection
+- `formats/{dexcom,dexcom_eu,libre,libre_eu,medtronic,nightscout}.py` — vendor column enums, detection
   patterns, schemas.
 - `formats/supported.py` — `FORMAT_DETECTION_PATTERNS`, `SCHEMA_MAP`, `KNOWN_ISSUES_TO_SUPPRESS`.
 - `interface/cgm_interface.py` — abstract `CGMParser` / `CGMProcessor`, all exception types,
@@ -247,13 +247,14 @@ scripts/              one-off operational scripts, not importable code
 examples/             runnable usage examples — documentation, keep them working
 ```
 
-- **`data/` is git-ignored by ignore-all + allowlist** (`*`, then `!input/`, `!input/**`). Generated
-  output, local dumps and downloaded Nightscout pulls stay ignored; only `data/input/` fixtures are
-  committed, and they are excluded from the sdist. To commit another top-level subtree under `data/`,
-  add explicit `!<dir>/` and `!<dir>/**` lines.
+- **`data/` is git-ignored by ignore-all.** `data/.gitignore` is `*`, then `input/` / `input/**`
+  *without* the `!` (dropped in `44e3bb9`). Generated output, local dumps and downloaded Nightscout
+  pulls stay ignored. Fixtures already in git history under `data/input/` remain tracked; a new
+  fixture cannot be committed without `git add -f`. That gap is F2 in `docs/dogfooding.md`. To
+  commit another top-level subtree under `data/`, add explicit `!<dir>/` and `!<dir>/**` lines.
 - **Deviation from the house layout, deliberate:** committed fixtures live in `data/input/`, not
   `assets/`, and the generated dirs are not named `interim` / `output`. Every integration test, the
-  gitignore allowlist and the sdist exclusion are built on the current names and all work. The
+  gitignore rule and the sdist exclusion are built on the current names and all work. The
   rename is tracked as an open item in `docs/ROADMAP.md`, not something to do opportunistically
   mid-task.
 - Never hardcode a platform-specific cache path; resolve it at runtime.
@@ -312,6 +313,9 @@ show the output, and wait for approval. Installation-specific files stay out.
 
 - **Type hints mandatory** (Python ≥ 3.10 syntax); **`pathlib.Path`** for every path; **absolute
   imports only** (`from cgm_format.formats.unified import ...`), never relative.
+- **Never `Any`.** If the value has a shape, write it (`TypedDict`, `Protocol`, a Union of the
+  members). `Dict[str, Any]` is the same slack with extra words. A check that could not name the
+  type has not typed the value.
 - **No inline imports** — every import at module top level. The sole exception is a guarded import of
   an *optional* dependency (`httpx`, `frictionless`, `pandas`) that raises a clear `ImportError` with
   install instructions if missing. The core `FormatParser` / `FormatProcessor` must import cleanly
@@ -563,6 +567,9 @@ same applies when the user corrects a preference: it goes in §10, in their word
   (2026-08-13).
 - Committing is occasionally delegated but never assumed: leave changes unstaged unless a commit was
   asked for. Tree operations, pushing and releases are the user's domain.
+- **Any typehints is slack.** Name the type — `TypedDict`, `Protocol`, a Union of the members — not
+  `Any`. `Dict[str, Any]` is the same refusal with extra words. Why: Any turns the annotation into a
+  comment the checker will never catch (2026-08-13).
 
 ## 11. Learned workspace facts
 
@@ -578,6 +585,13 @@ same applies when the user corrects a preference: it goes in §10, in their word
   depend on `cgm-format[cli]`; `glucose_data_processing` is the sister lib for gap conventions.
 - When upgrading deps (`uv lock --upgrade`), also raise the lower-bound constraints in
   `pyproject.toml` to match the newly resolved versions.
+- `LIBRE_EU` is a derived variant of `LIBRE` (`formats/libre_eu.py`), registered **before** `LIBRE`
+  in `FORMAT_DETECTION_PATTERNS`. Glucose conversion for both Dexcom and Libre goes through
+  `FormatParser._glucose_to_canonical`, which reads the column's declared unit. `derive_schema`
+  accepts `append_data_columns` for columns a variant grew (Libre EU ketones). Those ketone
+  columns stay on the vendor schema; unified parse drops them (RM6).
+- `data/.gitignore` ignores `input/` outright (F2); new vendor fixtures are not auto-tracked. The
+  mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it is absent.
 
 ---
 
@@ -601,7 +615,10 @@ Repo-specific detail that has no home in the house sections. Prohibitions here a
 6. **Write real-data integration tests** in `tests/`: detection, parsing, round-trip, full pipeline.
 
 The processor, schema validation and CLI need zero changes — they only see `UnifiedFormat`. The long
-form of this checklist is `docs/NEW_SCHEMA.md`.
+form of this checklist is `docs/NEW_SCHEMA.md`. A **variant** of an existing vendor (mmol/L columns,
+an extra metadata row) is `derive_schema` plus a `european=True` arm on the existing `_process_*`,
+not a new parser: `DEXCOM_EU` and `LIBRE_EU` are the pattern. Detection order is load-bearing —
+register the more-specific identity first.
 
 ### Gap thresholds & grid-aligned measurement
 
@@ -637,6 +654,8 @@ form of this checklist is `docs/NEW_SCHEMA.md`.
   API CSV endpoints are **not** supported (headerless 5-col entries; treatments returns JSON anyway)
   — `data/input/nightscout_entries.csv` is kept as a negative control. JSON files do **not** go
   through `detect_format()`.
+- **Detection order.** `FORMAT_DETECTION_PATTERNS` returns on first match. `DEXCOM_EU` before
+  `DEXCOM`, `LIBRE_EU` before `LIBRE` — the mmol/L exports also match the generic patterns.
 
 ### Format-drift & known-issue handling
 

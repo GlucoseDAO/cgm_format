@@ -53,6 +53,7 @@ class SupportedCGMFormat(Enum):
     DEXCOM = "dexcom"
     DEXCOM_EU = "dexcom_eu"  # European Dexcom exports with mmol/L units
     LIBRE = "libre"
+    LIBRE_EU = "libre_eu"  # European Libre exports with mmol/L units
     MEDTRONIC = "medtronic"
     NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides

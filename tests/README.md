@@ -77,6 +77,10 @@ uv run pytest tests/ -k "idempotency"
 
 **Purpose:** Tests parsing from vendor formats (Dexcom/Libre) to unified format.
 
+**See also:** `test_libre_eu.py` — mmol/L Libre variant (`LIBRE_EU`) and scan-glucose
+coverage on the committed synthetic Libre fixture. Skips when the local JonGrove file
+is absent.
+
 **Key Features:**
 - Tests all convenience parsing methods (from file, bytes, string, base64)
 - Validates unified format schema compliance

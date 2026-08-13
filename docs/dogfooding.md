@@ -34,5 +34,18 @@ id visible here is not the highest ever used. Never reuse one.
 
 ## Open findings
 
-*None recorded. This log was established on 2026-08-13 — an empty file means no dogfooding round has
-been run against the current surface, not that the surface is clean.*
+### F1 — Libre scan readings collide with historic timestamps
+
+Libre historic (automatic interval) and scan (user-initiated) readings both parse as `EGV_READ`.
+On the JonGrove mmol/L export, 564 of 2,807 scan timestamps (about a fifth) fall on a historic
+minute before synchronization; more collide after `synchronize_timestamps` snaps off-grid scans
+onto the 5-minute grid. `mark_time_duplicates` flags the later row `TIME_DUPLICATE` and keeps the
+first. Whether a duplicate pair should be reconciled into one reading rather than flagged is a
+policy decision, not a parser bug — left open.
+
+### F2 — `data/.gitignore` no longer allowlists `input/`
+
+Commit `44e3bb9` dropped the `!` so `data/input/` is ignored outright. Only fixtures already in git
+history stay tracked; a new vendor file cannot be committed without `git add -f`. The mmol/L
+Libre fixture therefore stays local, and tests skip when it is absent. CLAUDE.md §3 records the
+current ignore rule.

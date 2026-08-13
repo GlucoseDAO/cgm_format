@@ -1,0 +1,61 @@
+{
+  "fields": [
+    {
+      "name": "Date",
+      "type": "string",
+      "description": "Locale-formatted date string (e.g. 3/31/2026)",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Time",
+      "type": "string",
+      "description": "Locale-formatted time string (e.g. 7:51:03 PM)",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Glucose (mg/dL)",
+      "type": "string",
+      "description": "Sensor glucose value (string from exporter, cast to int during parsing)",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Type",
+      "type": "string",
+      "description": "Entry type (sgv, mbg, cal, etc.)",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Device",
+      "type": "string",
+      "description": "Source device identifier",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Trend",
+      "type": "string",
+      "description": "Trend direction (numeric string from exporter)",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "ID",
+      "type": "string",
+      "description": "Nightscout entry _id",
+      "constraints": {
+        "required": false
+      }
+    }
+  ]
+}

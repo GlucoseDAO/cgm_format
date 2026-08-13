@@ -24,7 +24,7 @@ try:
     __version__ = version("cgm-format")
 except Exception:
     # Fallback if package not installed (e.g., during development)
-    __version__ = "0.8.4"  # Keep in sync with pyproject.toml
+    __version__ = "0.9.0"  # Keep in sync with pyproject.toml
 
 # Core classes
 from cgm_format.format_parser import FormatParser
@@ -61,6 +61,9 @@ from cgm_format.interface.cgm_interface import (
 from cgm_format.interface.schema import (
     EnumLiteral,
     ColumnSchema,
+    ColumnConstraints,
+    FrictionlessDialect,
+    FrictionlessTableSchema,
     CGMSchemaDefinition,
 )
 
@@ -89,6 +92,11 @@ from cgm_format.formats.libre import (
     LIBRE_SCHEMA,
     LibreRecordType,
     LibreColumn,
+)
+
+from cgm_format.formats.libre_eu import (
+    LIBRE_EU_SCHEMA,
+    LibreEUColumn,
 )
 
 from cgm_format.formats.medtronic import (
@@ -150,6 +158,9 @@ __all__ = [
     # Schema infrastructure
     "EnumLiteral",
     "ColumnSchema",
+    "ColumnConstraints",
+    "FrictionlessDialect",
+    "FrictionlessTableSchema",
     "CGMSchemaDefinition",
     
     # Unified format
@@ -173,6 +184,10 @@ __all__ = [
     "LIBRE_SCHEMA",
     "LibreRecordType",
     "LibreColumn",
+
+    # Libre EU format (mmol/L)
+    "LIBRE_EU_SCHEMA",
+    "LibreEUColumn",
     
     # Medtronic format
     "MEDTRONIC_SCHEMA",

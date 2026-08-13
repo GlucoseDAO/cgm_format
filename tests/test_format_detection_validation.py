@@ -10,12 +10,12 @@ Tests parametrized for all CSV files in the data/input directory.
 
 import pytest
 from pathlib import Path
-from typing import Any, Optional
+from typing import Dict, Optional
 
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
-from cgm_format.cgm_cli import _should_suppress_error
+from cgm_format.cgm_cli import FrictionlessError, _should_suppress_error
 
 # Optional: Use frictionless library if available
 try:
@@ -90,9 +90,9 @@ def get_detectable_files():
 
 
 def should_suppress_error(
-    error: Any,
+    error: FrictionlessError,
     format_type: SupportedCGMFormat,
-    suppression_counts: Optional[dict] = None,
+    suppression_counts: Optional[Dict[int, int]] = None,
 ) -> bool:
     """Thin wrapper over the production suppressor so this test exercises the
     real logic (including alias-aware header-drift suppression) rather than a
