@@ -10,7 +10,11 @@ from base64 import b64decode
 
 logger = logging.getLogger(__name__)
 
-from cgm_format.formats.supported import FORMAT_DETECTION_PATTERNS, DETECTION_LINE_COUNT
+from cgm_format.formats.supported import (
+    FORMAT_DETECTION_PATTERNS,
+    DETECTION_LINE_COUNT,
+    UNIFIED_TARGET_SCHEMA,
+)
 from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.interface.cgm_interface import (
     CGMParser,
@@ -29,6 +33,7 @@ from cgm_format.formats.unified import (
     Quality,
     UNIFIED_TIMESTAMP_FORMATS,
     CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
     UNIT_CONVERSIONS,
     CANONICAL_GLUCOSE_UNIT,
 )
@@ -212,8 +217,12 @@ class FormatParser(CGMParser):
             MalformedDataError: If CSV is unparseable, zero valid rows, or conversion fails
         """
 
-        if format_type == SupportedCGMFormat.UNIFIED_CGM:
-            unified_df = cls._process_unified(text_data)
+        if format_type in (SupportedCGMFormat.UNIFIED_CGM, SupportedCGMFormat.UNIFIED_EXTENDED):
+            # The unified family is the one place the target schema varies, so
+            # it is resolved from the registry rather than defaulted (D2).
+            unified_df = cls._process_unified(
+                text_data, target_schema=UNIFIED_TARGET_SCHEMA[format_type]
+            )
         elif format_type == SupportedCGMFormat.DEXCOM:
             unified_df = cls._process_dexcom(text_data)
         elif format_type == SupportedCGMFormat.DEXCOM_EU:
@@ -252,12 +261,27 @@ class FormatParser(CGMParser):
 
 
     @classmethod
-    def _postprocess_unified(cls, unified_df: UnifiedFormat) -> UnifiedFormat:
+    def _postprocess_unified(
+        cls,
+        unified_df: UnifiedFormat,
+        schema: Optional[CGMSchemaDefinition] = None,
+    ) -> UnifiedFormat:
         """Postprocess the unified format dataframe.
-        
+
+        Every vendor parse path converges here, so this is where the unified
+        contract is enforced — unconditionally, not under `validation_mode`.
+
         Args:
             unified_df: DataFrame in unified format
+            schema: Target unified schema to enforce. Defaults to CGM_SCHEMA.
+                A parser for a source carrying macronutrients, wearable streams
+                or annotations passes CGM_SCHEMA_EXTENDED (looked up in
+                UNIFIED_TARGET_SCHEMA); enforcing the core schema here would
+                drop those columns before any caller saw them.
         """
+        if schema is None:
+            schema = CGM_SCHEMA
+
         if len(unified_df) == 0:
             raise ZeroValidInputError("No valid data rows found after processing")
 
@@ -273,7 +297,7 @@ class FormatParser(CGMParser):
         
         # Enforce canonical unified schema for idempotent roundtrips
         # Part of the processing pipline, not affected by validation mode!!!!
-        unified_df = CGM_SCHEMA.validate_dataframe(unified_df, enforce=True)
+        unified_df = schema.validate_dataframe(unified_df, enforce=True)
         
         # Mark duplicate timestamps - moved to processor
         # Detect and assign sequences - moved to processor (requires gap size knowledge)
@@ -352,15 +376,24 @@ class FormatParser(CGMParser):
         )
 
     @classmethod
-    def _process_unified(cls, text_data: str) -> UnifiedFormat:
+    def _process_unified(
+        cls,
+        text_data: str,
+        target_schema: Optional[CGMSchemaDefinition] = None,
+    ) -> UnifiedFormat:
         """Process data already in unified format (validation only).
-        
+
+        Serves both UNIFIED_CGM and UNIFIED_EXTENDED — they are the same CSV
+        geometry, differing only in how many data columns the header carries,
+        so the format identity is expressed purely as the target schema.
+
         Args:
             text_data: CSV string in unified format
-            
+            target_schema: Unified schema to enforce (defaults to CGM_SCHEMA)
+
         Returns:
             Validated DataFrame in unified format
-            
+
         Raises:
             MalformedDataError: If validation fails
         """
@@ -388,8 +421,8 @@ class FormatParser(CGMParser):
                     df = df.with_columns([
                         pl.col(column).str.strptime(pl.Datetime("ms"), timestamp_format)
                     ])
-             
-            return cls._postprocess_unified(df)
+
+            return cls._postprocess_unified(df, schema=target_schema)
             
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse unified format CSV: {e}"
@@ -1493,32 +1526,61 @@ class FormatParser(CGMParser):
 
     # ===== Serialization Methods =====
     
-    @staticmethod
-    def to_csv_string(dataframe: UnifiedFormat) -> str:
+    # Unified schemas a serialized frame may legitimately conform to, most
+    # specific first. Dispatch is by exact column-name tuple, so it recognizes a
+    # frame rather than guessing at one.
+    _SERIALIZABLE_SCHEMAS: ClassVar[tuple[CGMSchemaDefinition, ...]] = (
+        CGM_SCHEMA_EXTENDED,
+        CGM_SCHEMA,
+    )
+
+    @classmethod
+    def _schema_for_serialization(cls, dataframe: UnifiedFormat) -> CGMSchemaDefinition:
+        """Pick the unified schema a frame is to be validated against on output.
+
+        Matches the frame's exact column list against the registered unified
+        schemas. Anything that matches none falls back to CGM_SCHEMA, which is
+        what validation then rejects — so a malformed frame still raises exactly
+        as it does today, rather than being quietly accepted.
+        """
+        columns = tuple(dataframe.columns)
+        for schema in cls._SERIALIZABLE_SCHEMAS:
+            if columns == tuple(schema.get_column_names(data_only=False)):
+                return schema
+        return CGM_SCHEMA
+
+    @classmethod
+    def to_csv_string(cls, dataframe: UnifiedFormat) -> str:
         """Serialize unified format DataFrame to CSV string.
-        
+
+        A classmethod, not a staticmethod: it must read `cls.validation_mode`
+        and the frame's target schema, and a staticmethod naming `FormatParser`
+        literally would ignore both in a subclass.
+
         Args:
-            dataframe: DataFrame in unified format
-            
+            dataframe: DataFrame in unified format (core or extended)
+
         Returns:
             CSV string representation
         """
         # Verify input dataframe matches schema
-        if FormatParser.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=FormatParser.validation_mode & ValidationMethod.INPUT_FORCED)    
+        if cls.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            schema = cls._schema_for_serialization(dataframe)
+            schema.validate_dataframe(dataframe, enforce=cls.validation_mode & ValidationMethod.INPUT_FORCED)
         return dataframe.write_csv(separator=",")
-    
-    @staticmethod
-    def to_csv_file(dataframe: UnifiedFormat, file_path: str) -> None:
+
+    @classmethod
+    def to_csv_file(cls, dataframe: UnifiedFormat, file_path: str) -> None:
         """Save unified format DataFrame to CSV file.
-        
+
         Args:
-            dataframe: DataFrame in unified format
+            dataframe: DataFrame in unified format (core or extended)
             file_path: Path where to save the CSV file
         """
         # Verify input dataframe matches schema
-        if FormatParser.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=FormatParser.validation_mode & ValidationMethod.INPUT_FORCED)   
+        if cls.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            schema = cls._schema_for_serialization(dataframe)
+            schema.validate_dataframe(dataframe, enforce=cls.validation_mode & ValidationMethod.INPUT_FORCED)
         dataframe.write_csv(file_path)
     
 

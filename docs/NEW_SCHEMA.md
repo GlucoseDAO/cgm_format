@@ -297,7 +297,14 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
   and `uv run cgm-cli detect|parse|validate|report <fixture>` (the full suite is ~15 min — scope to your
   file while iterating).
 
-The processor, schema validation, and CLI need **no changes** — they only ever see `UnifiedFormat`.
+The processor and schema validation need **no changes** — they only ever see `UnifiedFormat`, and the
+processor reads its target schema from `FormatProcessor.schema` (a `ClassVar`) instead of naming one.
+A source carrying channels the core six data columns cannot hold targets `CGM_SCHEMA_EXTENDED` and is
+processed by `ExtendedFormatProcessor`.
+
+The **CLI is not** zero-change, and has not been for a while: `cgm-cli report` iterates a hardcoded
+format list rather than `SCHEMA_MAP`, so a newly registered format is silently absent from its output
+until that list is fixed. Check it after step 3.
 
 ---
 

@@ -2,7 +2,14 @@
 from typing import Dict, List, Optional, Tuple
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
 from cgm_format.interface.schema import CGMSchemaDefinition
-from cgm_format.formats.unified import CGM_SCHEMA, UNIFIED_DETECTION_PATTERNS, UNIFIED_DATA_START_LINE
+from cgm_format.formats.unified import (
+    CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+    UNIFIED_DETECTION_PATTERNS,
+    UNIFIED_DATA_START_LINE,
+    UNIFIED_EXTENDED_DETECTION_PATTERNS,
+    UNIFIED_EXTENDED_DATA_START_LINE,
+)
 from cgm_format.formats.dexcom import DEXCOM_SCHEMA, DEXCOM_DETECTION_PATTERNS, DEXCOM_DATA_START_LINE
 from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DEXCOM_EU_DETECTION_PATTERNS, DEXCOM_EU_DATA_START_LINE
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
@@ -14,6 +21,7 @@ from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_
 
 # Schema map for validation
 SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
+    SupportedCGMFormat.UNIFIED_EXTENDED: CGM_SCHEMA_EXTENDED,
     SupportedCGMFormat.UNIFIED_CGM: CGM_SCHEMA,
     SupportedCGMFormat.DEXCOM: DEXCOM_SCHEMA,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_SCHEMA,
@@ -23,12 +31,21 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
 }
 
+# Insertion order IS detection priority: detect_format iterates this dict and
+# returns on the first format whose pattern appears. Register the more specific
+# identity first, always.
+#
+# UNIFIED_EXTENDED must precede UNIFIED_CGM: an extended round-trip CSV carries
+# every core unified pattern (sequence_id, event_type, quality) too, so the
+# generic entry would capture it. Its own ",annotations" pattern is what the
+# extended file has and the core one does not.
 # DEXCOM_EU must precede DEXCOM: the EU header also matches generic Dexcom
 # patterns (e.g. "Timestamp (YYYY-MM-DDThh:mm:ss)"), so the more specific
 # mmol/L check must win first. Same for LIBRE_EU before LIBRE: the mmol/L
 # export also matches generic Libre patterns ("Glucose Data,Generated",
 # "FreeStyle Libre"), so "Historic Glucose mmol/L" must win first.
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
+    SupportedCGMFormat.UNIFIED_EXTENDED: UNIFIED_EXTENDED_DETECTION_PATTERNS,
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DETECTION_PATTERNS,
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
@@ -39,6 +56,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
+    SupportedCGMFormat.UNIFIED_EXTENDED: UNIFIED_EXTENDED_DATA_START_LINE,
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DATA_START_LINE,
     SupportedCGMFormat.DEXCOM: DEXCOM_DATA_START_LINE,
     SupportedCGMFormat.DEXCOM_EU: DEXCOM_EU_DATA_START_LINE,
@@ -49,6 +67,27 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
+
+# The *unified* schema each vendor format is parsed INTO — distinct from
+# SCHEMA_MAP above, which describes the raw vendor file. The parser knows the
+# vendor, so it looks its target up here rather than carrying a ClassVar (D2 of
+# docs/PLAN_0.10.0.md): adding a format stays "add registry entries", which is
+# the property the charter's registry section is protecting.
+#
+# Every SupportedCGMFormat member must appear. A source whose signal does not
+# fit the core six data columns (macronutrients, wearable streams, free-form
+# annotations) maps to CGM_SCHEMA_EXTENDED; everything a device exports today
+# fits the core schema and maps to CGM_SCHEMA.
+UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
+    SupportedCGMFormat.UNIFIED_EXTENDED: CGM_SCHEMA_EXTENDED,
+    SupportedCGMFormat.UNIFIED_CGM: CGM_SCHEMA,
+    SupportedCGMFormat.DEXCOM: CGM_SCHEMA,
+    SupportedCGMFormat.DEXCOM_EU: CGM_SCHEMA,
+    SupportedCGMFormat.LIBRE: CGM_SCHEMA,
+    SupportedCGMFormat.LIBRE_EU: CGM_SCHEMA,
+    SupportedCGMFormat.MEDTRONIC: CGM_SCHEMA,
+    SupportedCGMFormat.NIGHTSCOUT: CGM_SCHEMA,
+}
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)
 KNOWN_ISSUES_TO_SUPPRESS = {
@@ -83,6 +122,7 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         ('constraint-error', 'Timestamp (YYYY-MM-DDThh:mm:ss)', None, 1),
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
+    SupportedCGMFormat.UNIFIED_EXTENDED: [], #also ours, same reason
     SupportedCGMFormat.LIBRE: [],
     SupportedCGMFormat.LIBRE_EU: [],
     SupportedCGMFormat.MEDTRONIC: [

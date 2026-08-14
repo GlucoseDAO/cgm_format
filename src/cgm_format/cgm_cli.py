@@ -15,7 +15,7 @@ Can be used as:
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Union, Protocol, TypedDict
+from typing import Optional, Dict, Type, Union, Protocol, TypedDict
 
 import typer
 import polars as pl
@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor
+from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     UnknownFormatError,
@@ -32,7 +32,12 @@ from cgm_format.interface.cgm_interface import (
     ZeroValidInputError,
     ProcessingWarning,
 )
-from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType, Quality
+from cgm_format.formats.unified import (
+    CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+    UnifiedEventType,
+    Quality,
+)
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
 # Optional: Frictionless library
 try:
@@ -47,6 +52,29 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def _processor_for(dataframe: pl.DataFrame) -> Type[FormatProcessor]:
+    """Pick the processor whose schema matches the frame's shape.
+
+    The CLI parses a file and then hands the frame to a processor. Naming
+    `FormatProcessor` literally worked only while every unified frame had the
+    same ten columns: once `UNIFIED_EXTENDED` became detectable, an extended
+    file would parse at stage 1 and then die against the core schema with
+    "Schema has 10 columns, dataframe has 22 columns" — a shape error reported
+    to a user who did nothing wrong.
+
+    Dispatch is by exact column tuple rather than by the detected format,
+    mirroring `FormatParser._schema_for_serialization`: the processor's contract
+    is with the frame in front of it, and `parse_bundle`-style entry points can
+    hand it a frame no single detected format accounts for. A frame matching
+    neither schema falls back to the core processor, which is what then raises —
+    so a malformed frame still fails exactly as it does today.
+    """
+    columns = tuple(dataframe.columns)
+    if columns == tuple(CGM_SCHEMA_EXTENDED.get_column_names(data_only=False)):
+        return ExtendedFormatProcessor
+    return FormatProcessor
 
 
 # ===== Format Detection & Parsing Commands =====
@@ -146,8 +174,9 @@ def process(
         console.print(f"[green]✓[/green] Loaded {original_rows} rows")
         
         # Detect sequences
+        processor = _processor_for(df)
         with console.status("[bold green]Detecting sequences..."):
-            df = FormatProcessor.detect_and_assign_sequences(
+            df = processor.detect_and_assign_sequences(
                 df,
                 expected_interval_minutes=interval,
                 large_gap_threshold_minutes=max_gap
@@ -159,7 +188,7 @@ def process(
         # Interpolate gaps
         if interpolate:
             with console.status("[bold green]Interpolating gaps..."):
-                df = FormatProcessor.interpolate_gaps(
+                df = processor.interpolate_gaps(
                     df,
                     expected_interval_minutes=interval,
                     small_gap_max_minutes=max_gap
@@ -171,7 +200,7 @@ def process(
         # Synchronize timestamps
         if synchronize:
             with console.status("[bold green]Synchronizing timestamps..."):
-                df = FormatProcessor.synchronize_timestamps(
+                df = processor.synchronize_timestamps(
                     df,
                     expected_interval_minutes=interval
                 )
@@ -226,8 +255,9 @@ def pipeline(
         console.print(f"[green]✓[/green] Stage 1: Parsed {parsed_rows} rows")
         
         # Stage 2: Detect sequences
+        processor = _processor_for(unified_df)
         with console.status("[bold green]Stage 2/6: Detecting sequences..."):
-            unified_df = FormatProcessor.detect_and_assign_sequences(
+            unified_df = processor.detect_and_assign_sequences(
                 unified_df,
                 expected_interval_minutes=interval,
                 large_gap_threshold_minutes=max_gap
@@ -237,7 +267,7 @@ def pipeline(
         
         # Stage 3: Interpolate
         with console.status("[bold green]Stage 3/6: Interpolating gaps..."):
-            unified_df = FormatProcessor.interpolate_gaps(
+            unified_df = processor.interpolate_gaps(
                 unified_df,
                 expected_interval_minutes=interval,
                 small_gap_max_minutes=max_gap
@@ -247,7 +277,7 @@ def pipeline(
         
         # Stage 4: Synchronize
         with console.status("[bold green]Stage 4/6: Synchronizing timestamps..."):
-            unified_df = FormatProcessor.synchronize_timestamps(
+            unified_df = processor.synchronize_timestamps(
                 unified_df,
                 expected_interval_minutes=interval
             )
@@ -255,7 +285,7 @@ def pipeline(
         
         # Stage 5: Prepare for inference
         with console.status("[bold green]Stage 5/6: Preparing for inference..."):
-            inference_df, warnings = FormatProcessor.prepare_for_inference(
+            inference_df, warnings = processor.prepare_for_inference(
                 unified_df,
                 minimum_duration_minutes=min_duration,
                 maximum_wanted_duration=max_duration
@@ -274,7 +304,7 @@ def pipeline(
         
         # Stage 6: Convert to data-only format
         with console.status("[bold green]Stage 6/6: Converting to final format..."):
-            final_df = FormatProcessor.to_data_only_df(
+            final_df = processor.to_data_only_df(
                 inference_df,
                 drop_service_columns=True,
                 drop_duplicates=drop_duplicates,
@@ -559,18 +589,20 @@ def batch(
                             FormatParser.to_csv_file(df, str(output_path))
                     elif command == "process":
                         df = FormatParser.parse_file(file_path)
-                        df = FormatProcessor.detect_and_assign_sequences(df)
-                        df = FormatProcessor.interpolate_gaps(df)
-                        df = FormatProcessor.synchronize_timestamps(df)
+                        batch_processor = _processor_for(df)
+                        df = batch_processor.detect_and_assign_sequences(df)
+                        df = batch_processor.interpolate_gaps(df)
+                        df = batch_processor.synchronize_timestamps(df)
                         if output_path:
                             FormatParser.to_csv_file(df, str(output_path))
                     elif command == "pipeline":
                         df = FormatParser.parse_file(file_path)
-                        df = FormatProcessor.detect_and_assign_sequences(df)
-                        df = FormatProcessor.interpolate_gaps(df)
-                        df = FormatProcessor.synchronize_timestamps(df)
-                        df, _ = FormatProcessor.prepare_for_inference(df)
-                        df = FormatProcessor.to_data_only_df(df, drop_service_columns=True)
+                        batch_processor = _processor_for(df)
+                        df = batch_processor.detect_and_assign_sequences(df)
+                        df = batch_processor.interpolate_gaps(df)
+                        df = batch_processor.synchronize_timestamps(df)
+                        df, _ = batch_processor.prepare_for_inference(df)
+                        df = batch_processor.to_data_only_df(df, drop_service_columns=True)
                         if output_path:
                             df.write_csv(str(output_path))
                     else:
