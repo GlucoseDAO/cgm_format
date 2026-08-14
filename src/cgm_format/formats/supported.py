@@ -1,6 +1,6 @@
 
 from typing import Dict, List, Optional, Tuple
-from cgm_format.interface.cgm_interface import SupportedCGMFormat
+from cgm_format.interface.cgm_interface import FormatCategory, SupportedCGMFormat
 from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
@@ -88,6 +88,56 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.MEDTRONIC: CGM_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: CGM_SCHEMA,
 }
+
+# The source shape each format arrives as. A sidecar dict rather than a field
+# on SupportedCGMFormat: the enum is public API and its members are compared
+# and serialized by consumers, so widening its shape to carry metadata would
+# change something a consumer reads for no gain the registry does not give.
+#
+# Every member must appear — `test_supported.py` asserts exhaustiveness, so a
+# format added without a category fails the suite rather than silently
+# defaulting to EXPORT.
+#
+# Everything here is EXPORT today, and that is the honest state rather than an
+# oversight: BUNDLE and CORPUS describe entry points (parse_bundle,
+# parse_corpus) that no *registered format* uses yet. Nightscout is the case
+# worth explaining — `from_nightscout_exports` genuinely takes several files
+# and is the bundle shape, but SupportedCGMFormat.NIGHTSCOUT identifies the
+# single-file exporter CSV that `detect_format` recognizes. The bundle-ness
+# lives in the entry point, not in the format identity.
+FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
+    SupportedCGMFormat.UNIFIED_EXTENDED: FormatCategory.EXPORT,
+    SupportedCGMFormat.UNIFIED_CGM: FormatCategory.EXPORT,
+    SupportedCGMFormat.DEXCOM: FormatCategory.EXPORT,
+    SupportedCGMFormat.DEXCOM_EU: FormatCategory.EXPORT,
+    SupportedCGMFormat.LIBRE: FormatCategory.EXPORT,
+    SupportedCGMFormat.LIBRE_EU: FormatCategory.EXPORT,
+    SupportedCGMFormat.MEDTRONIC: FormatCategory.EXPORT,
+    SupportedCGMFormat.NIGHTSCOUT: FormatCategory.EXPORT,
+}
+
+# Path-shaped detection, a second mechanism beside the text-prefix one.
+#
+# `detect_format` matches patterns against the first N lines of decoded text. A
+# bundle or a corpus has no single text to sniff: what identifies it is
+# *directory shape* — whether `CGMacros-001/CGMacros-001.csv` exists, whether
+# there is a `diabetes_subset/`. So this is a separate registry rather than
+# more patterns fed to the existing loop.
+#
+# Glob patterns only, never callables. `docs/NEW_SCHEMA.md` is explicit that
+# schemas and registries stay pure data; a predicate here would move detection
+# logic out of the parser and into the registry, which is the split the
+# charter's registry section exists to prevent.
+#
+# Insertion order is priority, exactly as in FORMAT_DETECTION_PATTERNS: the
+# first format whose every probe matches wins. Register the more specific
+# identity first.
+#
+# Deliberately empty until Waves 4-5 register CGMacros and D1NAMO. Speculative
+# entries for formats that do not exist would be fabricated values, and
+# `CLAUDE.md` §2 forbids those; `detect_path_format` is exercised against
+# synthetic trees instead.
+PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {}
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)
 KNOWN_ISSUES_TO_SUPPRESS = {

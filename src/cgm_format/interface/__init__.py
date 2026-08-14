@@ -14,6 +14,7 @@ from cgm_format.interface.schema import (
 )
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    FormatCategory,
     ValidationMethod,
     CGMParser,
     CGMProcessor,
@@ -49,6 +50,7 @@ __all__ = [
     "derive_schema",
     # Core interfaces
     "SupportedCGMFormat",
+    "FormatCategory",
     "ValidationMethod",
     "CGMParser",
     "CGMProcessor",

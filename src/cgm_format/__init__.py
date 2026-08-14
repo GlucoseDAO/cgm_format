@@ -36,6 +36,7 @@ from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 # Interface classes and exceptions
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    FormatCategory,
     ValidationMethod,
     CGMParser,
     CGMProcessor,
@@ -134,6 +135,7 @@ __all__ = [
 
     # Core interfaces
     "SupportedCGMFormat",
+    "FormatCategory",
     "ValidationMethod",
     "CGMParser",
     "CGMProcessor",

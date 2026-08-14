@@ -1,7 +1,7 @@
 """Format converter for CGM vendor formats working on text data."""
 
 import logging
-from typing import Dict, List, Union, ClassVar, Optional
+from typing import Dict, List, Tuple, Union, ClassVar, Optional
 from io import StringIO
 from typing import Union
 import polars as pl
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from cgm_format.formats.supported import (
     FORMAT_DETECTION_PATTERNS,
     DETECTION_LINE_COUNT,
+    PATH_DETECTION_PROBES,
     UNIFIED_TARGET_SCHEMA,
 )
 from cgm_format.interface.schema import CGMSchemaDefinition
@@ -103,6 +104,9 @@ class FormatParser(CGMParser):
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT
     detection_line_count: ClassVar[int] = DETECTION_LINE_COUNT
     cgm_detection_patterns: ClassVar[Dict[SupportedCGMFormat, List[str]]] = FORMAT_DETECTION_PATTERNS
+    path_detection_probes: ClassVar[Dict[SupportedCGMFormat, Tuple[str, ...]]] = (
+        PATH_DETECTION_PROBES
+    )
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
@@ -165,6 +169,54 @@ class FormatParser(CGMParser):
                 return cgm_type
         
         error_msg = f"Unknown CGM data format. Sample lines: {lines[:3]}"
+        raise UnknownFormatError(cls._truncate_error_message(error_msg))
+
+    @classmethod
+    def detect_path_format(cls, root: Union[str, Path]) -> SupportedCGMFormat:
+        """Identify a directory-shaped source by the files it contains.
+
+        The path-shaped counterpart to :meth:`detect_format`. A bundle or a
+        corpus has no single text to sniff — what identifies it is the shape of
+        the directory: whether a per-subject CSV sits beside its own folder,
+        whether a named subset directory exists. Sniffing the first file found
+        would be worse than useless, because a corpus member's *contents* often
+        look like a plain vendor export.
+
+        Contract mirrors `detect_format` deliberately: iterate the registry in
+        insertion order, first match wins, raise `UnknownFormatError` on no
+        match. A format matches when **every** one of its probes finds at least
+        one path — probes are conjunctive, because a single glob is rarely
+        specific enough to identify a corpus and an accidental match here sends
+        a whole directory tree to the wrong parser.
+
+        Args:
+            root: Directory to identify. Not a file.
+
+        Returns:
+            The registered format whose probes all match.
+
+        Raises:
+            UnknownFormatError: If `root` is not a directory, or no registered
+                format's probes all match.
+        """
+        root_path = Path(root)
+        if not root_path.is_dir():
+            raise UnknownFormatError(
+                cls._truncate_error_message(
+                    f"Path-shaped detection needs a directory, got: {root_path}"
+                )
+            )
+
+        for cgm_type, probes in cls.path_detection_probes.items():
+            if probes and all(
+                any(root_path.glob(probe)) for probe in probes
+            ):
+                return cgm_type
+
+        error_msg = (
+            f"Unknown directory-shaped CGM source: {root_path}. "
+            f"Checked {len(cls.path_detection_probes)} registered path format(s)."
+        )
         raise UnknownFormatError(cls._truncate_error_message(error_msg))
 
     @classmethod
@@ -1452,19 +1504,47 @@ class FormatParser(CGMParser):
     ) -> UnifiedFormat:
         """Parse Nightscout export files (JSON or CSV) to unified format.
 
-        Convenience wrapper around :meth:`parse_nightscout` that reads files
-        from disk.  Accepts both JSON and CSV for entries; treatments are
-        expected to be JSON (the Nightscout API does not support CSV for
-        treatments).
+        A named shortcut for the bundle shape (see :meth:`parse_bundle`):
+        entries and treatments are two modalities of one person's record.
+        Retained because it is public API and because naming Nightscout's two
+        specific files is friendlier than an ordered sequence — but the
+        general entry point is `parse_bundle`.
+
+        It does not delegate to `parse_bundle`: Nightscout's members are JSON,
+        which `detect_format` deliberately does not handle (it pattern-matches
+        CSV headers), and the entries/treatments merge is a keyed join rather
+        than a diagonal concat of two independently parsed frames. So this
+        keeps its own path through `parse_nightscout`.
+
+        Accepts both JSON and CSV for entries; treatments are expected to be
+        JSON (the Nightscout API does not support CSV for treatments).
 
         Args:
             entries_path: Path to entries file (JSON or CSV)
             treatments_path: Optional path to treatments JSON file
-            profile_path: Reserved for future use (profile data)
+            profile_path: **Accepted and ignored.** Nightscout's profile
+                document carries settings — basal schedules, targets, the
+                display unit — not glucose readings or events, so it has no
+                rows to contribute to a unified frame and no column to land
+                in. It stays in the signature because it is public API and
+                because a caller holding all three exports naturally passes
+                all three. Passing it logs a warning rather than failing:
+                dropping it silently would be the "silent fallback" the
+                charter forbids, and rejecting it would break existing callers
+                for no gain.
 
         Returns:
             DataFrame in unified format matching CGM_SCHEMA
         """
+        if profile_path is not None:
+            logger.warning(
+                "from_nightscout_exports received profile_path=%s and is ignoring "
+                "it: the Nightscout profile document holds settings (basal "
+                "schedules, targets, display unit), not readings or events, so "
+                "it contributes no rows to a unified frame.",
+                profile_path,
+            )
+
         entries_data = Path(entries_path).read_bytes()
         treatments_data: Union[bytes, None] = None
         if treatments_path is not None:
