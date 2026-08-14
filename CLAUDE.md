@@ -42,7 +42,8 @@ Delegation is for finding things, never for deciding them.
    [docs/PIPELINE.md](docs/PIPELINE.md) (stage detail),
    [docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md) (schema),
    [docs/USAGE.md](docs/USAGE.md) (public API),
-   [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist).
+   [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist),
+   [docs/RESEARCH_CORPORA.md](docs/RESEARCH_CORPORA.md) (multi-subject / multi-device datasets).
 
 Everything below is self-contained: no rule here requires following a link to know what you must not
 do. Links carry positive detail only.
