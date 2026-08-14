@@ -60,7 +60,7 @@ A source is described by two independent questions — how many *files* arrive, 
 
 **Bundle** — several files, **one** subject, each file a different *modality*: glucose here, insulin there, meals in a third. `parse_bundle(paths) -> UnifiedFormat`, merging on the modality axis with a diagonal concat.
 
-**Corpus** — many subjects. `parse_corpus(root) -> dict[str, UnifiedFormat]`, one frame per subject.
+**Corpus** — many subjects. `parse_corpus(root) -> dict[str, UnifiedFormat]`, one frame per subject. *(Named here as the third category; the entry point itself is not implemented yet.)*
 
 The categories **compose**: a corpus's member is a bundle or an export, so `parse_corpus` is built out of `parse_bundle` rather than implemented a third time.
 

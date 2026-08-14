@@ -20,7 +20,12 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from cgm_format import CGM_SCHEMA, FormatCategory, FormatParser
+from cgm_format import (
+    CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+    FormatCategory,
+    FormatParser,
+)
 from cgm_format.formats.supported import (
     FORMAT_CATEGORY,
     PATH_DETECTION_PROBES,
@@ -216,6 +221,77 @@ class TestParseBundle:
         with pytest.raises(FileNotFoundError):
             FormatParser.parse_bundle([DEXCOM_FIXTURE, tmp_path / "absent.csv"])
 
+    @pytest.mark.parametrize("as_type", [str, Path])
+    def test_a_single_path_is_refused_not_iterated(self, as_type: type) -> None:
+        """A `str` is itself a `Sequence[str]`, so it would be walked per-character.
+
+        `parse_file` next door takes a plain path, so passing one here is the
+        natural mistake. Left alone it surfaces as
+        `FileNotFoundError: No such file or directory: 'd'` — an error pointing
+        nowhere near the cause.
+        """
+        _skip_if_missing(DEXCOM_FIXTURE)
+
+        with pytest.raises(TypeError, match="sequence of paths"):
+            FormatParser.parse_bundle(as_type(DEXCOM_FIXTURE))
+
+    def test_merge_of_disjoint_extra_columns_is_order_independent(self) -> None:
+        """The nondeterminism a naive `merged.sort(merged.columns)` reintroduces.
+
+        A diagonal concat orders columns by first appearance, so two members
+        with *disjoint* extras yield different key lists depending on argument
+        order. Today's registered schemas cannot produce this (core's columns
+        are a prefix of extended's), but `merge_bundle_frames` is public and is
+        offered to corpus walkers, so the property is pinned directly.
+        """
+        left = pl.DataFrame(
+            {"datetime": [1, 2], "glucose": [100.0, 101.0], "calories": [None, 500.0]}
+        )
+        right = pl.DataFrame(
+            {"datetime": [3], "glucose": [99.0], "heart_rate": [70.0]}
+        )
+
+        forward = FormatParser.merge_bundle_frames([left, right])
+        reverse = FormatParser.merge_bundle_frames([right, left])
+
+        assert forward.columns == reverse.columns
+        assert forward.equals(reverse)
+
+    def test_canonical_keys_follow_schema_order_then_sorted_remainder(self) -> None:
+        """Known columns in schema order; anything else in a stable tail."""
+        keys = FormatParser._canonical_sort_keys(
+            ["zzz_custom", "heart_rate", "glucose", "datetime", "aaa_custom"]
+        )
+
+        schema_part = [k for k in keys if k in CGM_SCHEMA_EXTENDED.get_column_names()]
+        assert schema_part == ["datetime", "glucose", "heart_rate"]
+        assert keys[-2:] == ["aaa_custom", "zzz_custom"]
+
+    def test_merging_no_frames_refuses_with_a_named_error(self) -> None:
+        """Public API: a clear refusal, not a raw polars error."""
+        with pytest.raises(ValueError, match="at least one frame"):
+            FormatParser.merge_bundle_frames([])
+
+    def test_a_one_member_bundle_still_goes_through_the_merge(self) -> None:
+        """The merge is the documented subclass extension point.
+
+        Short-circuiting a single member would make an override's behaviour
+        depend on how many files the caller happened to pass — present for two,
+        absent for one.
+        """
+        _skip_if_missing(DEXCOM_FIXTURE)
+        seen: list[int] = []
+
+        class _CountingParser(FormatParser):
+            @classmethod
+            def merge_bundle_frames(cls, frames):
+                seen.append(len(frames))
+                return super().merge_bundle_frames(frames)
+
+        _CountingParser.parse_bundle([DEXCOM_FIXTURE])
+
+        assert seen == [1], "one-member bundle bypassed merge_bundle_frames"
+
 
 class TestBundlesMergeModalitiesNotSubjects:
     """The design's most dangerous misuse, made explicit.
@@ -252,7 +328,11 @@ class TestBundlesMergeModalitiesNotSubjects:
         doc = FormatParser.parse_bundle.__doc__ or ""
 
         assert "subject" in doc.lower()
-        assert "parse_corpus" in doc
+        # The consequence must be named, not just the rule. Deliberately not
+        # asserting on `parse_corpus`: it arrives in Wave 3, and pinning a
+        # not-yet-existing name would make the docstring's forward reference
+        # load-bearing on a test.
+        assert "modalit" in doc.lower()
 
 
 class TestNightscoutBundleCompatibility:

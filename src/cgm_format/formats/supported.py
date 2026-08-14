@@ -94,7 +94,8 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
 # and serialized by consumers, so widening its shape to carry metadata would
 # change something a consumer reads for no gain the registry does not give.
 #
-# Every member must appear — `test_supported.py` asserts exhaustiveness, so a
+# Every member must appear — `tests/test_source_categories.py` asserts
+# exhaustiveness (`test_every_registered_format_has_a_category`), so a
 # format added without a category fails the suite rather than silently
 # defaulting to EXPORT.
 #

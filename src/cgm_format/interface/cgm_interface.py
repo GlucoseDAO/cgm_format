@@ -8,11 +8,14 @@ Separated into two concerns:
 from datetime import datetime
 from abc import ABC, abstractmethod
 from enum import Flag, auto
-from typing import Union, Tuple, List, Sequence
+from typing import Union, Tuple, List, Sequence, ClassVar, TYPE_CHECKING
 from enum import Enum
 from pathlib import Path
 import polars as pl
 from base64 import b64decode
+
+if TYPE_CHECKING:
+    from cgm_format.interface.schema import CGMSchemaDefinition
 
 # Check pandas availability
 try:
@@ -191,7 +194,16 @@ class CGMParser(ABC):
     After stage 3, data is in UnifiedFormat and can be serialized or passed to CGMProcessor.
 
     """
-    
+
+    #: Unified schemas a merged frame may conform to, widest first. Used only
+    #: to give `merge_bundle_frames` a canonical column ordering. Declared here
+    #: and populated by the concrete parser because `formats.unified` imports
+    #: `interface.schema`, which imports this module — naming a schema at this
+    #: level would close an import cycle. Empty is safe: the canonical ordering
+    #: then degrades to alphabetical, which is still a pure function of the
+    #: column set and so still deterministic.
+    unified_schemas: ClassVar[Tuple["CGMSchemaDefinition", ...]] = ()
+
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
@@ -388,22 +400,47 @@ class CGMParser(ABC):
         sequences. Interpolation will happily invent rows bridging one person's
         Tuesday to another's Thursday. No check here can catch that — a
         subject's identity is not in the data — so **the caller owns the
-        guarantee that these paths describe one subject.** For many subjects
-        use `parse_corpus`, which keeps identity in the mapping key.
+        guarantee that these paths describe one subject.** For many subjects,
+        parse each subject separately and keep them in a mapping keyed by
+        subject id; identity belongs in that key and never in a column.
+        (`parse_corpus` will do exactly this — it is not implemented yet.)
 
         Each file is detected and parsed independently, so a bundle may mix
         formats. Rows are concatenated diagonally, so a column absent from one
         member is null there rather than an error — "this modality did not say"
         rather than a shape mismatch.
 
+        **Members must be disjoint modalities, not two views of the same one.**
+        Bundling two *glucose* sources for one subject — two sensors worn
+        concurrently, or an export overlapping a Nightscout pull — yields two
+        readings per timestamp, which then splice into shared sequences and get
+        interpolated across, exactly as two subjects would. That case is a
+        *track*, not a bundle: keep each sensor's series as its own frame and
+        compare them rather than stacking them. (`parse_tracks` will serve
+        this case, flagging any synthesized value with `Quality.TRACK_MERGE`;
+        it is not implemented yet.) Nothing on this path sets that flag,
+        because nothing here merges readings.
+
+        The result is **not** revalidated against a schema. A bundle of a core
+        and an extended member is legitimately the wider shape, and narrowing
+        it here would discard the extended member's channels; conversely
+        enforcing the wider schema would invent columns for a core-only bundle.
+        Validate against the schema you expect, or narrow with
+        `FormatProcessor.to_core_df`.
+
         Args:
-            paths: Files describing one subject. Order does not matter; the
-                result is sorted by the schema's total ordering.
+            paths: Files describing one subject, as a sequence. Order does not
+                matter — the result is deterministically ordered either way.
+                A bare `str` or `Path` is rejected rather than iterated.
 
         Returns:
             One DataFrame in unified format.
 
         Raises:
+            TypeError: If `paths` is a single `str` or `Path` rather than a
+                sequence of them. A `str` is itself a sequence of `str`, so it
+                would otherwise be walked character by character and fail on a
+                one-letter filename.
             ValueError: If `paths` is empty. An empty bundle has no
                 meaningful frame to return, and returning an empty one would
                 be a silent substitute for "you gave me nothing".
@@ -411,17 +448,25 @@ class CGMParser(ABC):
             UnknownFormatError: If any member's format cannot be determined.
             MalformedDataError: If any member cannot be parsed.
         """
+        if isinstance(paths, (str, Path)):
+            raise TypeError(
+                "parse_bundle takes a sequence of paths, not a single path — "
+                f"got {type(paths).__name__}. A str is itself a sequence of "
+                "str, so iterating it would walk the filename character by "
+                f"character. Pass [{paths!r}], or use parse_file for one file."
+            )
+
         resolved = [Path(p) for p in paths]
         if not resolved:
             raise ValueError(
                 "parse_bundle requires at least one path; got an empty sequence"
             )
 
-        frames = [cls.parse_file(path) for path in resolved]
-        if len(frames) == 1:
-            return frames[0]
-
-        return cls.merge_bundle_frames(frames)
+        # Every bundle goes through the merge, including a one-member one: the
+        # merge is the documented subclass extension point, and skipping it for
+        # a single file would make an override's behaviour depend on how many
+        # files the caller happened to pass.
+        return cls.merge_bundle_frames([cls.parse_file(path) for path in resolved])
 
     @classmethod
     def merge_bundle_frames(cls, frames: Sequence[UnifiedFormat]) -> UnifiedFormat:
@@ -434,22 +479,68 @@ class CGMParser(ABC):
         vendor-specific merge behaviour override this one method.
 
         Ordering is taken from the merged frame's own columns rather than from
-        a named schema. A diagonal concat of a core member and an extended one
-        yields the wider shape, and sorting that by the *core* key list would
-        leave the extended columns out of the total ordering — the row order
-        would then depend on concat order, which is exactly the
-        nondeterminism the stable-sort invariant exists to remove. Schema
-        conformance is enforced downstream by `_postprocess_unified`; this
-        method's job is only to put the rows in a defined order.
+        a named schema, because a diagonal concat of a core member and an
+        extended one yields the wider shape and the core key list would leave
+        the extended columns outside the total ordering.
+
+        But the concat's *own* column order is not usable as a sort key
+        either: it is union-by-first-appearance, so two members carrying
+        **disjoint** extra columns produce a different key list depending on
+        which was passed first (`[…, calories, heart_rate]` one way,
+        `[…, heart_rate, calories]` the other). Sorting by that would make row
+        order depend on argument order — the precise nondeterminism the
+        stable-sort invariant exists to remove. So the keys are canonicalized:
+        columns present in the schema keep their schema order, and any
+        remainder follows in a stable alphabetical tail.
+
+        This method does **not** validate: a bundle may legitimately be wider
+        than the core schema, and both narrowing and enforcing would lose
+        information. Its only job is a defined row order.
 
         Args:
             frames: Parsed unified frames belonging to one subject.
 
         Returns:
             One DataFrame in unified format, diagonally concatenated.
+
+        Raises:
+            ValueError: If `frames` is empty.
         """
+        if not frames:
+            raise ValueError(
+                "merge_bundle_frames requires at least one frame; got none"
+            )
+
         merged = pl.concat(frames, how="diagonal")
-        return merged.sort(merged.columns)
+        keys = cls._canonical_sort_keys(merged.columns)
+        # Canonicalize the column *layout* as well as the row order. `sort`
+        # only permutes rows, so without the `select` a frame's columns would
+        # still sit in concat order and two argument orders would produce
+        # frames that differ by layout alone — CSV bytes included.
+        return merged.select(keys).sort(keys)
+
+    @classmethod
+    def _canonical_sort_keys(cls, columns: Sequence[str]) -> List[str]:
+        """Order a merged frame's columns independently of concat order.
+
+        Known columns first, in the order the widest registered unified schema
+        declares them — that is the total ordering the determinism invariant is
+        defined against. Anything no schema declares follows in a sorted tail.
+        Either way the result is a pure function of the column *set*, never of
+        the order the members arrived in.
+
+        The schemas come from `unified_schemas`, a ClassVar the concrete parser
+        populates, rather than from an import: `formats.unified` imports
+        `interface.schema`, which imports this module, so naming a schema here
+        would close a cycle.
+        """
+        present = set(columns)
+        known: List[str] = []
+        for schema in cls.unified_schemas:
+            for name in schema.get_column_names():
+                if name in present and name not in known:
+                    known.append(name)
+        return known + sorted(present - set(known))
 
     @classmethod
     def parse_base64(cls, base64_data: str) -> UnifiedFormat:

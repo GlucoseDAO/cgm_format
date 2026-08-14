@@ -107,6 +107,13 @@ class FormatParser(CGMParser):
     path_detection_probes: ClassVar[Dict[SupportedCGMFormat, Tuple[str, ...]]] = (
         PATH_DETECTION_PROBES
     )
+    # Widest first: merge_bundle_frames canonicalizes a merged frame's column
+    # order against these, so a bundle of a core and an extended member sorts
+    # by the extended declaration order rather than by concat order.
+    unified_schemas: ClassVar[Tuple[CGMSchemaDefinition, ...]] = (
+        CGM_SCHEMA_EXTENDED,
+        CGM_SCHEMA,
+    )
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
