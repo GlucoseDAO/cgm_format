@@ -46,7 +46,7 @@ The pipeline has a hard boundary between vendor-specific and vendor-agnostic cod
 
 **Parser (Stages 1–3):** Knows about BOM marks, Dexcom metadata rows, Libre record types, and vendor timestamp formats. Its job is to emit a `UnifiedFormat` DataFrame. Once that DataFrame exists, the vendor is irrelevant.
 
-**Processor (Stages 4–6):** Operates only on `UnifiedFormat`. Sequences, interpolation, synchronization, calibration marking, and inference preparation are vendor-agnostic. A new sensor format requires zero changes to the processor.
+**Processor (Stages 4–6):** Operates only on `UnifiedFormat`. Sequences, interpolation, synchronization, calibration marking, and inference preparation are vendor-agnostic. The processor never learns a vendor — that boundary is absolute. It does learn a *schema*: `FormatProcessor.schema` is a `ClassVar` naming the schema every stage validates, enforces, sorts and narrows against, so a source whose signal does not fit the six core data columns is served by a subclass (`ExtendedFormatProcessor`, schema `CGM_SCHEMA_EXTENDED`) rather than by a vendor branch. A new sensor format still requires zero changes to the processor; a new *measurement channel* requires a wider schema and nothing else.
 
 **Registry (`supported.py`):** Detection patterns, schema mappings, and known validation suppressions live in a central registry — not scattered across parser branches. Adding a vendor means adding entries here, not modifying core logic.
 
@@ -140,4 +140,6 @@ These principles translate into a concrete checklist:
 
 6. **Write integration tests**: Use real vendor CSV files in `data/input/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
 
-The processor, schema validation, CLI, and all downstream consumers require zero changes — they only see `UnifiedFormat`.
+The processor and schema validation require no changes for a new *vendor* — they only see `UnifiedFormat`, and the processor reads its target schema from `FormatProcessor.schema` rather than naming one. A source that carries measurement channels the core six data columns cannot hold (macronutrients, wearable streams, free-form annotations) targets `CGM_SCHEMA_EXTENDED` and is processed by `ExtendedFormatProcessor`; that is a schema choice, not a vendor branch.
+
+The CLI is the exception, and it is worth being honest about it: `cgm-cli report` enumerates a hardcoded list of formats rather than iterating `SCHEMA_MAP`, so it already omits formats the library supports. Adding a format means adding its registry entries **and** checking that the CLI actually reaches it.

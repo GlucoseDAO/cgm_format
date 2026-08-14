@@ -57,6 +57,7 @@ class SupportedCGMFormat(Enum):
     MEDTRONIC = "medtronic"
     NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides
+    UNIFIED_EXTENDED = "unified_extended"  # Unified format widened with macros/wearables/annotations
 
 class ValidationMethod(Flag):
     """Validation method for validating the input and output dataframes."""

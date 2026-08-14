@@ -117,6 +117,110 @@
       "constraints": {
         "minimum": 0
       }
+    },
+    {
+      "name": "calories",
+      "type": "number",
+      "description": "Energy content of a logged meal",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "protein",
+      "type": "number",
+      "description": "Protein content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "fat",
+      "type": "number",
+      "description": "Fat content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "fiber",
+      "type": "number",
+      "description": "Dietary fibre content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "heart_rate",
+      "type": "number",
+      "description": "Heart rate reported by a wearable device",
+      "unit": "bpm",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "breathing_rate",
+      "type": "number",
+      "description": "Breathing rate reported by a wearable device",
+      "unit": "breaths/min",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "acceleration",
+      "type": "number",
+      "description": "Accelerometer magnitude reported by a wearable device",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "mets",
+      "type": "number",
+      "description": "Metabolic equivalent of task reported by a wearable device",
+      "unit": "MET",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "activity_calories",
+      "type": "number",
+      "description": "Energy expenditure reported by a wearable device",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "steps",
+      "type": "integer",
+      "description": "Step count reported by a wearable device",
+      "unit": "count",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "ketones",
+      "type": "number",
+      "description": "Blood ketone (beta-hydroxybutyrate) reading",
+      "unit": "mmol/L",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "annotations",
+      "type": "string",
+      "description": "JSON object holding source detail with no typed home (meal photo path, free-text description, the raw vendor column a value came from). Serialize with annotations_to_json(); null when absent"
     }
   ],
   "primaryKey": [
@@ -125,6 +229,18 @@
     "carbs",
     "insulin_slow",
     "insulin_fast",
-    "exercise"
+    "exercise",
+    "calories",
+    "protein",
+    "fat",
+    "fiber",
+    "heart_rate",
+    "breathing_rate",
+    "acceleration",
+    "mets",
+    "activity_calories",
+    "steps",
+    "ketones",
+    "annotations"
   ]
 }
