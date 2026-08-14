@@ -187,11 +187,11 @@ def test_extended_processor_preserves_extra_columns_through_ungated_sites() -> N
 def test_extended_processor_preserves_extra_columns_through_interpolation() -> None:
     """The same silent narrowing, reached by a different ungated site.
 
-    `interpolate_gaps` narrows at `_join_and_interpolate_values` and sorts on
-    `get_stable_sort_keys()`, both unconditional. Covering a second entry point
-    matters because the 7 ungated sites are spread across four methods — a fix
-    that threaded the schema through only one of them would still pass the test
-    above.
+    `interpolate_gaps` narrows at `_join_and_interpolate_values`
+    (`format_processor.py:371`) and sorts on `get_stable_sort_keys()`, both
+    unconditional. Covering a second entry point matters because the 7 ungated
+    sites are spread across four methods — a fix threading the schema through
+    only one of them would still pass the test above.
     """
     frame = _extended_frame()
 
@@ -203,3 +203,40 @@ def test_extended_processor_preserves_extra_columns_through_interpolation() -> N
         "extended columns were dropped during interpolation: "
         f"missing {sorted(set(frame.columns) - set(result.columns))}"
     )
+
+
+def test_interpolated_rows_are_built_with_the_full_extended_width() -> None:
+    """Rows *invented* by interpolation must carry the extended columns too.
+
+    The test above proves existing rows survive; it does not reach
+    `_build_interpolated_row`, because a frame with no gap has nothing to fill.
+    That method is the one genuinely new piece of row construction the seam
+    touches, and a version of it that built 10-column rows would still leave
+    `set(result.columns)` intact — the concat would simply null-fill. So this
+    uses a real 15-minute gap and checks the *rows*, not the column names.
+
+    A filled row carries `IMPUTATION`: the value was invented, and the flag is
+    what keeps that visible rather than passing it off as a reading.
+    """
+    frame = _extended_frame()
+    # Drop the 08:05 reading to open a 10-minute gap between 08:00 and 08:10 —
+    # under the 15-minute fill threshold, so interpolation must bridge it.
+    gapped = frame.filter(
+        pl.col("datetime") != frame["datetime"].to_list()[1]
+    )
+
+    result = _LocallyExtendedProcessor.interpolate_gaps(
+        gapped, validation_mode=NO_VALIDATION
+    )
+
+    assert len(result) > len(gapped), "no row was interpolated; the gap did not fill"
+    assert set(result.columns) == set(frame.columns)
+
+    imputed = result.filter(
+        (pl.col("quality") & Quality.IMPUTATION.value) != 0
+    )
+    assert len(imputed) > 0, "interpolated rows were not flagged IMPUTATION"
+    # The invented rows are full-width: every extended column is addressable on
+    # them, which is what a narrowed `_build_interpolated_row` would break.
+    for column in _EXTRA_COLUMNS:
+        assert column in imputed.columns

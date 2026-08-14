@@ -107,18 +107,24 @@ class TestExtendedSchemaShape:
         assert CGM_SCHEMA_EXTENDED.get_unit("ketones") == "mmol/L"
         assert CGM_SCHEMA_EXTENDED.get_unit("glucose") == "mg/dL"
 
-    def test_exercise_unit_matches_the_conversion_table_key(self) -> None:
-        """`"seconds"` was a latent no-op: `UNIT_CONVERSIONS` is keyed on `"s"`.
+    def test_exercise_declares_a_unit_the_conversion_table_can_reach(self) -> None:
+        """`exercise` declares `"s"`, the spelling `UNIT_CONVERSIONS` is keyed on.
 
-        A unit string that no conversion key matches means the lookup silently
-        finds nothing and the value passes through unscaled.
+        The table converts minutes and hours *to* seconds, so a duration column
+        declaring `"seconds"` could never be a conversion target: a parser
+        calling `_to_canonical_unit` for it would find no entry and pass the
+        value through unscaled. Nothing reads `exercise`'s unit today — this
+        pins the declaration against the table so a future duration parser has
+        a key that resolves rather than a spelling that silently misses.
         """
         from cgm_format.formats.unified import UNIT_CONVERSIONS
 
         exercise_unit = CGM_SCHEMA.get_unit("exercise")
-        conversion_targets = {target for _, target in UNIT_CONVERSIONS}
 
-        assert exercise_unit in conversion_targets
+        # The specific lookups a duration parser would perform, named rather
+        # than a membership test that `"mg/dL"` would also satisfy.
+        assert ("min", exercise_unit) in UNIT_CONVERSIONS
+        assert ("h", exercise_unit) in UNIT_CONVERSIONS
 
 
 class TestWidenedTotalOrdering:
