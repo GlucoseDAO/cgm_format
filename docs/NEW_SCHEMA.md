@@ -244,8 +244,8 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
     units, constraints, and the file-layout constants).
   - [ ] A module-level `regenerate_schema_json()` that calls the shared helper with `__file__`.
 
-- [ ] **3. Wire the registry** in `formats/supported.py`. Seven registries live there. **Six are
-  exhaustive over `SupportedCGMFormat`** — a missing entry fails the suite — and the seventh is
+- [ ] **3. Wire the registry** in `formats/supported.py`. Eight registries live there. **Six are
+  exhaustive over `SupportedCGMFormat`** — a missing entry fails the suite — and the other two are
   populated only for directory-shaped sources:
 
   | Registry | Every format? | Holds |
@@ -256,13 +256,20 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
   | `UNIFIED_TARGET_SCHEMA` | yes | `CGM_SCHEMA`, or `CGM_SCHEMA_EXTENDED` if the source carries macronutrients, wearable streams or annotations |
   | `FORMAT_CATEGORY` | yes | `EXPORT` / `BUNDLE` / `CORPUS` |
   | `KNOWN_ISSUES_TO_SUPPRESS` | yes (`[]` if none) | Frictionless quirks to tolerate |
-  | `PATH_DETECTION_PROBES` | only directory-shaped sources | glob patterns, **conjunctive** |
+  | `PATH_DETECTION_PROBES` | only directory-shaped sources | glob patterns for a **corpus root**, **conjunctive** |
+  | `SUBJECT_PATH_PROBES` | only directory-shaped sources | the same shape one directory down, for a **single subject** |
 
   **Order matters** in `FORMAT_DETECTION_PATTERNS`: place more-specific formats before ones whose
   patterns they'd also match. Note the two detection mechanisms differ deliberately —
   `detect_format` is **disjunctive** (any pattern matches, so each must identify the format on its
-  own), while `detect_path_format` is **conjunctive** (every probe must match, because a directory
-  match routes a whole tree to one parser). An empty probe tuple never matches.
+  own), while `detect_path_format` and `detect_subject_format` are **conjunctive** (every probe must
+  match, because a directory match routes a whole tree to one parser). An empty probe tuple never
+  matches.
+
+  The two path registries must stay **disjoint**: usually the subject probes are the corpus probes
+  with the leading `*/` dropped, which is what keeps a root from matching as its own subject. Test
+  both directions — a root that detects as a subject parses a whole corpus as one person, and the
+  suite has a cross-detection test for exactly that.
 
 - [ ] **4. Implement parsing** in `format_parser.py`:
   - [ ] Import the vendor's columns/constants at the top (grouped with the other format imports).
@@ -325,9 +332,11 @@ processor reads its target schema from `FormatProcessor.schema` (a `ClassVar`) i
 A source carrying channels the core six data columns cannot hold targets `CGM_SCHEMA_EXTENDED` and is
 processed by `ExtendedFormatProcessor`.
 
-The **CLI is not** zero-change, and has not been for a while: `cgm-cli report` iterates a hardcoded
-format list rather than `SCHEMA_MAP`, so a newly registered format is silently absent from its output
-until that list is fixed. Check it after step 3.
+The **CLI is not** zero-change. It is written against the registries by hand rather than derived from
+them, so it can fall behind without anything failing — and it did: until 0.10.0 `cgm-cli report`
+iterated a hardcoded three-format list and silently omitted four supported formats. It iterates
+`SCHEMA_MAP` now, but nothing structural prevents the next command from repeating it. Check after
+step 3 that your format actually appears in `report`, `detect` and `info`.
 
 ---
 

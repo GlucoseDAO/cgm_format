@@ -687,13 +687,20 @@ on the same `_postprocess_unified` contract, so Stages 4–6 are unaffected:
 | Entry point | Input | Output |
 |---|---|---|
 | `parse_file` | one file, one subject | one frame |
-| `parse_bundle` | several files, one subject, one modality each | one frame (diagonal concat) |
+| `parse_bundle` | several files — or one subject *directory* — for one subject | one frame (diagonal concat) |
 | `parse_tracks` | one file, several sensors | one frame per sensor |
-| `parse_corpus` | a directory of subjects | one frame per subject (per track) |
+| `parse_corpus` | a directory of subjects, optionally filtered by `subjects=` / `track=` | one frame per subject (per track) |
+| `list_subjects` | a directory of subjects | one `SubjectEntry` each — id, modalities, per-track glucose coverage — without parsing |
 
-Detection splits the same way. `detect_format` reads a text prefix, which works for a single file;
-`detect_path_format` matches glob probes against a directory, because a corpus has no single text to
-sniff and a member's contents often look like a plain vendor export.
+`subjects=` prunes the walk before parsing, so selecting one subject costs one subject's work; an id
+that is not in the corpus raises rather than quietly returning a shorter mapping.
+
+Detection splits the same way, across three registries. `detect_format` reads a text prefix, which
+works for a single file; `detect_path_format` matches glob probes against a directory, because a
+corpus has no single text to sniff and a member's contents often look like a plain vendor export; and
+`detect_subject_format` does the same one level down, for a single subject. The two path registries
+are kept disjoint — a corpus root matching a subject probe would parse the whole corpus as one
+person.
 
 The **target schema** is looked up per format in `UNIFIED_TARGET_SCHEMA`, so a source carrying
 macronutrients or wearable streams is enforced against `CGM_SCHEMA_EXTENDED` rather than having those

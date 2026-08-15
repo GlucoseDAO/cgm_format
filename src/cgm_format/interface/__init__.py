@@ -15,6 +15,8 @@ from cgm_format.interface.schema import (
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     FormatCategory,
+    SubjectEntry,
+    TrackCoverage,
     MultiTrackSourceError,
     ValidationMethod,
     CGMParser,
@@ -52,6 +54,8 @@ __all__ = [
     # Core interfaces
     "SupportedCGMFormat",
     "FormatCategory",
+    "SubjectEntry",
+    "TrackCoverage",
     "MultiTrackSourceError",
     "ValidationMethod",
     "CGMParser",

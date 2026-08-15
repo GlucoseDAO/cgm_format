@@ -12,7 +12,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 **Severity:** low · **Status:** open · **Owner:** unassigned
 
-`interface/schema.py:477` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
+`interface/schema.py:519` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
 standard-library `logging` for library diagnostics; `print` belongs only to CLI output the user asked
 to see. The helper is called from `scripts/regenerate_all_schemas.py`, so the honest fix is either a
 `logger.info` here, or moving the message to the script that owns the user-facing output.
@@ -25,10 +25,11 @@ Legality: pure legibility, so a patch.
 
 **Severity:** low · **Status:** open · **Owner:** unassigned
 
-`src/cgm_format/__init__.py:27` carries `__version__ = "0.9.0"` as a fallback when
+`src/cgm_format/__init__.py:33` carries `__version__ = "0.10.0"` as a fallback when
 `importlib.metadata.version("cgm-format")` raises. That is a second source of truth for the version,
 and it is the one that gets read when the package is not installed — exactly when it is most likely
-to be stale.
+to be stale. It already has been: the literal still said `0.9.0` at the moment the 0.10.0 bump
+landed, which is finding F3's second half.
 
 The fix is an editable install (`uv sync`) so metadata is always present, then dropping the literal.
 Worth confirming first that nothing in CI or the docs build imports the package without installing
@@ -85,7 +86,8 @@ and the parser mapping, and it is blocked on a real fixture.**
 Settled and shipped:
 
 - **Shape (part).** `ketones` is a data column on `CGM_SCHEMA_EXTENDED` (`formats/unified.py`), null
-  meaning the vendor did not say. `CGM_SCHEMA` is untouched, so nothing a core consumer reads changed.
+  meaning the vendor did not say. `CGM_SCHEMA` gained no column, so nothing a core consumer reads
+  changed.
 - **Canonical unit.** mmol/L, declared on the column and **not** routed through
   `_glucose_to_canonical` (decision D8). Clinical ketones are already mmol/L; borrowing the glucose
   convention would apply one analyte's rule to another.

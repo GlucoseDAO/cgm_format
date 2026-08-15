@@ -22,12 +22,15 @@ from cgm_format.formats.d1namo import (
     D1NAMO_DATA_START_LINE,
     D1NAMO_DIABETES_PATH_PROBES,
     D1NAMO_HEALTHY_PATH_PROBES,
+    D1NAMO_DIABETES_SUBJECT_PROBES,
+    D1NAMO_HEALTHY_SUBJECT_PROBES,
 )
 from cgm_format.formats.cgmacros import (
     CGMACROS_SCHEMA,
     CGMACROS_DETECTION_PATTERNS,
     CGMACROS_DATA_START_LINE,
     CGMACROS_PATH_PROBES,
+    CGMACROS_SUBJECT_PROBES,
 )
 
 
@@ -170,6 +173,21 @@ PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_PATH_PROBES,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DIABETES_PATH_PROBES,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_HEALTHY_PATH_PROBES,
+}
+
+# The same mechanism one level down: which format a single *subject* directory
+# belongs to, for `detect_subject_format`. A separate registry rather than more
+# entries in the one above, because the two answer different questions — "is
+# this a corpus?" and "is this one member of one?" — and a probe that answered
+# both would make a corpus root indistinguishable from its own subject.
+#
+# Same rules throughout: glob patterns only, conjunctive, insertion order is
+# priority, first match wins. Not exhaustive over `SupportedCGMFormat`, and
+# deliberately so — an EXPORT is a file, and a file has no directory shape.
+SUBJECT_PATH_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
+    SupportedCGMFormat.CGMACROS: CGMACROS_SUBJECT_PROBES,
+    SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DIABETES_SUBJECT_PROBES,
+    SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_HEALTHY_SUBJECT_PROBES,
 }
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)

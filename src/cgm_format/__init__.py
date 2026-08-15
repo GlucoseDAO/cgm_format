@@ -40,6 +40,8 @@ from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     FormatCategory,
+    SubjectEntry,
+    TrackCoverage,
     MultiTrackSourceError,
     ValidationMethod,
     CGMParser,
@@ -123,6 +125,7 @@ from cgm_format.formats.cgmacros import (
 
 from cgm_format.formats.d1namo import (
     D1NAMO_GLUCOSE_SCHEMA,
+    D1NAMO_TRACK,
     D1namoGlucoseColumn,
     D1namoGlucoseType,
     D1namoInsulinColumn,
@@ -158,6 +161,8 @@ __all__ = [
     # Core interfaces
     "SupportedCGMFormat",
     "FormatCategory",
+    "SubjectEntry",
+    "TrackCoverage",
     "MultiTrackSourceError",
     "ValidationMethod",
     "CGMParser",
@@ -238,6 +243,7 @@ __all__ = [
     "CGMacrosColumn",
     "CGMacrosMealType",
     "D1NAMO_GLUCOSE_SCHEMA",
+    "D1NAMO_TRACK",
     "D1namoGlucoseColumn",
     "D1namoGlucoseType",
     "D1namoInsulinColumn",

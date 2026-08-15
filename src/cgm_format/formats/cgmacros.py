@@ -92,6 +92,15 @@ CGMACROS_PATH_PROBES: Tuple[str, ...] = (
     "CGMacros-*/CGMacros-*.csv",
 )
 
+# The same shape one level down, for `detect_subject_format`: a CGMacros
+# *subject* directory holds its own CSV directly rather than in a child. The
+# two probe sets are disjoint by construction — a corpus root has no
+# `CGMacros-*.csv` beside it and a subject directory has no matching
+# grandchild — which is what keeps a root from being mistaken for a subject.
+CGMACROS_SUBJECT_PROBES: Tuple[str, ...] = (
+    "CGMacros-*.csv",
+)
+
 # The two sensor series, as track names. Order is the key order of
 # `parse_tracks`, and `libre` leads because it is populated on essentially
 # every row while `Dexcom GL` is populated on about 92%.
@@ -122,6 +131,17 @@ class CGMacrosColumn(EnumLiteral):
     AMOUNT_CONSUMED = "Amount Consumed"
     IMAGE_PATH = "Image path"
     STEPS = "Steps"
+
+
+#: Which raw column each track name reads. One mapping, so the parser and
+#: `list_subjects`' coverage reader cannot drift into disagreeing about what a
+#: track name means — a drift that would be invisible, because both would go on
+#: returning plausible numbers for the wrong sensor. Key order is
+#: `CGMACROS_TRACKS` order.
+CGMACROS_TRACK_COLUMNS: Dict[str, str] = {
+    CGMACROS_TRACKS[0]: CGMacrosColumn.LIBRE_GLUCOSE.value,
+    CGMACROS_TRACKS[1]: CGMacrosColumn.DEXCOM_GLUCOSE.value,
+}
 
 
 class CGMacrosMealType(EnumLiteral):

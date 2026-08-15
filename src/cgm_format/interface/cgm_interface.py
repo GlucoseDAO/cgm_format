@@ -7,6 +7,7 @@ Separated into two concerns:
 
 from datetime import datetime
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Flag, auto
 from typing import Union, Tuple, List, Dict, Sequence, ClassVar, TYPE_CHECKING
 from enum import Enum
@@ -101,6 +102,90 @@ class FormatCategory(Enum):
     #: Many subjects. `parse_corpus(root) -> dict[str, UnifiedFormat]`,
     #: one frame per subject, identity living in the key and never in a column.
     CORPUS = "corpus"
+
+
+@dataclass(frozen=True)
+class TrackCoverage:
+    """How much glucose one track of one subject actually carries.
+
+    Reported by `CGMParser.list_subjects` so a caller can size and filter a
+    corpus **before** parsing it. Counted from the subject's raw glucose
+    source, not from a parsed frame: the two are independently authored, which
+    is what makes comparing them a real cross-check rather than a restatement.
+
+    `values` counts cells that hold **something**, and that is deliberately not
+    the same as readings the schema can represent. D1NAMO ships a glucose cell
+    reading `7:0` — a colon typed for a decimal point — which is a value the
+    source did say and the parser then drops with a warning. Counting it here
+    keeps the two numbers honestly different: `values` is what the source
+    offered, and a smaller parsed count means the parser rejected something,
+    which is a finding rather than a discrepancy to reconcile away.
+
+    `rows` is every row of the track's source, so `values / rows` is the
+    fraction of the period the track speaks for. Both are three-valued at the
+    boundary: a track that could not be read at all is absent from
+    `SubjectEntry.tracks` rather than present with zeros, because "nothing was
+    recorded" and "we could not look" are different answers (`CLAUDE.md` §5).
+    """
+
+    #: Track name, matching `parse_tracks` keys — `"libre"`, `"dexcom"`. A
+    #: single-track source reports one entry named `"glucose"`, which names the
+    #: *column* rather than a device: D1NAMO's healthy subset has no CGM at
+    #: all, and calling its fingersticks a sensor track would assert a sensor
+    #: trace that does not exist.
+    track: str
+
+    #: Rows whose glucose cell holds something — the source's own offer,
+    #: before the parser decides what it can represent.
+    values: int
+
+    #: Total rows in the track's source, so `values / rows` is coverage.
+    rows: int
+
+    #: Earliest and latest timestamp carrying a glucose value, or `None` when
+    #: the track has no values at all. `None` means "no reading to date", never
+    #: a sentinel epoch.
+    first: Union[datetime, None] = None
+    last: Union[datetime, None] = None
+
+
+@dataclass(frozen=True)
+class SubjectEntry:
+    """One member of a corpus, described without parsing it.
+
+    `CGMParser.list_subjects` returns these so the id passed to
+    `parse_corpus(root, subjects=[...])` is one the caller *read off the
+    corpus* rather than guessed, and so the choice of which subjects to parse
+    can be made on evidence — how much glucose each carries, which modalities
+    it has — instead of after a full parse.
+
+    A frozen dataclass for the same reason `CGMSchemaDefinition` is one: it
+    describes something fixed at the moment it was read, and a mutable record
+    of a directory's shape invites being edited into disagreement with the
+    directory.
+    """
+
+    #: Subject id, exactly as `parse_corpus` keys it. For a multi-track corpus
+    #: the corpus key is `f"{subject_id}/{track}"`; the `/` is public contract
+    #: and a subject id never contains one.
+    subject_id: str
+
+    #: Which registered format this subject belongs to.
+    format: "SupportedCGMFormat"
+
+    #: The subject's directory.
+    path: Path
+
+    #: Modality **CSV** file names present, sorted — `("food.csv",
+    #: "glucose.csv", "insulin.csv")`. Names only, as the vendor spells them:
+    #: translating them here would invent a vocabulary. CSVs only, so a
+    #: `food_pictures/` directory is a modality this does not enumerate — and
+    #: so a stray `.DS_Store` is not reported as one either.
+    modalities: Tuple[str, ...] = ()
+
+    #: One entry per glucose track that could be read, in `parse_tracks` order.
+    #: A track the reader could not open is **absent** rather than zeroed.
+    tracks: Tuple[TrackCoverage, ...] = ()
 
 
 class ValidationMethod(Flag):
@@ -405,6 +490,15 @@ class CGMParser(ABC):
         meals in a third. They merge to one frame because they are different
         views of the same record, which is a diagonal concat.
 
+        **A member may be a subject directory rather than a file.** Passing
+        `[root / "001"]` parses that whole subject, because the directory is
+        the bundle — its files are the modalities, and which files are present
+        is what identifies the format (`detect_subject_format`). Naming the
+        files individually does not work for every corpus and is not meant to:
+        D1NAMO's `parse_file` refuses a bare `glucose.csv` precisely because
+        one modality is not a record. `list_subjects(root)` enumerates the
+        directories worth passing here.
+
         This category already existed unrecognized: `from_nightscout_exports`
         takes entries + treatments describing one person and merges exactly
         this way. It was written as a Nightscout special case and is in fact
@@ -420,9 +514,9 @@ class CGMParser(ABC):
         Tuesday to another's Thursday. No check here can catch that — a
         subject's identity is not in the data — so **the caller owns the
         guarantee that these paths describe one subject.** For many subjects,
-        parse each subject separately and keep them in a mapping keyed by
-        subject id; identity belongs in that key and never in a column.
-        (`parse_corpus` will do exactly this — it is not implemented yet.)
+        use `parse_corpus`, which does exactly this: one frame per subject in a
+        mapping keyed by subject id, identity in that key and never in a
+        column.
 
         Each file is detected and parsed independently, so a bundle may mix
         formats. Rows are concatenated diagonally, so a column absent from one
@@ -435,10 +529,10 @@ class CGMParser(ABC):
         readings per timestamp, which then splice into shared sequences and get
         interpolated across, exactly as two subjects would. That case is a
         *track*, not a bundle: keep each sensor's series as its own frame and
-        compare them rather than stacking them. (`parse_tracks` will serve
-        this case, flagging any synthesized value with `Quality.TRACK_MERGE`;
-        it is not implemented yet.) Nothing on this path sets that flag,
-        because nothing here merges readings.
+        compare them rather than stacking them. `parse_tracks` serves it,
+        returning one frame per sensor and flagging any synthesized value with
+        `Quality.TRACK_MERGE`. Nothing on **this** path sets that flag, because
+        nothing here merges readings.
 
         The result is **not** revalidated against a schema. A bundle of a core
         and an extended member is legitimately the wider shape, and narrowing
@@ -448,9 +542,10 @@ class CGMParser(ABC):
         `FormatProcessor.to_core_df`.
 
         Args:
-            paths: Files describing one subject, as a sequence. Order does not
-                matter — the result is deterministically ordered either way.
-                A bare `str` or `Path` is rejected rather than iterated.
+            paths: Files — or subject directories — describing one subject, as
+                a sequence. Order does not matter; the result is
+                deterministically ordered either way. A bare `str` or `Path` is
+                rejected rather than iterated.
 
         Returns:
             One DataFrame in unified format.
@@ -464,7 +559,8 @@ class CGMParser(ABC):
                 meaningful frame to return, and returning an empty one would
                 be a silent substitute for "you gave me nothing".
             FileNotFoundError: If any path does not exist.
-            UnknownFormatError: If any member's format cannot be determined.
+            UnknownFormatError: If a member's format cannot be determined, or a
+                directory member matches no registered subject shape.
             MalformedDataError: If any member cannot be parsed.
         """
         if isinstance(paths, (str, Path)):
@@ -481,11 +577,51 @@ class CGMParser(ABC):
                 "parse_bundle requires at least one path; got an empty sequence"
             )
 
+        # A directory member is a whole subject; a file member is one modality.
+        # Dispatching here rather than inside parse_file keeps parse_file's
+        # contract — one file in, one frame out — and keeps the refusal it
+        # raises on a bare D1NAMO glucose.csv meaningful.
+        frames = [
+            cls.parse_subject_directory(path) if path.is_dir()
+            else cls.parse_file(path)
+            for path in resolved
+        ]
+
         # Every bundle goes through the merge, including a one-member one: the
         # merge is the documented subclass extension point, and skipping it for
         # a single file would make an override's behaviour depend on how many
         # files the caller happened to pass.
-        return cls.merge_bundle_frames([cls.parse_file(path) for path in resolved])
+        return cls.merge_bundle_frames(frames)
+
+    @classmethod
+    def parse_subject_directory(cls, subject_dir: Union[str, Path]) -> UnifiedFormat:
+        """Parse one subject directory — the bundle-shaped member of a corpus.
+
+        Where `parse_file` takes a file and `parse_corpus` takes a corpus root,
+        this takes the thing between them: one subject's folder, whose files
+        are its modalities. The format is identified by which files are present
+        (`detect_subject_format`), because a corpus member's *contents* usually
+        look like a plain vendor export and sniffing one would mis-route the
+        whole subject.
+
+        Reached through `parse_bundle([subject_dir])` in normal use; named
+        separately so the dispatch has somewhere to live and so a subclass can
+        override the per-subject step without reimplementing the merge.
+
+        Args:
+            subject_dir: One subject's directory.
+
+        Returns:
+            One DataFrame in unified format, all modalities merged.
+
+        Raises:
+            UnknownFormatError: If the directory matches no registered subject
+                shape.
+            MalformedDataError: If the subject cannot be parsed.
+        """
+        raise NotImplementedError(
+            "parse_subject_directory is implemented by the concrete parser"
+        )
 
     @classmethod
     def merge_bundle_frames(cls, frames: Sequence[UnifiedFormat]) -> UnifiedFormat:
@@ -600,9 +736,9 @@ class CGMParser(ABC):
     def parse_corpus(cls, root: Union[str, Path]) -> "Dict[str, UnifiedFormat]":
         """Parse a many-subject corpus into one frame per subject (per track).
 
-        The third source category. Built out of `parse_file` / `parse_tracks`
-        rather than implemented a third time — that composition is most of the
-        value of naming the categories.
+        The third source category. Built out of `parse_file` / `parse_tracks` /
+        `parse_subject_directory` rather than implemented a third time — that
+        composition is most of the value of naming the categories.
 
         **Identity lives in the key and never in a column.** The reason is
         mechanical, not aesthetic: parsing sorts by `datetime`, so many
@@ -630,6 +766,43 @@ class CGMParser(ABC):
         """
         raise NotImplementedError(
             "parse_corpus is implemented by the concrete parser"
+        )
+
+    @classmethod
+    def list_subjects(cls, root: Union[str, Path]) -> "Tuple[SubjectEntry, ...]":
+        """Enumerate a corpus's subjects without parsing it.
+
+        The companion to `parse_corpus(root, subjects=[...])`: it supplies the
+        ids that filter accepts, so a caller selects from what is on disk
+        rather than guessing a naming convention. D1NAMO's healthy subset
+        contains a subject directory literally named `012_diabetes` and
+        CGMacros runs `001`–`049` with four numbers missing — neither is
+        derivable, and both are obvious the moment they are listed.
+
+        It also answers *which* subjects are worth parsing. Each entry carries
+        the modality files present and, per glucose track, how many rows carry
+        a value — enough to skip a subject whose sensor barely reported before
+        paying to parse it.
+
+        **Reads glucose, does not parse it.** The counts come from the raw
+        glucose source, so they are cheap relative to a parse and they are an
+        *independent* measurement of the same thing the parser produces. A
+        parsed frame legitimately holds fewer readings — the parser drops
+        values the schema cannot represent, and says so — and that difference
+        is information rather than an inconsistency.
+
+        Args:
+            root: Corpus root directory.
+
+        Returns:
+            One entry per subject, ordered by subject id, so the sequence and
+            everything derived from it is deterministic.
+
+        Raises:
+            UnknownFormatError: If `root` is not a recognized corpus.
+        """
+        raise NotImplementedError(
+            "list_subjects is implemented by the concrete parser"
         )
 
     @classmethod

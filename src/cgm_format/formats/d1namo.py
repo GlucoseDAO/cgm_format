@@ -101,6 +101,25 @@ D1NAMO_HEALTHY_PATH_PROBES: Tuple[str, ...] = (
     "*/annotations.csv",
 )
 
+# The same discriminators one level down, for `detect_subject_format`. A
+# subject directory holds its modality files directly; a subset root holds them
+# one level further out. Dropping the `*/` is therefore the whole difference,
+# and it is what keeps the two probe sets disjoint: a subset root has no
+# `glucose.csv` beside it, and a subject directory has no matching grandchild.
+#
+# Verified against the published corpus: all 9 diabetes subjects carry exactly
+# {food, glucose, insulin}.csv and all 20 healthy subjects exactly
+# {annotations, food, glucose}.csv, so `insulin.csv` and `annotations.csv`
+# separate the subsets on every real subject rather than on most of them.
+D1NAMO_DIABETES_SUBJECT_PROBES: Tuple[str, ...] = (
+    "glucose.csv",
+    "insulin.csv",
+)
+D1NAMO_HEALTHY_SUBJECT_PROBES: Tuple[str, ...] = (
+    "glucose.csv",
+    "annotations.csv",
+)
+
 # Text detection for a bare glucose.csv. Both subsets share this header, so a
 # single file cannot be told apart from its contents alone — which is exactly
 # why the corpus is identified by directory shape instead.
@@ -201,6 +220,13 @@ D1NAMO_SENSOR_TYPES: Tuple[str, ...] = (D1namoGlucoseType.CGM.value,)
 #: Values that appear where a number or a label belongs and mean "no
 #: information", not zero. Observed in the healthy subset's food.csv.
 D1NAMO_NULL_LITERALS: Tuple[str, ...] = ("No information", "")
+
+#: The single track name reported by `list_subjects` for a D1NAMO subject.
+#: Named after the *column*, not a device, and deliberately so: the healthy
+#: subset has no CGM at all — every value in it is a fingerstick, which parses
+#: to `CALIBRAT` — so calling this track `"sensor"` or `"cgm"` would assert a
+#: continuous trace that does not exist for two thirds of the corpus.
+D1NAMO_TRACK: str = "glucose"
 
 D1NAMO_GLUCOSE_SCHEMA = CGMSchemaDefinition(
     service_columns=(

@@ -15,7 +15,7 @@ Can be used as:
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Type, Union, Protocol, TypedDict
+from typing import List, Optional, Dict, Type, Union, Protocol, TypedDict
 
 import typer
 import polars as pl
@@ -601,6 +601,7 @@ def corpus(
     root: Path = typer.Argument(..., help="Corpus root directory"),
     output_dir: Optional[Path] = typer.Option(None, "--out", "-o", help="Write one CSV per subject"),
     track: Optional[str] = typer.Option(None, "--track", "-t", help="Restrict to one track (multi-track corpora)"),
+    subject: Optional[List[str]] = typer.Option(None, "--subject", "-s", help="Restrict to these subject ids (repeatable); see 'cgm-cli subjects'"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show a per-subject summary"),
 ) -> None:
     """Parse a many-subject research corpus into one frame per subject.
@@ -609,6 +610,9 @@ def corpus(
     already globs a directory with a different meaning (independent files, one
     output each), while a corpus is one dataset whose members are keyed by
     subject. Detection here is by directory shape, not by sniffing a file.
+
+    `--subject` prunes before parsing, so one subject costs one subject's work.
+    `cgm-cli subjects <root>` lists the ids it accepts.
     """
     try:
         if not root.exists():
@@ -619,7 +623,12 @@ def corpus(
         console.print(f"\n[green]✓[/green] Detected corpus: [bold]{detected.value}[/bold]")
 
         with console.status("[bold green]Parsing corpus..."):
-            frames = FormatParser.parse_corpus(root, track=track)
+            # Typer hands back an empty list when the option is absent, but an
+            # empty `subjects=` legitimately means "you selected nothing" to
+            # the library. Normalize to None so the two stay distinguishable.
+            frames = FormatParser.parse_corpus(
+                root, track=track, subjects=list(subject) if subject else None
+            )
 
         console.print(f"[green]✓[/green] Parsed {len(frames)} frame(s)")
 
@@ -660,6 +669,73 @@ def corpus(
         # as one line and exits 1; a raw traceback here would be the odd one
         # out, and it is the user's typo rather than a library fault.
         console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def subjects(
+    root: Path = typer.Argument(..., help="Corpus root directory"),
+) -> None:
+    """List a corpus's subjects and how much glucose each carries.
+
+    The companion to `corpus --subject`: it names the ids that option accepts,
+    and shows enough per subject to decide which are worth parsing without
+    paying to parse them all first.
+
+    `Values` counts cells the source filled, which is deliberately not the same
+    as readings the schema can hold — a parser that drops an unrepresentable
+    value says so, and the two numbers differing is information rather than a
+    discrepancy.
+    """
+    try:
+        if not root.exists():
+            console.print(f"[red]Error: Directory not found: {root}[/red]")
+            raise typer.Exit(1)
+
+        detected = FormatParser.detect_path_format(root)
+        console.print(f"\n[green]✓[/green] Detected corpus: [bold]{detected.value}[/bold]")
+
+        with console.status("[bold green]Reading subjects..."):
+            entries = FormatParser.list_subjects(root)
+
+        table = Table(title=f"Subjects in {root.name}")
+        table.add_column("Subject", style="cyan")
+        table.add_column("Track")
+        table.add_column("Values", justify="right")
+        table.add_column("Rows", justify="right")
+        table.add_column("Coverage", justify="right")
+        table.add_column("Span", style="dim")
+        for entry in entries:
+            if not entry.tracks:
+                # Empty means the glucose source could not be read at all,
+                # which is not the same answer as a track that reported
+                # nothing — say so rather than printing a plausible 0.
+                table.add_row(entry.subject_id, "[yellow]unreadable[/yellow]", "-", "-", "-", "-")
+                continue
+            for i, cov in enumerate(entry.tracks):
+                span = (
+                    f"{cov.first} → {cov.last}" if cov.first is not None else "-"
+                )
+                pct = f"{100 * cov.values / cov.rows:.0f}%" if cov.rows else "-"
+                table.add_row(
+                    entry.subject_id if i == 0 else "",
+                    cov.track,
+                    str(cov.values),
+                    str(cov.rows),
+                    pct,
+                    span,
+                )
+        console.print(table)
+        console.print(
+            f"\n[dim]{len(entries)} subject(s). "
+            f"Parse a selection with: cgm-cli corpus {root} --subject <id>[/dim]"
+        )
+
+    except UnknownFormatError as e:
+        console.print(f"[red]✗ Not a recognized corpus: {e}[/red]")
+        raise typer.Exit(1)
+    except (MalformedDataError, ZeroValidInputError) as e:
+        console.print(f"[red]✗ Corpus error: {e}[/red]")
         raise typer.Exit(1)
 
 

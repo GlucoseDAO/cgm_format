@@ -593,13 +593,20 @@ from cgm_format import FormatParser
 frame = FormatParser.parse_file("Clarity_Export.csv")
 
 # BUNDLE — several files, ONE subject, each a different modality
-frame = FormatParser.parse_bundle(["glucose.csv", "insulin.csv", "food.csv"])
+frame = FormatParser.parse_bundle(["entries.json", "treatments.json"])
+
+# ...or the subject's directory, where the corpus keys its members by folder
+frame = FormatParser.parse_bundle(["/data/d1namo/healthy_subset/012_diabetes"])
 
 # CORPUS — many subjects, identity in the key and never in a column
 corpus = FormatParser.parse_corpus("/data/CGMacros")
 corpus["CGMacros-001/libre"]      # multi-track: "subject/track"
 corpus["012_diabetes"]            # single-track: bare subject id
 ```
+
+**A directory member is a whole subject.** Listing a D1NAMO subject's files individually does *not*
+work, and that is the design rather than a gap: `parse_file` refuses a bare `glucose.csv` because one
+modality is not a record, so `parse_bundle` would refuse it too. Pass the folder.
 
 **A bundle merges modalities, never subjects.** Two files from different people concatenate exactly
 as cleanly as two modalities from one person, and nothing downstream objects — the frames interleave
@@ -617,6 +624,41 @@ tracks.keys()          # dict_keys(['libre', 'dexcom'])
 `parse_file` on a multi-track source raises `MultiTrackSourceError` rather than silently picking a
 sensor. **Never concatenate two tracks** — see `docs/UNIFIED_FORMAT.md`.
 
+### Picking subjects
+
+`parse_corpus` returns every subject unless told otherwise, which is rarely what you want on a
+45-subject corpus. `list_subjects` shows what is there, and `subjects=` selects from it:
+
+```python
+for entry in FormatParser.list_subjects("/data/d1namo/healthy_subset"):
+    print(entry.subject_id, entry.modalities,
+          [(t.track, t.values, t.rows) for t in entry.tracks])
+# 001 ('annotations.csv', 'food.csv', 'glucose.csv') [('glucose', 18, 18)]
+# ...
+# 012_diabetes ('annotations.csv', 'food.csv', 'glucose.csv') [('glucose', 30, 30)]
+
+frames = FormatParser.parse_corpus(root, subjects=["012_diabetes"])
+```
+
+Read the ids rather than deriving them: D1NAMO's healthy subset contains a directory named
+`012_diabetes`, and CGMacros runs `001`–`049` with `024`, `025`, `037` and `040` missing. `subjects=`
+prunes **before** parsing, so one id costs one subject's work, and it composes with `track=`. An id
+that is not in the corpus raises and lists what is — a filter that quietly selected nothing would
+make a typo indistinguishable from a subject with no data.
+
+The counts are worth reading before a long parse, and the spread is wide: on the published corpus
+D1NAMO's healthy subjects carry between 18 and 31 fingersticks each, while its diabetes subjects
+range from 131 to 1,438 CGM samples. They are
+**cells the source filled**, not readings the schema kept — the parser drops what it cannot represent
+and warns, so a smaller parsed count is that warning showing up as a number.
+
+From the shell:
+
+```bash
+cgm-cli subjects /data/d1namo/healthy_subset
+cgm-cli corpus   /data/d1namo/healthy_subset --subject 012_diabetes --out parsed/
+```
+
 ### What each corpus refuses, and why
 
 A file that *detects* is not always a file you can parse alone, and both refusals name the entry
@@ -625,7 +667,9 @@ point that works:
 | You call | On | You get |
 |---|---|---|
 | `parse_file` | a CGMacros subject CSV | `MultiTrackSourceError` — two sensors, no single frame |
-| `parse_file` | a D1NAMO `glucose.csv` | `MalformedDataError` — one modality of a bundle; insulin and meals live in sibling files |
+| `parse_file` | a D1NAMO `glucose.csv` | `MalformedDataError` — one modality of a bundle; insulin and meals live in sibling files. Pass the subject *directory* to `parse_bundle` instead |
+| `parse_bundle` | a corpus root | `UnknownFormatError` naming `parse_corpus` — you are one directory level too high |
+| `parse_bundle` | a CGMacros subject directory | `MultiTrackSourceError` naming `parse_tracks` **and the CSV inside the folder** — two sensors, no single frame |
 
 Both would otherwise be silent losses: a sensor picked without telling you, or a record missing
 every insulin dose. From the shell, `cgm-cli parse` on either prints the same refusal plus the
