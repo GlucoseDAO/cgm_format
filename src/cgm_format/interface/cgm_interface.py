@@ -8,7 +8,7 @@ Separated into two concerns:
 from datetime import datetime
 from abc import ABC, abstractmethod
 from enum import Flag, auto
-from typing import Union, Tuple, List, Sequence, ClassVar, TYPE_CHECKING
+from typing import Union, Tuple, List, Dict, Sequence, ClassVar, TYPE_CHECKING
 from enum import Enum
 from pathlib import Path
 import polars as pl
@@ -61,6 +61,7 @@ class SupportedCGMFormat(Enum):
     NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides
     UNIFIED_EXTENDED = "unified_extended"  # Unified format widened with macros/wearables/annotations
+    CGMACROS = "cgmacros"  # PhysioNet research corpus: 45 subjects, two concurrent sensors
 
 class FormatCategory(Enum):
     """How many files a source arrives as, and how many subjects are in them.
@@ -162,6 +163,18 @@ class UnknownFormatError(ValueError):
 
 class ZeroValidInputError(ValueError):
     """Raised when there are no valid data points in the sequence."""
+    pass
+
+class MultiTrackSourceError(ValueError):
+    """Raised when a multi-track source is parsed as if it were a single frame.
+
+    A multi-track source carries more than one independent measurement of the
+    same quantity — CGMacros wears a Libre and a Dexcom over the same ten days.
+    There is no honest way for `parse_file` to return one frame from that: it
+    would have to pick a sensor silently, and the caller could not see which.
+    So it refuses and names both the tracks and the entry point that returns
+    them.
+    """
     pass
 
 # Maximum length for error messages to prevent huge CSV dumps in logs
@@ -541,6 +554,77 @@ class CGMParser(ABC):
                 if name in present and name not in known:
                     known.append(name)
         return known + sorted(present - set(known))
+
+    @classmethod
+    def parse_tracks(cls, file_path: Union[str, Path]) -> "Dict[str, UnifiedFormat]":
+        """Parse a multi-track source into one frame per track.
+
+        A **track** is one of several independent measurements of the same
+        quantity in one source — CGMacros wears a Libre and a Dexcom over the
+        same ten days, and the two disagree by design.
+
+        **Tracks are alternative views, never shards.** Rows belonging to
+        neither device — meals, macronutrients, heart rate, photo annotations —
+        are *replicated into every track*, so each frame is a complete
+        self-contained view of the period as seen through one sensor. The
+        consequence matters more than the rule: **concatenating two track
+        frames double-counts every meal**, giving carbohydrate totals exactly
+        twice reality with nothing raised anywhere. Pick one, or compare them.
+        Never add them.
+
+        Args:
+            file_path: A multi-track source file.
+
+        Returns:
+            Track name → frame. Keys are the source's real sensors; a synthetic
+            track (a per-timestamp mean, say) is never among them, because it
+            is a derived view rather than a member of the corpus.
+
+        Raises:
+            UnknownFormatError: If the format cannot be determined.
+            NotImplementedError: If the format is single-track — `parse_file`
+                is the entry point for those, and returning a one-entry mapping
+                would blur a distinction the categories exist to draw.
+        """
+        raise NotImplementedError(
+            "parse_tracks is implemented by the concrete parser"
+        )
+
+    @classmethod
+    def parse_corpus(cls, root: Union[str, Path]) -> "Dict[str, UnifiedFormat]":
+        """Parse a many-subject corpus into one frame per subject (per track).
+
+        The third source category. Built out of `parse_file` / `parse_tracks`
+        rather than implemented a third time — that composition is most of the
+        value of naming the categories.
+
+        **Identity lives in the key and never in a column.** The reason is
+        mechanical, not aesthetic: parsing sorts by `datetime`, so many
+        subjects in one frame interleave; `detect_and_assign_sequences` then
+        splices them into shared sequences with nothing raised; and
+        interpolation invents rows bridging one person's Tuesday to another's
+        Thursday. A `dict[str, UnifiedFormat]` holds exactly the same
+        information, and every frame in it is independently valid.
+
+        Keys are flat composite strings for a multi-track corpus —
+        `"CGMacros-001/libre"` — which keeps the return type a plain mapping
+        rather than a nested one. **The `/` separator is part of the public
+        contract.** A subject id may contain `_` but never `/`; D1NAMO's
+        `012_diabetes` directory is exactly why the separator cannot be `_`.
+
+        Args:
+            root: Corpus root directory.
+
+        Returns:
+            Subject id (or `subject/track`) → frame, one entry per subject per
+            track.
+
+        Raises:
+            UnknownFormatError: If `root` is not a recognized corpus.
+        """
+        raise NotImplementedError(
+            "parse_corpus is implemented by the concrete parser"
+        )
 
     @classmethod
     def parse_base64(cls, base64_data: str) -> UnifiedFormat:

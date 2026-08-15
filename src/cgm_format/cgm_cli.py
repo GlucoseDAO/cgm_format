@@ -38,7 +38,11 @@ from cgm_format.formats.unified import (
     UnifiedEventType,
     Quality,
 )
-from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
+from cgm_format.formats.supported import (
+    SCHEMA_MAP,
+    KNOWN_ISSUES_TO_SUPPRESS,
+    UNIFIED_TARGET_SCHEMA,
+)
 # Optional: Frictionless library
 try:
     from frictionless import Resource, Schema as FrictionlessSchema, Dialect
@@ -371,7 +375,13 @@ def validate(
         with console.status("[bold green]Validating..."):
             try:
                 df = FormatParser.parse_to_unified(text_data, detected_format)
-                CGM_SCHEMA.validate_dataframe(df, enforce=False)
+                # Validate against the schema this format is parsed INTO, not
+                # CGM_SCHEMA unconditionally: an extended-target format
+                # produces a wider frame, and checking it against the core
+                # schema reports a shape error for a correct parse.
+                UNIFIED_TARGET_SCHEMA.get(detected_format, CGM_SCHEMA).validate_dataframe(
+                    df, enforce=False
+                )
                 validation_passed = True
             except Exception as e:
                 validation_passed = False
@@ -1156,7 +1166,10 @@ def _write_validation_report(
                 f.write("\n")
             
             # Group by format type
-            for format_type in [SupportedCGMFormat.UNIFIED_CGM, SupportedCGMFormat.DEXCOM, SupportedCGMFormat.LIBRE]:
+            # Iterate the registry, not a hardcoded list: the old three-format
+            # literal silently omitted DEXCOM_EU, LIBRE_EU, MEDTRONIC and
+            # NIGHTSCOUT from this section, so a supported format looked absent.
+            for format_type in SCHEMA_MAP:
                 format_results = [
                     (fp, fmt, v, m, ec, sc) for fp, fmt, v, m, ec, sc in validation_results 
                     if fmt == format_type

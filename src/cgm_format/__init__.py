@@ -37,6 +37,7 @@ from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     FormatCategory,
+    MultiTrackSourceError,
     ValidationMethod,
     CGMParser,
     CGMProcessor,
@@ -109,6 +110,14 @@ from cgm_format.formats.libre_eu import (
     LibreEUColumn,
 )
 
+from cgm_format.formats.cgmacros import (
+    CGMACROS_SCHEMA,
+    CGMACROS_TRACKS,
+    CGMACROS_MEAN_TRACK,
+    CGMacrosColumn,
+    CGMacrosMealType,
+)
+
 from cgm_format.formats.medtronic import (
     MEDTRONIC_SCHEMA,
     MedtronicColumn,
@@ -136,6 +145,7 @@ __all__ = [
     # Core interfaces
     "SupportedCGMFormat",
     "FormatCategory",
+    "MultiTrackSourceError",
     "ValidationMethod",
     "CGMParser",
     "CGMProcessor",
@@ -209,6 +219,11 @@ __all__ = [
     # Libre EU format (mmol/L)
     "LIBRE_EU_SCHEMA",
     "LibreEUColumn",
+    "CGMACROS_SCHEMA",
+    "CGMACROS_TRACKS",
+    "CGMACROS_MEAN_TRACK",
+    "CGMacrosColumn",
+    "CGMacrosMealType",
     
     # Medtronic format
     "MEDTRONIC_SCHEMA",

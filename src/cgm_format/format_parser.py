@@ -10,6 +10,17 @@ from base64 import b64decode
 
 logger = logging.getLogger(__name__)
 
+from cgm_format.formats.cgmacros import (
+    CGMACROS_IGNORED_COLUMNS,
+    CGMACROS_MEAL_TYPE_NORMALIZATION,
+    CGMACROS_MEAN_TRACK,
+    CGMACROS_METS_SCALE,
+    CGMACROS_OPTIONAL_COLUMNS,
+    CGMACROS_SCHEMA,
+    CGMACROS_TIMESTAMP_FORMATS,
+    CGMACROS_TRACKS,
+    CGMacrosColumn,
+)
 from cgm_format.formats.supported import (
     FORMAT_DETECTION_PATTERNS,
     DETECTION_LINE_COUNT,
@@ -24,6 +35,7 @@ from cgm_format.interface.cgm_interface import (
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
+    MultiTrackSourceError,
     ValidationMethod,
     truncate_error_message,
 )
@@ -294,6 +306,19 @@ class FormatParser(CGMParser):
             unified_df = cls._process_medtronic(text_data)
         elif format_type == SupportedCGMFormat.NIGHTSCOUT:
             unified_df = cls._process_nightscout(text_data)
+        elif format_type == SupportedCGMFormat.CGMACROS:
+            # A CGMacros file carries two independent sensor series, so there
+            # is no single frame to return. Refusing here rather than picking
+            # one is the whole point of D5.
+            raise MultiTrackSourceError(
+                "CGMacros files carry two independent glucose series "
+                f"({' and '.join(CGMACROS_TRACKS)}), so there is no single "
+                "unified frame to return — picking one silently would hide "
+                "which sensor the caller got. Use "
+                "FormatParser.parse_tracks(path) for a frame per sensor, or "
+                f"parse_tracks(path, track={CGMACROS_MEAN_TRACK!r}) for the "
+                "opt-in synthetic mean."
+            )
         else:
             raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
         
@@ -1671,3 +1696,396 @@ class FormatParser(CGMParser):
         dataframe.write_csv(file_path)
     
 
+
+    # ===== CGMacros: a multi-track corpus =====
+
+    @classmethod
+    def _process_cgmacros(
+        cls,
+        text_data: str,
+        track: str = CGMACROS_TRACKS[0],
+    ) -> UnifiedFormat:
+        """Parse one CGMacros subject CSV into one sensor's unified frame.
+
+        The non-glucose rows — meals, macronutrients, heart rate, photo
+        annotations — are **replicated into every track**, because each track is
+        a complete self-contained view of those ten days as seen through one
+        sensor. Tracks are alternatives, never shards; concatenating two of them
+        double-counts every meal.
+
+        Args:
+            text_data: Decoded contents of one subject CSV.
+            track: Which sensor's series becomes `glucose`. One of
+                `CGMACROS_TRACKS`, or `CGMACROS_MEAN_TRACK` for the opt-in
+                synthetic average.
+
+        Returns:
+            One extended-schema frame for the requested track.
+        """
+        if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+            raise ValueError(
+                f"Unknown CGMacros track {track!r}; expected one of "
+                f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
+            )
+
+        try:
+            raw = pl.read_csv(
+                StringIO(text_data),
+                infer_schema_length=10000,
+                truncate_ragged_lines=True,
+            )
+        except pl.exceptions.PolarsError as e:
+            raise MalformedDataError(
+                cls._truncate_error_message(f"Failed to read CGMacros CSV: {e}")
+            )
+
+        # Strip header whitespace before aliasing: one subject spells the
+        # column "Amount Consumed " with a trailing space, and an alias cannot
+        # match what the header never normalized.
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        raw = CGMACROS_SCHEMA.normalize_headers(raw)
+        raw = raw.drop([c for c in CGMACROS_IGNORED_COLUMNS if c in raw.columns])
+
+        # Typed nulls for columns this subject simply lacks. Done once, up
+        # front: a `.select(pl.col(X))` is evaluated even when an upstream
+        # filter leaves zero rows, so an absent column raises ColumnNotFound
+        # regardless of whether any row would have used it.
+        missing = [c for c in CGMACROS_OPTIONAL_COLUMNS if c not in raw.columns]
+        if missing:
+            logger.warning(
+                "CGMacros subject file omits %d optional column(s): %s. "
+                "Emitting typed nulls — the source did not say, which is not "
+                "the same as zero.",
+                len(missing),
+                ", ".join(sorted(missing)),
+            )
+            raw = raw.with_columns(
+                [pl.lit(None, dtype=pl.Float64).alias(c) for c in missing]
+            )
+
+        ts_col = CGMacrosColumn.TIMESTAMP.value
+        ts_format = cls._probe_timestamp_format(
+            raw, ts_col, CGMACROS_TIMESTAMP_FORMATS
+        )
+        raw = raw.with_columns(
+            pl.col(ts_col).str.strptime(pl.Datetime("ms"), ts_format).alias("datetime")
+        ).drop_nulls("datetime")
+
+        if len(raw) == 0:
+            raise ZeroValidInputError(
+                "No CGMacros rows carried a parseable timestamp"
+            )
+
+        libre = pl.col(CGMacrosColumn.LIBRE_GLUCOSE.value)
+        dexcom = pl.col(CGMacrosColumn.DEXCOM_GLUCOSE.value)
+        if track == CGMACROS_TRACKS[0]:
+            glucose_expr = libre
+            merged_expr = pl.lit(False)
+        elif track == CGMACROS_TRACKS[1]:
+            glucose_expr = dexcom
+            merged_expr = pl.lit(False)
+        else:
+            # The synthetic mean. Polars' horizontal mean ignores nulls, so a
+            # row with one sensor yields that sensor's reading unchanged —
+            # which is why only rows with BOTH populated are flagged: a
+            # single-sensor row is a real reading, not a synthesized one.
+            glucose_expr = pl.mean_horizontal(libre, dexcom)
+            merged_expr = libre.is_not_null() & dexcom.is_not_null()
+
+        raw = raw.with_columns(
+            glucose_expr.alias("_glucose"),
+            merged_expr.alias("_merged"),
+        )
+
+        frames: List[pl.DataFrame] = []
+
+        # --- Glucose readings, one row per populated sample ---
+        glucose_rows = raw.filter(pl.col("_glucose").is_not_null()).with_columns(
+            pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+            pl.when(pl.col("_merged"))
+            .then(pl.lit(Quality.TRACK_MERGE.value))
+            .otherwise(pl.lit(0))
+            .cast(pl.Int64)
+            .alias("quality"),
+            pl.col("_glucose").alias("glucose"),
+        )
+        if len(glucose_rows) > 0:
+            frames.append(
+                glucose_rows.select(
+                    "datetime", "event_type", "quality", "glucose",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        # --- Meals: carbs plus the macronutrients the core schema cannot hold ---
+        meal_rows = raw.filter(
+            pl.col(CGMacrosColumn.MEAL_TYPE.value).is_not_null()
+            & (pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars() != "")
+        )
+        if len(meal_rows) > 0:
+            frames.append(cls._cgmacros_meal_frame(meal_rows))
+
+        # --- Annotation-only rows: a photo with no meal attached ---
+        # The meal-END photograph. 1,553 such rows across the corpus, against
+        # 1,644 carrying both, so these are the MAJORITY of photo rows — which
+        # is why annotations cannot simply hang off a CARBS_IN event.
+        photo_only = raw.filter(
+            pl.col(CGMacrosColumn.IMAGE_PATH.value).is_not_null()
+            & (pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8).str.strip_chars() != "")
+            & (
+                pl.col(CGMacrosColumn.MEAL_TYPE.value).is_null()
+                | (pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars() == "")
+            )
+        )
+        if len(photo_only) > 0:
+            frames.append(
+                photo_only.with_columns(
+                    # OTHEREVT, not an invented code: the row records that
+                    # something was photographed, and the schema already has a
+                    # member for "an event we cannot type more precisely".
+                    pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                    cls._cgmacros_annotation_expr().alias("annotations"),
+                ).select(
+                    "datetime", "event_type", "quality", "annotations",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        if not frames:
+            raise ZeroValidInputError("No usable CGMacros rows found")
+
+        unified = pl.concat(frames, how="diagonal")
+        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+        return cls._postprocess_unified(
+            unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.CGMACROS]
+        )
+
+    @classmethod
+    def _cgmacros_wearable_columns(cls) -> List[pl.Expr]:
+        """Wearable channels carried on every row, whatever the event type.
+
+        METs is stored multiplied by 10 (data dictionary, and the observed
+        10-126 range against a physiological 1.0-12.6), so it is divided here.
+        """
+        return [
+            pl.col(CGMacrosColumn.HEART_RATE.value).alias("heart_rate"),
+            (pl.col(CGMacrosColumn.METS.value) / CGMACROS_METS_SCALE).alias("mets"),
+            pl.col(CGMacrosColumn.ACTIVITY_CALORIES.value).alias("activity_calories"),
+            (
+                pl.col(CGMacrosColumn.STEPS.value).alias("steps")
+                if CGMacrosColumn.STEPS.value
+                else pl.lit(None).alias("steps")
+            ),
+        ]
+
+    @classmethod
+    def _cgmacros_annotation_expr(cls) -> pl.Expr:
+        """Build the deterministic `annotations` JSON for a row.
+
+        Keys are emitted in sorted order by construction, matching
+        `annotations_to_json`, because the column participates in the sort keys
+        and in the byte-level round-trip guarantee.
+        """
+        image = pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8)
+        return (
+            pl.when(image.is_not_null() & (image.str.strip_chars() != ""))
+            .then(
+                pl.format(
+                    '{{"image_path":"{}"}}',
+                    image.str.strip_chars(),
+                )
+            )
+            .otherwise(pl.lit(None, dtype=pl.Utf8))
+        )
+
+    @classmethod
+    def _cgmacros_meal_frame(cls, meal_rows: pl.DataFrame) -> pl.DataFrame:
+        """Meal rows: carbs into the core column, macros into the extended ones.
+
+        `Meal Type` carries ten raw spellings for four meals. The normalized
+        label and the raw string both go into `annotations`, so the
+        normalization stays inspectable instead of being a lossy rewrite. An
+        unrecognized spelling is warned about once with a count, never
+        silently coerced.
+        """
+        raw_type = pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars()
+        normalized = raw_type.str.to_lowercase().replace_strict(
+            CGMACROS_MEAL_TYPE_NORMALIZATION, default=None
+        )
+
+        unrecognized = (
+            meal_rows.select(raw_type.alias("raw"))
+            .filter(
+                pl.col("raw").str.to_lowercase().is_in(
+                    list(CGMACROS_MEAL_TYPE_NORMALIZATION)
+                ).not_()
+            )
+            .get_column("raw")
+            .value_counts()
+        )
+        if len(unrecognized) > 0:
+            # Aggregated by reason with a count, never one warning per row.
+            logger.warning(
+                "CGMacros meal labels not in the known vocabulary: %s. "
+                "Kept verbatim in annotations; no normalized label emitted.",
+                ", ".join(
+                    f"{row[0]!r} x{row[1]}" for row in unrecognized.iter_rows()
+                ),
+            )
+
+        image = pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8).str.strip_chars()
+        amount = pl.col(CGMacrosColumn.AMOUNT_CONSUMED.value)
+        annotations = pl.format(
+            '{{"amount_consumed":{},"image_path":{},"meal_type":{},"meal_type_raw":"{}"}}',
+            pl.when(amount.is_not_null()).then(amount.cast(pl.Utf8)).otherwise(pl.lit("null")),
+            pl.when(image.is_not_null() & (image != ""))
+            .then(pl.format('"{}"', image))
+            .otherwise(pl.lit("null")),
+            pl.when(normalized.is_not_null())
+            .then(pl.format('"{}"', normalized))
+            .otherwise(pl.lit("null")),
+            raw_type,
+        )
+
+        return meal_rows.with_columns(
+            pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            annotations.alias("annotations"),
+        ).select(
+            "datetime",
+            "event_type",
+            "quality",
+            "annotations",
+            pl.col(CGMacrosColumn.CARBS.value).alias("carbs"),
+            pl.col(CGMacrosColumn.CALORIES.value).alias("calories"),
+            pl.col(CGMacrosColumn.PROTEIN.value).alias("protein"),
+            pl.col(CGMacrosColumn.FAT.value).alias("fat"),
+            pl.col(CGMacrosColumn.FIBER.value).alias("fiber"),
+            *cls._cgmacros_wearable_columns(),
+        )
+
+    # ===== Faceted output: tracks and corpora =====
+
+    @classmethod
+    def parse_tracks(
+        cls,
+        file_path: Union[str, Path],
+        track: Optional[str] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Parse a multi-track file into one frame per sensor.
+
+        See `CGMParser.parse_tracks`. Tracks are alternative views, never
+        shards: non-sensor rows are replicated into each frame, so
+        concatenating two of them double-counts every meal.
+
+        Args:
+            file_path: A multi-track source file.
+            track: Optionally restrict the result to one track. Accepts a real
+                sensor name or the synthetic mean. The synthetic track is
+                **only** available this way — it never appears in the default
+                result, because it is a derived view rather than a member of
+                the corpus.
+
+        Returns:
+            Track name → extended-schema frame.
+
+        Raises:
+            NotImplementedError: If the detected format is single-track.
+        """
+        path = Path(file_path)
+        text_data = cls.decode_raw_data(path.read_bytes())
+        format_type = cls.detect_format(text_data)
+
+        if format_type != SupportedCGMFormat.CGMACROS:
+            raise NotImplementedError(
+                f"{format_type.value} is a single-track format; use "
+                "parse_file(path). parse_tracks is for sources carrying more "
+                "than one independent measurement of the same quantity."
+            )
+
+        if track is not None:
+            if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+                raise ValueError(
+                    f"Unknown track {track!r}; expected one of "
+                    f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
+                )
+            return {track: cls._process_cgmacros(text_data, track=track)}
+
+        return {
+            name: cls._process_cgmacros(text_data, track=name)
+            for name in CGMACROS_TRACKS
+        }
+
+    @classmethod
+    def parse_corpus(
+        cls,
+        root: Union[str, Path],
+        track: Optional[str] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Parse a many-subject corpus into one frame per subject per track.
+
+        See `CGMParser.parse_corpus`. Built out of `parse_tracks` / `parse_file`
+        rather than reimplemented: composition is most of the value of naming
+        the categories.
+
+        Keys are `"<subject>/<track>"` for a multi-track corpus and `"<subject>"`
+        for a single-track one. The `/` separator is public contract; subject
+        ids may contain `_` but never `/`.
+
+        Args:
+            root: Corpus root directory.
+            track: Optionally restrict every subject to one track.
+
+        Returns:
+            Subject (or `subject/track`) → frame, ordered by subject id so the
+            mapping's iteration order is deterministic.
+        """
+        root_path = Path(root)
+        format_type = cls.detect_path_format(root_path)
+
+        if format_type != SupportedCGMFormat.CGMACROS:
+            raise NotImplementedError(
+                f"No corpus walker registered for {format_type.value}"
+            )
+
+        # Enumerate from the filesystem, never from a numeric range: CGMacros
+        # runs 001-049 with gaps at 024, 025, 037 and 040, so a range would
+        # both miss subjects and look for ones that do not exist. Sorted, so
+        # the mapping's order is deterministic.
+        subject_dirs = sorted(
+            (d for d in root_path.glob("CGMacros-*") if d.is_dir()),
+            key=lambda d: d.name,
+        )
+
+        results: Dict[str, UnifiedFormat] = {}
+        failures: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            subject_csv = subject_dir / f"{subject_dir.name}.csv"
+            if not subject_csv.exists():
+                failures[subject_dir.name] = "no subject CSV"
+                continue
+            try:
+                tracks = cls.parse_tracks(subject_csv, track=track)
+            except (MalformedDataError, ZeroValidInputError) as e:
+                # Collected and reported once with a count rather than one
+                # warning per subject, and never silently skipped.
+                failures[subject_dir.name] = str(e)[:200]
+                continue
+            for track_name, frame in tracks.items():
+                results[f"{subject_dir.name}/{track_name}"] = frame
+
+        if failures:
+            logger.warning(
+                "parse_corpus: %d of %d subject(s) yielded no frame: %s",
+                len(failures),
+                len(subject_dirs),
+                "; ".join(f"{k} ({v})" for k, v in sorted(failures.items())),
+            )
+
+        if not results:
+            raise ZeroValidInputError(
+                f"No parseable subjects found under {root_path}"
+            )
+
+        return results

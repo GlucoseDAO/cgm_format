@@ -16,6 +16,12 @@ from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIB
 from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LIBRE_EU_DETECTION_PATTERNS, LIBRE_EU_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
 from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
+from cgm_format.formats.cgmacros import (
+    CGMACROS_SCHEMA,
+    CGMACROS_DETECTION_PATTERNS,
+    CGMACROS_DATA_START_LINE,
+    CGMACROS_PATH_PROBES,
+)
 
 
 
@@ -29,6 +35,7 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.LIBRE_EU: LIBRE_EU_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
+    SupportedCGMFormat.CGMACROS: CGMACROS_SCHEMA,
 }
 
 # Insertion order IS detection priority: detect_format iterates this dict and
@@ -53,6 +60,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DETECTION_PATTERNS,
+    SupportedCGMFormat.CGMACROS: CGMACROS_DETECTION_PATTERNS,
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
@@ -64,6 +72,7 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.LIBRE_EU: LIBRE_EU_DATA_START_LINE,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
+    SupportedCGMFormat.CGMACROS: CGMACROS_DATA_START_LINE,
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
@@ -87,6 +96,8 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.LIBRE_EU: CGM_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: CGM_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: CGM_SCHEMA,
+    # Macronutrients, heart rate and meal photos have no core home.
+    SupportedCGMFormat.CGMACROS: CGM_SCHEMA_EXTENDED,
 }
 
 # The source shape each format arrives as. A sidecar dict rather than a field
@@ -115,6 +126,8 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
     SupportedCGMFormat.LIBRE_EU: FormatCategory.EXPORT,
     SupportedCGMFormat.MEDTRONIC: FormatCategory.EXPORT,
     SupportedCGMFormat.NIGHTSCOUT: FormatCategory.EXPORT,
+    # Many subjects, each a directory. The first non-EXPORT format.
+    SupportedCGMFormat.CGMACROS: FormatCategory.CORPUS,
 }
 
 # Path-shaped detection, a second mechanism beside the text-prefix one.
@@ -134,11 +147,9 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
 # first format whose every probe matches wins. Register the more specific
 # identity first.
 #
-# Deliberately empty until Waves 4-5 register CGMacros and D1NAMO. Speculative
-# entries for formats that do not exist would be fabricated values, and
-# `CLAUDE.md` §2 forbids those; `detect_path_format` is exercised against
-# synthetic trees instead.
-PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {}
+PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
+    SupportedCGMFormat.CGMACROS: CGMACROS_PATH_PROBES,
+}
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)
 KNOWN_ISSUES_TO_SUPPRESS = {
@@ -174,6 +185,7 @@ KNOWN_ISSUES_TO_SUPPRESS = {
     ],
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
     SupportedCGMFormat.UNIFIED_EXTENDED: [], #also ours, same reason
+    SupportedCGMFormat.CGMACROS: [],
     SupportedCGMFormat.LIBRE: [],
     SupportedCGMFormat.LIBRE_EU: [],
     SupportedCGMFormat.MEDTRONIC: [
