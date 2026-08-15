@@ -1,7 +1,8 @@
 """Format converter for CGM vendor formats working on text data."""
 
 import logging
-from typing import Dict, List, Union, ClassVar, Optional
+from datetime import datetime
+from typing import Dict, List, Sequence, Tuple, Union, ClassVar, Optional
 from io import StringIO
 from typing import Union
 import polars as pl
@@ -10,7 +11,40 @@ from base64 import b64decode
 
 logger = logging.getLogger(__name__)
 
-from cgm_format.formats.supported import FORMAT_DETECTION_PATTERNS, DETECTION_LINE_COUNT
+from cgm_format.formats.d1namo import (
+    D1NAMO_DATE_FORMATS,
+    D1NAMO_FOOD_DATETIME_FORMATS,
+    D1NAMO_GLUCOSE_SCHEMA,
+    D1NAMO_NULL_LITERALS,
+    D1NAMO_SENSOR_TYPES,
+    D1NAMO_TIME_FORMATS,
+    D1NAMO_TRACK,
+    D1namoAnnotationColumn,
+    D1namoFoodColumn,
+    D1namoGlucoseColumn,
+    D1namoHealthyFoodColumn,
+    D1namoInsulinColumn,
+)
+from cgm_format.formats.cgmacros import (
+    CGMACROS_IGNORED_COLUMNS,
+    CGMACROS_MEAL_TYPE_NORMALIZATION,
+    CGMACROS_MEAN_TRACK,
+    CGMACROS_METS_SCALE,
+    CGMACROS_OPTIONAL_COLUMNS,
+    CGMACROS_SCHEMA,
+    CGMACROS_TIMESTAMP_FORMATS,
+    CGMACROS_TRACK_COLUMNS,
+    CGMACROS_TRACKS,
+    CGMACROS_UNREPRESENTABLE_COLUMNS,
+    CGMacrosColumn,
+)
+from cgm_format.formats.supported import (
+    FORMAT_DETECTION_PATTERNS,
+    DETECTION_LINE_COUNT,
+    PATH_DETECTION_PROBES,
+    SUBJECT_PATH_PROBES,
+    UNIFIED_TARGET_SCHEMA,
+)
 from cgm_format.interface.schema import CGMSchemaDefinition
 from cgm_format.interface.cgm_interface import (
     CGMParser,
@@ -19,6 +53,9 @@ from cgm_format.interface.cgm_interface import (
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
+    MultiTrackSourceError,
+    SubjectEntry,
+    TrackCoverage,
     ValidationMethod,
     truncate_error_message,
 )
@@ -29,6 +66,7 @@ from cgm_format.formats.unified import (
     Quality,
     UNIFIED_TIMESTAMP_FORMATS,
     CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
     UNIT_CONVERSIONS,
     CANONICAL_GLUCOSE_UNIT,
 )
@@ -98,6 +136,19 @@ class FormatParser(CGMParser):
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT
     detection_line_count: ClassVar[int] = DETECTION_LINE_COUNT
     cgm_detection_patterns: ClassVar[Dict[SupportedCGMFormat, List[str]]] = FORMAT_DETECTION_PATTERNS
+    path_detection_probes: ClassVar[Dict[SupportedCGMFormat, Tuple[str, ...]]] = (
+        PATH_DETECTION_PROBES
+    )
+    subject_path_probes: ClassVar[Dict[SupportedCGMFormat, Tuple[str, ...]]] = (
+        SUBJECT_PATH_PROBES
+    )
+    # Widest first: merge_bundle_frames canonicalizes a merged frame's column
+    # order against these, so a bundle of a core and an extended member sorts
+    # by the extended declaration order rather than by concat order.
+    unified_schemas: ClassVar[Tuple[CGMSchemaDefinition, ...]] = (
+        CGM_SCHEMA_EXTENDED,
+        CGM_SCHEMA,
+    )
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
@@ -163,6 +214,118 @@ class FormatParser(CGMParser):
         raise UnknownFormatError(cls._truncate_error_message(error_msg))
 
     @classmethod
+    def detect_path_format(cls, root: Union[str, Path]) -> SupportedCGMFormat:
+        """Identify a directory-shaped source by the files it contains.
+
+        The path-shaped counterpart to :meth:`detect_format`. A bundle or a
+        corpus has no single text to sniff — what identifies it is the shape of
+        the directory: whether a per-subject CSV sits beside its own folder,
+        whether a named subset directory exists. Sniffing the first file found
+        would be worse than useless, because a corpus member's *contents* often
+        look like a plain vendor export.
+
+        Contract mirrors `detect_format` deliberately: iterate the registry in
+        insertion order, first match wins, raise `UnknownFormatError` on no
+        match. A format matches when **every** one of its probes finds at least
+        one path — probes are conjunctive, because a single glob is rarely
+        specific enough to identify a corpus and an accidental match here sends
+        a whole directory tree to the wrong parser.
+
+        Args:
+            root: Directory to identify. Not a file.
+
+        Returns:
+            The registered format whose probes all match.
+
+        Raises:
+            UnknownFormatError: If `root` is not a directory, or no registered
+                format's probes all match.
+        """
+        root_path = Path(root)
+        if not root_path.is_dir():
+            raise UnknownFormatError(
+                cls._truncate_error_message(
+                    f"Path-shaped detection needs a directory, got: {root_path}"
+                )
+            )
+
+        for cgm_type, probes in cls.path_detection_probes.items():
+            if probes and all(
+                any(root_path.glob(probe)) for probe in probes
+            ):
+                return cgm_type
+
+        error_msg = (
+            f"Unknown directory-shaped CGM source: {root_path}. "
+            f"Checked {len(cls.path_detection_probes)} registered path format(s)."
+        )
+        raise UnknownFormatError(cls._truncate_error_message(error_msg))
+
+    @classmethod
+    def detect_subject_format(cls, subject_dir: Union[str, Path]) -> SupportedCGMFormat:
+        """Identify a single *subject* directory by the files it contains.
+
+        `detect_path_format` answers "is this a corpus?"; this answers "is this
+        one member of one?". Two registries rather than one, because a probe
+        that answered both would make a corpus root indistinguishable from its
+        own subject — the shapes differ only by a directory level, which is
+        exactly the distinction that must survive.
+
+        Same contract as the other two detectors: iterate the registry in
+        insertion order, every probe must match (conjunctive), first match
+        wins, `UnknownFormatError` on no match rather than a guess.
+
+        Args:
+            subject_dir: One subject's directory. Not a corpus root, and not a
+                file.
+
+        Returns:
+            The registered format whose subject probes all match.
+
+        Raises:
+            UnknownFormatError: If `subject_dir` is not a directory, or matches
+                no registered subject shape. When it is in fact a corpus root,
+                the message says so and names `parse_corpus` — a root reaching
+                a per-subject entry point is the likeliest way to land here,
+                and an unqualified "unknown" would hide the answer.
+        """
+        directory = Path(subject_dir)
+        if not directory.is_dir():
+            raise UnknownFormatError(
+                cls._truncate_error_message(
+                    f"Subject detection needs a directory, got: {directory}"
+                )
+            )
+
+        for cgm_type, probes in cls.subject_path_probes.items():
+            if probes and all(any(directory.glob(probe)) for probe in probes):
+                return cgm_type
+
+        # Before reporting "unknown", check the likelier mistake: this is a
+        # corpus root, one level up from where subject probes look.
+        try:
+            corpus_format = cls.detect_path_format(directory)
+        except UnknownFormatError:
+            corpus_format = None
+        if corpus_format is not None:
+            raise UnknownFormatError(
+                cls._truncate_error_message(
+                    f"{directory} is a {corpus_format.value} corpus root, not "
+                    "one of its subjects. Use "
+                    f"FormatParser.parse_corpus({str(directory)!r}) for every "
+                    "subject, or FormatParser.list_subjects(...) to see the "
+                    "subject directories inside it."
+                )
+            )
+
+        raise UnknownFormatError(
+            cls._truncate_error_message(
+                f"Unknown subject directory: {directory}. Checked "
+                f"{len(cls.subject_path_probes)} registered subject shape(s)."
+            )
+        )
+
+    @classmethod
     def format_supported(cls, raw_data: Union[bytes, str]) -> bool:
         """Check if the library can parse the given data format.
         
@@ -212,8 +375,12 @@ class FormatParser(CGMParser):
             MalformedDataError: If CSV is unparseable, zero valid rows, or conversion fails
         """
 
-        if format_type == SupportedCGMFormat.UNIFIED_CGM:
-            unified_df = cls._process_unified(text_data)
+        if format_type in (SupportedCGMFormat.UNIFIED_CGM, SupportedCGMFormat.UNIFIED_EXTENDED):
+            # The unified family is the one place the target schema varies, so
+            # it is resolved from the registry rather than defaulted (D2).
+            unified_df = cls._process_unified(
+                text_data, target_schema=UNIFIED_TARGET_SCHEMA[format_type]
+            )
         elif format_type == SupportedCGMFormat.DEXCOM:
             unified_df = cls._process_dexcom(text_data)
         elif format_type == SupportedCGMFormat.DEXCOM_EU:
@@ -226,6 +393,43 @@ class FormatParser(CGMParser):
             unified_df = cls._process_medtronic(text_data)
         elif format_type == SupportedCGMFormat.NIGHTSCOUT:
             unified_df = cls._process_nightscout(text_data)
+        elif format_type == SupportedCGMFormat.CGMACROS:
+            # A CGMacros file carries two independent sensor series, so there
+            # is no single frame to return. Refusing here rather than picking
+            # one is the whole point of D5.
+            raise MultiTrackSourceError(
+                "CGMacros files carry two independent glucose series "
+                f"({' and '.join(CGMACROS_TRACKS)}), so there is no single "
+                "unified frame to return — picking one silently would hide "
+                "which sensor the caller got. Use "
+                "FormatParser.parse_tracks(path) for a frame per sensor, or "
+                f"parse_tracks(path, track={CGMACROS_MEAN_TRACK!r}) for the "
+                "opt-in synthetic mean."
+            )
+        elif format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            # A D1NAMO subject is a BUNDLE: glucose, insulin, meals and
+            # annotations are separate files describing one person, and a bare
+            # glucose.csv is one modality of that record rather than the whole
+            # of it. Parsing it alone would silently return a frame missing
+            # every insulin dose and every meal, which is worse than refusing.
+            #
+            # Both subsets share glucose.csv's header, so text detection cannot
+            # tell them apart either — the subset is identified by which files
+            # sit beside it. Hence the pointer to the directory-shaped entry
+            # points rather than a "try the other format" hint.
+            raise MalformedDataError(
+                "A D1NAMO glucose.csv is one modality of a subject bundle, not "
+                "a complete record: insulin, meals and annotations live in "
+                "sibling files, and parsing this file alone would drop them "
+                "silently. Pass the subject *directory* — the folder this file "
+                "sits in — to FormatParser.parse_bundle([subject_dir]), or the "
+                "subset root to FormatParser.parse_corpus(root) for one frame "
+                "per subject. FormatParser.list_subjects(root) names the "
+                "subject directories."
+            )
         else:
             raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
         
@@ -252,12 +456,27 @@ class FormatParser(CGMParser):
 
 
     @classmethod
-    def _postprocess_unified(cls, unified_df: UnifiedFormat) -> UnifiedFormat:
+    def _postprocess_unified(
+        cls,
+        unified_df: UnifiedFormat,
+        schema: Optional[CGMSchemaDefinition] = None,
+    ) -> UnifiedFormat:
         """Postprocess the unified format dataframe.
-        
+
+        Every vendor parse path converges here, so this is where the unified
+        contract is enforced — unconditionally, not under `validation_mode`.
+
         Args:
             unified_df: DataFrame in unified format
+            schema: Target unified schema to enforce. Defaults to CGM_SCHEMA.
+                A parser for a source carrying macronutrients, wearable streams
+                or annotations passes CGM_SCHEMA_EXTENDED (looked up in
+                UNIFIED_TARGET_SCHEMA); enforcing the core schema here would
+                drop those columns before any caller saw them.
         """
+        if schema is None:
+            schema = CGM_SCHEMA
+
         if len(unified_df) == 0:
             raise ZeroValidInputError("No valid data rows found after processing")
 
@@ -273,7 +492,7 @@ class FormatParser(CGMParser):
         
         # Enforce canonical unified schema for idempotent roundtrips
         # Part of the processing pipline, not affected by validation mode!!!!
-        unified_df = CGM_SCHEMA.validate_dataframe(unified_df, enforce=True)
+        unified_df = schema.validate_dataframe(unified_df, enforce=True)
         
         # Mark duplicate timestamps - moved to processor
         # Detect and assign sequences - moved to processor (requires gap size knowledge)
@@ -352,15 +571,24 @@ class FormatParser(CGMParser):
         )
 
     @classmethod
-    def _process_unified(cls, text_data: str) -> UnifiedFormat:
+    def _process_unified(
+        cls,
+        text_data: str,
+        target_schema: Optional[CGMSchemaDefinition] = None,
+    ) -> UnifiedFormat:
         """Process data already in unified format (validation only).
-        
+
+        Serves both UNIFIED_CGM and UNIFIED_EXTENDED — they are the same CSV
+        geometry, differing only in how many data columns the header carries,
+        so the format identity is expressed purely as the target schema.
+
         Args:
             text_data: CSV string in unified format
-            
+            target_schema: Unified schema to enforce (defaults to CGM_SCHEMA)
+
         Returns:
             Validated DataFrame in unified format
-            
+
         Raises:
             MalformedDataError: If validation fails
         """
@@ -388,8 +616,8 @@ class FormatParser(CGMParser):
                     df = df.with_columns([
                         pl.col(column).str.strptime(pl.Datetime("ms"), timestamp_format)
                     ])
-             
-            return cls._postprocess_unified(df)
+
+            return cls._postprocess_unified(df, schema=target_schema)
             
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse unified format CSV: {e}"
@@ -1419,19 +1647,47 @@ class FormatParser(CGMParser):
     ) -> UnifiedFormat:
         """Parse Nightscout export files (JSON or CSV) to unified format.
 
-        Convenience wrapper around :meth:`parse_nightscout` that reads files
-        from disk.  Accepts both JSON and CSV for entries; treatments are
-        expected to be JSON (the Nightscout API does not support CSV for
-        treatments).
+        A named shortcut for the bundle shape (see :meth:`parse_bundle`):
+        entries and treatments are two modalities of one person's record.
+        Retained because it is public API and because naming Nightscout's two
+        specific files is friendlier than an ordered sequence — but the
+        general entry point is `parse_bundle`.
+
+        It does not delegate to `parse_bundle`: Nightscout's members are JSON,
+        which `detect_format` deliberately does not handle (it pattern-matches
+        CSV headers), and the entries/treatments merge is a keyed join rather
+        than a diagonal concat of two independently parsed frames. So this
+        keeps its own path through `parse_nightscout`.
+
+        Accepts both JSON and CSV for entries; treatments are expected to be
+        JSON (the Nightscout API does not support CSV for treatments).
 
         Args:
             entries_path: Path to entries file (JSON or CSV)
             treatments_path: Optional path to treatments JSON file
-            profile_path: Reserved for future use (profile data)
+            profile_path: **Accepted and ignored.** Nightscout's profile
+                document carries settings — basal schedules, targets, the
+                display unit — not glucose readings or events, so it has no
+                rows to contribute to a unified frame and no column to land
+                in. It stays in the signature because it is public API and
+                because a caller holding all three exports naturally passes
+                all three. Passing it logs a warning rather than failing:
+                dropping it silently would be the "silent fallback" the
+                charter forbids, and rejecting it would break existing callers
+                for no gain.
 
         Returns:
             DataFrame in unified format matching CGM_SCHEMA
         """
+        if profile_path is not None:
+            logger.warning(
+                "from_nightscout_exports received profile_path=%s and is ignoring "
+                "it: the Nightscout profile document holds settings (basal "
+                "schedules, targets, display unit), not readings or events, so "
+                "it contributes no rows to a unified frame.",
+                profile_path,
+            )
+
         entries_data = Path(entries_path).read_bytes()
         treatments_data: Union[bytes, None] = None
         if treatments_path is not None:
@@ -1493,32 +1749,1284 @@ class FormatParser(CGMParser):
 
     # ===== Serialization Methods =====
     
-    @staticmethod
-    def to_csv_string(dataframe: UnifiedFormat) -> str:
+    # Unified schemas a serialized frame may legitimately conform to, most
+    # specific first. Dispatch is by exact column-name tuple, so it recognizes a
+    # frame rather than guessing at one.
+    _SERIALIZABLE_SCHEMAS: ClassVar[tuple[CGMSchemaDefinition, ...]] = (
+        CGM_SCHEMA_EXTENDED,
+        CGM_SCHEMA,
+    )
+
+    @classmethod
+    def _schema_for_serialization(cls, dataframe: UnifiedFormat) -> CGMSchemaDefinition:
+        """Pick the unified schema a frame is to be validated against on output.
+
+        Matches the frame's exact column list against the registered unified
+        schemas. Anything that matches none falls back to CGM_SCHEMA, which is
+        what validation then rejects — so a malformed frame still raises exactly
+        as it does today, rather than being quietly accepted.
+        """
+        columns = tuple(dataframe.columns)
+        for schema in cls._SERIALIZABLE_SCHEMAS:
+            if columns == tuple(schema.get_column_names(data_only=False)):
+                return schema
+        return CGM_SCHEMA
+
+    @classmethod
+    def to_csv_string(cls, dataframe: UnifiedFormat) -> str:
         """Serialize unified format DataFrame to CSV string.
-        
+
+        A classmethod, not a staticmethod: it must read `cls.validation_mode`
+        and the frame's target schema, and a staticmethod naming `FormatParser`
+        literally would ignore both in a subclass.
+
         Args:
-            dataframe: DataFrame in unified format
-            
+            dataframe: DataFrame in unified format (core or extended)
+
         Returns:
             CSV string representation
         """
         # Verify input dataframe matches schema
-        if FormatParser.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=FormatParser.validation_mode & ValidationMethod.INPUT_FORCED)    
+        if cls.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            schema = cls._schema_for_serialization(dataframe)
+            schema.validate_dataframe(dataframe, enforce=cls.validation_mode & ValidationMethod.INPUT_FORCED)
         return dataframe.write_csv(separator=",")
-    
-    @staticmethod
-    def to_csv_file(dataframe: UnifiedFormat, file_path: str) -> None:
+
+    @classmethod
+    def to_csv_file(cls, dataframe: UnifiedFormat, file_path: str) -> None:
         """Save unified format DataFrame to CSV file.
-        
+
         Args:
-            dataframe: DataFrame in unified format
+            dataframe: DataFrame in unified format (core or extended)
             file_path: Path where to save the CSV file
         """
         # Verify input dataframe matches schema
-        if FormatParser.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=FormatParser.validation_mode & ValidationMethod.INPUT_FORCED)   
+        if cls.validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            schema = cls._schema_for_serialization(dataframe)
+            schema.validate_dataframe(dataframe, enforce=cls.validation_mode & ValidationMethod.INPUT_FORCED)
         dataframe.write_csv(file_path)
     
 
+
+    # ===== CGMacros: a multi-track corpus =====
+
+    @classmethod
+    def _process_cgmacros(
+        cls,
+        text_data: str,
+        track: str = CGMACROS_TRACKS[0],
+    ) -> UnifiedFormat:
+        """Parse one CGMacros subject CSV into one sensor's unified frame.
+
+        The non-glucose rows — meals, macronutrients, heart rate, photo
+        annotations — are **replicated into every track**, because each track is
+        a complete self-contained view of those ten days as seen through one
+        sensor. Tracks are alternatives, never shards; concatenating two of them
+        double-counts every meal.
+
+        Args:
+            text_data: Decoded contents of one subject CSV.
+            track: Which sensor's series becomes `glucose`. One of
+                `CGMACROS_TRACKS`, or `CGMACROS_MEAN_TRACK` for the opt-in
+                synthetic average.
+
+        Returns:
+            One extended-schema frame for the requested track.
+        """
+        if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+            raise ValueError(
+                f"Unknown CGMacros track {track!r}; expected one of "
+                f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
+            )
+
+        try:
+            raw = pl.read_csv(
+                StringIO(text_data),
+                infer_schema_length=10000,
+                truncate_ragged_lines=True,
+            )
+        except pl.exceptions.PolarsError as e:
+            raise MalformedDataError(
+                cls._truncate_error_message(f"Failed to read CGMacros CSV: {e}")
+            )
+
+        # Strip header whitespace before aliasing: one subject spells the
+        # column "Amount Consumed " with a trailing space, and an alias cannot
+        # match what the header never normalized.
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        raw = CGMACROS_SCHEMA.normalize_headers(raw)
+        measured_but_unheld = [
+            c for c in CGMACROS_UNREPRESENTABLE_COLUMNS if c in raw.columns
+        ]
+        if measured_but_unheld:
+            # "The source said something we cannot represent" — a different
+            # report from the absent-column warning below, and it must not be
+            # silent: someone measured this and the schema has nowhere to put it.
+            logger.warning(
+                "CGMacros subject file carries %d measured column(s) the unified "
+                "schema cannot hold, which are dropped: %s. Declaring them is a "
+                "schema decision, not a parser one.",
+                len(measured_but_unheld),
+                ", ".join(measured_but_unheld),
+            )
+        raw = raw.drop([c for c in CGMACROS_IGNORED_COLUMNS if c in raw.columns])
+
+        # Typed nulls for columns this subject simply lacks. Done once, up
+        # front: a `.select(pl.col(X))` is evaluated even when an upstream
+        # filter leaves zero rows, so an absent column raises ColumnNotFound
+        # regardless of whether any row would have used it.
+        missing = [c for c in CGMACROS_OPTIONAL_COLUMNS if c not in raw.columns]
+        if missing:
+            logger.warning(
+                "CGMacros subject file omits %d optional column(s): %s. "
+                "Emitting typed nulls — the source did not say, which is not "
+                "the same as zero.",
+                len(missing),
+                ", ".join(sorted(missing)),
+            )
+            raw = raw.with_columns(
+                [pl.lit(None, dtype=pl.Float64).alias(c) for c in missing]
+            )
+
+        ts_col = CGMacrosColumn.TIMESTAMP.value
+        ts_format = cls._probe_timestamp_format(
+            raw, ts_col, CGMACROS_TIMESTAMP_FORMATS
+        )
+        raw = raw.with_columns(
+            pl.col(ts_col).str.strptime(pl.Datetime("ms"), ts_format).alias("datetime")
+        ).drop_nulls("datetime")
+
+        if len(raw) == 0:
+            raise ZeroValidInputError(
+                "No CGMacros rows carried a parseable timestamp"
+            )
+
+        libre = pl.col(CGMACROS_TRACK_COLUMNS[CGMACROS_TRACKS[0]])
+        dexcom = pl.col(CGMACROS_TRACK_COLUMNS[CGMACROS_TRACKS[1]])
+        if track == CGMACROS_TRACKS[0]:
+            glucose_expr = libre
+            merged_expr = pl.lit(False)
+        elif track == CGMACROS_TRACKS[1]:
+            glucose_expr = dexcom
+            merged_expr = pl.lit(False)
+        else:
+            # The synthetic mean. Polars' horizontal mean ignores nulls, so a
+            # row with one sensor yields that sensor's reading unchanged —
+            # which is why only rows with BOTH populated are flagged: a
+            # single-sensor row is a real reading, not a synthesized one.
+            glucose_expr = pl.mean_horizontal(libre, dexcom)
+            merged_expr = libre.is_not_null() & dexcom.is_not_null()
+
+        raw = raw.with_columns(
+            glucose_expr.alias("_glucose"),
+            merged_expr.alias("_merged"),
+        )
+
+        frames: List[pl.DataFrame] = []
+
+        # --- Glucose readings, one row per populated sample ---
+        glucose_rows = raw.filter(pl.col("_glucose").is_not_null()).with_columns(
+            pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+            pl.when(pl.col("_merged"))
+            .then(pl.lit(Quality.TRACK_MERGE.value))
+            .otherwise(pl.lit(0))
+            .cast(pl.Int64)
+            .alias("quality"),
+            pl.col("_glucose").alias("glucose"),
+        )
+        if len(glucose_rows) > 0:
+            frames.append(
+                glucose_rows.select(
+                    "datetime", "event_type", "quality", "glucose",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        # --- Wearable-only rows: a sample this track's sensor did not cover ---
+        # The wrist wearable is not a glucose sensor: its heart rate, METs and
+        # activity calories belong to the subject, not to Libre or Dexcom. D4
+        # lists them among the rows replicated into every track, and the
+        # docstrings promise each track is "a complete self-contained view".
+        # Without this, a timestamp where THIS track's sensor was null
+        # contributes no row at all and its wearable sample is silently lost —
+        # about 8% of the stream on the dexcom track, since `Dexcom GL` is
+        # populated on ~92% of rows.
+        wearable_source = [
+            CGMacrosColumn.HEART_RATE.value,
+            CGMacrosColumn.METS.value,
+            CGMacrosColumn.ACTIVITY_CALORIES.value,
+            CGMacrosColumn.STEPS.value,
+        ]
+        has_wearable = pl.any_horizontal(
+            [pl.col(c).is_not_null() for c in wearable_source]
+        )
+        wearable_only = raw.filter(pl.col("_glucose").is_null() & has_wearable)
+        if len(wearable_only) > 0:
+            frames.append(
+                wearable_only.with_columns(
+                    # OTHEREVT: the row records a wearable sample, which is a
+                    # real observation with no more specific member in the
+                    # vocabulary. Inventing a code for it would be worse.
+                    pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                ).select(
+                    "datetime", "event_type", "quality",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        # --- Meals: carbs plus the macronutrients the core schema cannot hold ---
+        meal_rows = raw.filter(
+            pl.col(CGMacrosColumn.MEAL_TYPE.value).is_not_null()
+            & (pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars() != "")
+        )
+        if len(meal_rows) > 0:
+            frames.append(cls._cgmacros_meal_frame(meal_rows))
+
+        # --- Annotation-only rows: a photo with no meal attached ---
+        # The meal-END photograph. 1,553 such rows across the corpus, against
+        # 1,644 carrying both, so these are the MAJORITY of photo rows — which
+        # is why annotations cannot simply hang off a CARBS_IN event.
+        photo_only = raw.filter(
+            pl.col(CGMacrosColumn.IMAGE_PATH.value).is_not_null()
+            & (pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8).str.strip_chars() != "")
+            & (
+                pl.col(CGMacrosColumn.MEAL_TYPE.value).is_null()
+                | (pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars() == "")
+            )
+        )
+        if len(photo_only) > 0:
+            frames.append(
+                photo_only.with_columns(
+                    # OTHEREVT, not an invented code: the row records that
+                    # something was photographed, and the schema already has a
+                    # member for "an event we cannot type more precisely".
+                    pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                    cls._cgmacros_annotation_expr().alias("annotations"),
+                ).select(
+                    "datetime", "event_type", "quality", "annotations",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        if not frames:
+            raise ZeroValidInputError("No usable CGMacros rows found")
+
+        unified = pl.concat(frames, how="diagonal")
+        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+        return cls._postprocess_unified(
+            unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.CGMACROS]
+        )
+
+    @classmethod
+    def _cgmacros_wearable_columns(cls) -> List[pl.Expr]:
+        """Wearable channels carried on every row, whatever the event type.
+
+        METs is stored multiplied by 10 (data dictionary, and the observed
+        10-126 range against a physiological 1.0-12.6), so it is divided here.
+        """
+        return [
+            pl.col(CGMacrosColumn.HEART_RATE.value).alias("heart_rate"),
+            (pl.col(CGMacrosColumn.METS.value) / CGMACROS_METS_SCALE).alias("mets"),
+            pl.col(CGMacrosColumn.ACTIVITY_CALORIES.value).alias("activity_calories"),
+            (
+                pl.col(CGMacrosColumn.STEPS.value).alias("steps")
+                if CGMacrosColumn.STEPS.value
+                else pl.lit(None).alias("steps")
+            ),
+        ]
+
+    @classmethod
+    def _cgmacros_annotation_expr(cls) -> pl.Expr:
+        """Build the deterministic `annotations` JSON for a row.
+
+        Keys are emitted in sorted order by construction, matching
+        `annotations_to_json`, because the column participates in the sort keys
+        and in the byte-level round-trip guarantee.
+        """
+        image = pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8)
+        return (
+            pl.when(image.is_not_null() & (image.str.strip_chars() != ""))
+            .then(
+                pl.format(
+                    '{{"image_path":"{}"}}',
+                    image.str.strip_chars(),
+                )
+            )
+            .otherwise(pl.lit(None, dtype=pl.Utf8))
+        )
+
+    @classmethod
+    def _cgmacros_meal_frame(cls, meal_rows: pl.DataFrame) -> pl.DataFrame:
+        """Meal rows: carbs into the core column, macros into the extended ones.
+
+        `Meal Type` carries ten raw spellings for four meals. The normalized
+        label and the raw string both go into `annotations`, so the
+        normalization stays inspectable instead of being a lossy rewrite. An
+        unrecognized spelling is warned about once with a count, never
+        silently coerced.
+        """
+        raw_type = pl.col(CGMacrosColumn.MEAL_TYPE.value).cast(pl.Utf8).str.strip_chars()
+        normalized = raw_type.str.to_lowercase().replace_strict(
+            CGMACROS_MEAL_TYPE_NORMALIZATION, default=None
+        )
+
+        unrecognized = (
+            meal_rows.select(raw_type.alias("raw"))
+            .filter(
+                pl.col("raw").str.to_lowercase().is_in(
+                    list(CGMACROS_MEAL_TYPE_NORMALIZATION)
+                ).not_()
+            )
+            .get_column("raw")
+            .value_counts()
+        )
+        if len(unrecognized) > 0:
+            # Aggregated by reason with a count, never one warning per row.
+            logger.warning(
+                "CGMacros meal labels not in the known vocabulary: %s. "
+                "Kept verbatim in annotations; no normalized label emitted.",
+                ", ".join(
+                    f"{row[0]!r} x{row[1]}" for row in unrecognized.iter_rows()
+                ),
+            )
+
+        image = pl.col(CGMacrosColumn.IMAGE_PATH.value).cast(pl.Utf8).str.strip_chars()
+        amount = pl.col(CGMacrosColumn.AMOUNT_CONSUMED.value)
+        annotations = pl.format(
+            '{{"amount_consumed":{},"image_path":{},"meal_type":{},"meal_type_raw":"{}"}}',
+            pl.when(amount.is_not_null()).then(amount.cast(pl.Utf8)).otherwise(pl.lit("null")),
+            pl.when(image.is_not_null() & (image != ""))
+            .then(pl.format('"{}"', image))
+            .otherwise(pl.lit("null")),
+            pl.when(normalized.is_not_null())
+            .then(pl.format('"{}"', normalized))
+            .otherwise(pl.lit("null")),
+            raw_type,
+        )
+
+        return meal_rows.with_columns(
+            pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            annotations.alias("annotations"),
+        ).select(
+            "datetime",
+            "event_type",
+            "quality",
+            "annotations",
+            pl.col(CGMacrosColumn.CARBS.value).alias("carbs"),
+            pl.col(CGMacrosColumn.CALORIES.value).alias("calories"),
+            pl.col(CGMacrosColumn.PROTEIN.value).alias("protein"),
+            pl.col(CGMacrosColumn.FAT.value).alias("fat"),
+            pl.col(CGMacrosColumn.FIBER.value).alias("fiber"),
+            *cls._cgmacros_wearable_columns(),
+        )
+
+    # ===== Faceted output: tracks and corpora =====
+
+    @classmethod
+    def parse_tracks(
+        cls,
+        file_path: Union[str, Path],
+        track: Optional[str] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Parse a multi-track file into one frame per sensor.
+
+        See `CGMParser.parse_tracks`. Tracks are alternative views, never
+        shards: non-sensor rows are replicated into each frame, so
+        concatenating two of them double-counts every meal.
+
+        Args:
+            file_path: A multi-track source file.
+            track: Optionally restrict the result to one track. Accepts a real
+                sensor name or the synthetic mean. The synthetic track is
+                **only** available this way — it never appears in the default
+                result, because it is a derived view rather than a member of
+                the corpus.
+
+        Returns:
+            Track name → extended-schema frame.
+
+        Raises:
+            NotImplementedError: If the detected format is single-track.
+        """
+        path = Path(file_path)
+        text_data = cls.decode_raw_data(path.read_bytes())
+        format_type = cls.detect_format(text_data)
+
+        if format_type != SupportedCGMFormat.CGMACROS:
+            raise NotImplementedError(
+                f"{format_type.value} is a single-track format; use "
+                "parse_file(path). parse_tracks is for sources carrying more "
+                "than one independent measurement of the same quantity."
+            )
+
+        if track is not None:
+            if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+                raise ValueError(
+                    f"Unknown track {track!r}; expected one of "
+                    f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
+                )
+            return {track: cls._process_cgmacros(text_data, track=track)}
+
+        return {
+            name: cls._process_cgmacros(text_data, track=name)
+            for name in CGMACROS_TRACKS
+        }
+
+    @classmethod
+    def _select_subject_dirs(
+        cls,
+        subject_dirs: List[Path],
+        subjects: Optional[Sequence[str]],
+        root: Path,
+    ) -> List[Path]:
+        """Narrow a corpus walk to the requested subject ids, or refuse.
+
+        Pruning happens here, before any parsing, so `subjects=["001"]` costs
+        one subject's work rather than the whole corpus's followed by a filter.
+
+        An id that is not on disk raises rather than being dropped. The reason
+        is the one 0.10.0 already learned from `track=`: a filter that silently
+        selects nothing hands back a result the caller believes is filtered
+        when it is really just missing, and a typo'd subject id is
+        indistinguishable from a subject that genuinely has no data.
+        """
+        if subjects is None:
+            return subject_dirs
+
+        wanted = list(subjects)
+        if not wanted:
+            raise ValueError(
+                "subjects= was given an empty sequence, which selects nothing. "
+                "Omit the argument to parse every subject."
+            )
+
+        available = {d.name: d for d in subject_dirs}
+        missing = [s for s in wanted if s not in available]
+        if missing:
+            raise ValueError(
+                cls._truncate_error_message(
+                    f"No such subject(s) under {root}: "
+                    f"{', '.join(repr(m) for m in missing)}. "
+                    f"Available: {', '.join(sorted(available))}. "
+                    "FormatParser.list_subjects(root) lists them with their "
+                    "glucose coverage."
+                )
+            )
+
+        # Deduplicate while keeping the corpus's own order, so the result is
+        # ordered by subject id whatever order the caller asked in.
+        chosen = {s for s in wanted}
+        return [d for d in subject_dirs if d.name in chosen]
+
+    @classmethod
+    def parse_subject_directory(
+        cls,
+        subject_dir: Union[str, Path],
+    ) -> UnifiedFormat:
+        """Parse one subject directory into a single frame.
+
+        See `CGMParser.parse_subject_directory`. Reached in normal use through
+        `parse_bundle([subject_dir])`; `list_subjects(root)` enumerates the
+        directories worth passing.
+
+        Args:
+            subject_dir: One subject's directory.
+
+        Returns:
+            One DataFrame in unified format, all the subject's modalities
+            merged.
+
+        Raises:
+            UnknownFormatError: If the directory matches no registered subject
+                shape.
+            MultiTrackSourceError: If the subject carries more than one sensor.
+                A bundle merges *modalities*; two sensors are alternative views
+                of one modality, and merging them would stack two readings on
+                every timestamp.
+        """
+        directory = Path(subject_dir)
+        format_type = cls.detect_subject_format(directory)
+
+        if format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            return cls._process_d1namo_subject(directory)
+
+        if format_type == SupportedCGMFormat.CGMACROS:
+            # A CGMacros subject is not a bundle: it is one file carrying two
+            # concurrent sensors. Name the file, not just the function — the
+            # caller has a directory in hand and would otherwise have to guess
+            # which CSV inside it to pass.
+            subject_csv = directory / f"{directory.name}.csv"
+            raise MultiTrackSourceError(
+                cls._truncate_error_message(
+                    f"{directory.name} is a CGMacros subject: one file carrying "
+                    f"{len(CGMACROS_TRACKS)} concurrent sensors "
+                    f"({', '.join(CGMACROS_TRACKS)}), not a bundle of "
+                    "modalities. There is no single frame to return — merging "
+                    "the sensors would put two readings on every timestamp. "
+                    f"Use FormatParser.parse_tracks({str(subject_csv)!r}) for "
+                    "one frame per sensor."
+                )
+            )
+
+        raise NotImplementedError(
+            f"No subject parser registered for {format_type.value}"
+        )
+
+    @classmethod
+    def parse_corpus(
+        cls,
+        root: Union[str, Path],
+        track: Optional[str] = None,
+        subjects: Optional[Sequence[str]] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Parse a many-subject corpus into one frame per subject per track.
+
+        See `CGMParser.parse_corpus`. Built out of `parse_tracks` /
+        `parse_subject_directory` rather than reimplemented: composition is
+        most of the value of naming the categories.
+
+        Keys are `"<subject>/<track>"` for a multi-track corpus and `"<subject>"`
+        for a single-track one. The `/` separator is public contract; subject
+        ids may contain `_` but never `/`.
+
+        Args:
+            root: Corpus root directory.
+            track: Optionally restrict every subject to one track.
+            subjects: Optionally restrict the walk to these subject ids. Both
+                filters compose, and `subjects` prunes **before** parsing — one
+                id costs one subject's work, not the whole corpus's. Ids come
+                from `list_subjects(root)`; pass them bare, without any
+                `/track` suffix.
+
+        Returns:
+            Subject (or `subject/track`) → frame, ordered by subject id so the
+            mapping's iteration order is deterministic.
+
+        Raises:
+            ValueError: If `subjects` is empty, or names an id that is not in
+                the corpus. Returning a smaller mapping instead would hand back
+                a result the caller believes is filtered when it is in fact
+                simply missing a subject — the same quiet mismatch `track=`
+                refuses on a single-track corpus.
+        """
+        root_path = Path(root)
+        format_type = cls.detect_path_format(root_path)
+
+        if format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            if track is not None:
+                # Silently ignoring it would hand back every track's worth of
+                # data while the caller believed they had filtered — the same
+                # class of quiet mismatch `parse_file` refuses for multi-track
+                # sources.
+                raise ValueError(
+                    f"{format_type.value} is a single-track corpus, so track="
+                    f"{track!r} selects nothing. Omit the argument."
+                )
+            return cls._parse_d1namo_corpus(root_path, subjects=subjects)
+
+        if format_type != SupportedCGMFormat.CGMACROS:
+            raise NotImplementedError(
+                f"No corpus walker registered for {format_type.value}"
+            )
+
+        # Enumerate from the filesystem, never from a numeric range: CGMacros
+        # runs 001-049 with gaps at 024, 025, 037 and 040, so a range would
+        # both miss subjects and look for ones that do not exist. Sorted, so
+        # the mapping's order is deterministic.
+        subject_dirs = cls._select_subject_dirs(
+            sorted(
+                (d for d in root_path.glob("CGMacros-*") if d.is_dir()),
+                key=lambda d: d.name,
+            ),
+            subjects,
+            root_path,
+        )
+
+        results: Dict[str, UnifiedFormat] = {}
+        failures: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            subject_csv = subject_dir / f"{subject_dir.name}.csv"
+            if not subject_csv.exists():
+                failures[subject_dir.name] = "no subject CSV"
+                continue
+            try:
+                tracks = cls.parse_tracks(subject_csv, track=track)
+            except (MalformedDataError, ZeroValidInputError) as e:
+                # Collected and reported once with a count rather than one
+                # warning per subject, and never silently skipped.
+                failures[subject_dir.name] = str(e)[:200]
+                continue
+            for track_name, frame in tracks.items():
+                results[f"{subject_dir.name}/{track_name}"] = frame
+
+        if failures:
+            logger.warning(
+                "parse_corpus: %d of %d subject(s) yielded no frame: %s",
+                len(failures),
+                len(subject_dirs),
+                "; ".join(f"{k} ({v})" for k, v in sorted(failures.items())),
+            )
+
+        if not results:
+            raise ZeroValidInputError(
+                f"No parseable subjects found under {root_path}"
+            )
+
+        return results
+
+    # ===== Corpus inspection =====
+
+    @classmethod
+    def list_subjects(cls, root: Union[str, Path]) -> Tuple[SubjectEntry, ...]:
+        """Enumerate a corpus's subjects and their glucose coverage.
+
+        See `CGMParser.list_subjects`. Supplies the ids that
+        `parse_corpus(root, subjects=[...])` accepts, so a caller selects from
+        what is on disk rather than from a guessed naming convention.
+
+        Cheap relative to parsing — it reads each subject's glucose source and
+        nothing else. Measured on the published corpora: CGMacros' 45 subjects
+        (about 15,000 rows each) take 1.4s here against 12.8s for the
+        equivalent `parse_corpus`, and either D1NAMO subset is around 0.1s
+        against 0.3-0.6s. Cheaper by roughly an order of magnitude, not free —
+        call it once and keep the result rather than per subject in a loop.
+
+        A subject whose glucose cannot be read keeps its entry with **empty**
+        `tracks`, and every such subject is reported once, grouped, with a
+        count. Empty means "we could not look", which is not the same answer as
+        a track that reported nothing — that one is present with `values=0`.
+
+        Args:
+            root: Corpus root directory.
+
+        Returns:
+            One `SubjectEntry` per subject, ordered by subject id.
+        """
+        root_path = Path(root)
+        format_type = cls.detect_path_format(root_path)
+
+        if format_type == SupportedCGMFormat.CGMACROS:
+            subject_dirs = sorted(
+                (d for d in root_path.glob("CGMacros-*") if d.is_dir()),
+                key=lambda d: d.name,
+            )
+        elif format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            subject_dirs = sorted(
+                (
+                    d for d in root_path.iterdir()
+                    if d.is_dir() and (d / "glucose.csv").exists()
+                ),
+                key=lambda d: d.name,
+            )
+        else:
+            raise NotImplementedError(
+                f"No corpus walker registered for {format_type.value}"
+            )
+
+        entries: List[SubjectEntry] = []
+        unreadable: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            try:
+                tracks = cls._subject_track_coverage(subject_dir, format_type)
+            except (
+                MalformedDataError,
+                ZeroValidInputError,
+                pl.exceptions.PolarsError,
+                OSError,
+            ) as e:
+                # Grouped and counted below rather than one warning per
+                # subject: a 45-subject corpus with a systematic problem would
+                # otherwise bury every other finding a run produces.
+                unreadable[subject_dir.name] = str(e)[:200]
+                tracks = ()
+            entries.append(
+                SubjectEntry(
+                    subject_id=subject_dir.name,
+                    format=format_type,
+                    path=subject_dir,
+                    modalities=tuple(
+                        sorted(
+                            f.name for f in subject_dir.iterdir()
+                            if f.is_file() and f.suffix.lower() == ".csv"
+                        )
+                    ),
+                    tracks=tracks,
+                )
+            )
+
+        if unreadable:
+            logger.warning(
+                "list_subjects: %d of %d subject(s) under %s have unreadable "
+                "glucose and are reported with no coverage: %s",
+                len(unreadable),
+                len(subject_dirs),
+                root_path,
+                "; ".join(f"{k} ({v})" for k, v in sorted(unreadable.items())),
+            )
+
+        return tuple(entries)
+
+    @classmethod
+    def _subject_track_coverage(
+        cls,
+        subject_dir: Path,
+        format_type: SupportedCGMFormat,
+    ) -> Tuple[TrackCoverage, ...]:
+        """Count glucose values per track, straight from the subject's source.
+
+        Deliberately **not** built on the parser: an independently authored
+        count is what makes comparing it against a parsed frame a real check
+        rather than a restatement (`CLAUDE.md` §2). It reads raw cells, so it
+        counts what the source offered; the parser counts what the schema can
+        hold, and the two differing is information.
+
+        Header handling still goes through the vendor schema's own
+        `normalize_headers`, because absorbing a renamed column is not a second
+        opinion about the data — it is the same aliasing the parser does, and
+        duplicating it by hand is exactly the drift that rule guards against.
+        """
+        if format_type == SupportedCGMFormat.CGMACROS:
+            return cls._cgmacros_track_coverage(subject_dir)
+        return cls._d1namo_track_coverage(subject_dir)
+
+    @classmethod
+    def _cgmacros_track_coverage(cls, subject_dir: Path) -> Tuple[TrackCoverage, ...]:
+        """Per-sensor coverage for one CGMacros subject."""
+        subject_csv = subject_dir / f"{subject_dir.name}.csv"
+        if not subject_csv.exists():
+            raise MalformedDataError(
+                f"CGMacros subject directory has no subject CSV: {subject_dir}"
+            )
+
+        raw = pl.read_csv(
+            subject_csv, infer_schema_length=0, truncate_ragged_lines=True
+        )
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        raw = CGMACROS_SCHEMA.normalize_headers(raw)
+
+        ts_col = CGMacrosColumn.TIMESTAMP.value
+        ts_format = cls._probe_timestamp_format(
+            raw, ts_col, CGMACROS_TIMESTAMP_FORMATS
+        )
+        raw = raw.with_columns(
+            pl.col(ts_col)
+            .str.strptime(pl.Datetime("ms"), ts_format, strict=False)
+            .alias("_ts")
+        )
+
+        rows = len(raw)
+        coverage: List[TrackCoverage] = []
+        for track in CGMACROS_TRACKS:
+            column = CGMACROS_TRACK_COLUMNS[track]
+            if column not in raw.columns:
+                # Absent entirely: "we could not look", so no entry rather than
+                # an entry claiming zero readings.
+                continue
+            coverage.append(
+                cls._coverage_from(track, raw, column, rows)
+            )
+        return tuple(coverage)
+
+    @classmethod
+    def _d1namo_track_coverage(cls, subject_dir: Path) -> Tuple[TrackCoverage, ...]:
+        """Coverage for one D1NAMO subject — one track, sensor or fingerstick."""
+        glucose_path = subject_dir / "glucose.csv"
+        if not glucose_path.exists():
+            raise MalformedDataError(
+                f"D1NAMO subject directory has no glucose.csv: {subject_dir}"
+            )
+
+        raw = pl.read_csv(glucose_path, infer_schema_length=0)
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        raw = raw.with_columns(
+            cls._d1namo_timestamp(
+                raw,
+                D1namoGlucoseColumn.DATE.value,
+                D1namoGlucoseColumn.TIME.value,
+            ).alias("_ts")
+        )
+        return (
+            cls._coverage_from(
+                D1NAMO_TRACK,
+                raw,
+                D1namoGlucoseColumn.GLUCOSE.value,
+                len(raw),
+                null_literals=D1NAMO_NULL_LITERALS,
+            ),
+        )
+
+    @classmethod
+    def _coverage_from(
+        cls,
+        track: str,
+        raw: pl.DataFrame,
+        column: str,
+        rows: int,
+        null_literals: Tuple[str, ...] = ("",),
+    ) -> TrackCoverage:
+        """Build one `TrackCoverage` from a raw frame carrying a `_ts` column.
+
+        A cell counts when it holds something after stripping. What counts as
+        "did not say" is the vendor's own spelling and therefore a parameter:
+        an empty cell everywhere, plus D1NAMO's literal `No information`. A
+        cell holding anything else is counted **even if the parser will later
+        reject it**, because what the source offered and what the schema can
+        hold are two different facts (`CLAUDE.md` §5) and one number cannot
+        carry both.
+        """
+        said_something = (
+            pl.col(column).is_not_null()
+            & pl.col(column).str.strip_chars().is_in(list(null_literals)).not_()
+        )
+        present = raw.filter(said_something)
+        timestamps = present.get_column("_ts").drop_nulls()
+        return TrackCoverage(
+            track=track,
+            values=len(present),
+            rows=rows,
+            first=timestamps.min() if len(timestamps) else None,
+            last=timestamps.max() if len(timestamps) else None,
+        )
+
+    # ===== D1NAMO: a bundle-per-subject corpus =====
+
+    @classmethod
+    def _d1namo_timestamp(
+        cls,
+        frame: pl.DataFrame,
+        date_col: str,
+        time_col: str,
+    ) -> pl.Expr:
+        """Combine D1NAMO's split date and time into one datetime expression.
+
+        The healthy subset omits seconds (`11:35`), the diabetes subset does
+        not (`19:14:00`), and both appear under the same header. Concatenating
+        then probing a format tuple handles both without a per-subset branch.
+        """
+        combined = pl.concat_str(
+            [pl.col(date_col).str.strip_chars(), pl.col(time_col).str.strip_chars()],
+            separator=" ",
+        )
+        best: Optional[Tuple[str, int]] = None
+        for date_fmt in D1NAMO_DATE_FORMATS:
+            for time_fmt in D1NAMO_TIME_FORMATS:
+                candidate = f"{date_fmt} {time_fmt}"
+                probe = frame.select(
+                    combined.str.strptime(
+                        pl.Datetime("ms"), candidate, strict=False
+                    ).alias("probe")
+                )
+                unparsed = probe["probe"].null_count()
+                if unparsed < len(frame) and (best is None or unparsed < best[1]):
+                    best = (candidate, unparsed)
+                    if unparsed == 0:
+                        break
+            if best is not None and best[1] == 0:
+                break
+
+        if best is not None:
+            candidate, unparsed = best
+            if unparsed:
+                # The module docstring calls mixed timestamp conventions "the
+                # trap most likely to produce silently wrong data", so a row
+                # dropped for an unreadable timestamp gets the same visibility
+                # a glucose value we cannot represent already gets. Aggregated
+                # by reason with a count, never one warning per row.
+                logger.warning(
+                    "%d of %d row(s) had a %s+%s value that no D1NAMO timestamp "
+                    "format could read and were dropped (best match %r).",
+                    unparsed,
+                    len(frame),
+                    date_col,
+                    time_col,
+                    candidate,
+                )
+            return combined.str.strptime(pl.Datetime("ms"), candidate, strict=False)
+        raise MalformedDataError(
+            f"No D1NAMO timestamp format parsed {date_col}+{time_col}; "
+            f"tried {D1NAMO_DATE_FORMATS} x {D1NAMO_TIME_FORMATS}"
+        )
+
+    @classmethod
+    def _process_d1namo_subject(
+        cls,
+        subject_dir: Union[str, Path],
+    ) -> UnifiedFormat:
+        """Parse one D1NAMO subject directory — a bundle of modality files.
+
+        Glucose, insulin, meals and annotations are separate files describing
+        one person, merged into one frame. Which files exist identifies the
+        subset: `insulin.csv` only in diabetes, `annotations.csv` only in
+        healthy.
+
+        Fingersticks map to `CALIBRAT`, never `EGV_READ` (D6): only `type ==
+        "cgm"` is a continuous sensor reading, and the healthy subset has no
+        CGM at all.
+
+        `carbs` stays null throughout — D1NAMO records no carbohydrate
+        anywhere, and a zero would assert something the source never said.
+        """
+        directory = Path(subject_dir)
+        glucose_path = directory / "glucose.csv"
+        if not glucose_path.exists():
+            raise MalformedDataError(
+                f"D1NAMO subject directory has no glucose.csv: {directory}"
+            )
+
+        frames: List[pl.DataFrame] = []
+        schema = UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.D1NAMO_DIABETES]
+
+        # --- glucose.csv: readings, mmol/L, sensor vs fingerstick ---
+        raw = pl.read_csv(glucose_path, infer_schema_length=0)
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        gcol = D1namoGlucoseColumn.GLUCOSE.value
+        raw = raw.with_columns(
+            cls._d1namo_timestamp(
+                raw,
+                D1namoGlucoseColumn.DATE.value,
+                D1namoGlucoseColumn.TIME.value,
+            ).alias("datetime"),
+            # Cast from text, non-strict: a value the schema cannot represent
+            # becomes null here and is REPORTED below rather than dropped
+            # silently. Leading zeros ("08.2") parse fine; a colon typed for a
+            # decimal point ("7:0") does not, and that difference is a finding,
+            # not a nuisance.
+            pl.col(gcol).str.strip_chars().cast(pl.Float64, strict=False).alias("_gl"),
+        )
+
+        unrepresentable = raw.filter(
+            pl.col(gcol).str.strip_chars().is_in(D1NAMO_NULL_LITERALS).not_()
+            & pl.col(gcol).is_not_null()
+            & pl.col("_gl").is_null()
+        )
+        if len(unrepresentable) > 0:
+            # "The source said something we cannot represent" is a different
+            # report from "the source did not say" — the empty cells below.
+            offenders = (
+                unrepresentable.get_column(gcol).value_counts().iter_rows()
+            )
+            logger.warning(
+                "%s: %d glucose reading(s) carried a value the schema cannot "
+                "represent and were dropped: %s",
+                directory.name,
+                len(unrepresentable),
+                ", ".join(f"{v!r} x{n}" for v, n in offenders),
+            )
+
+        readings = raw.drop_nulls("datetime").filter(pl.col("_gl").is_not_null())
+        if len(readings) > 0:
+            type_col = pl.col(D1namoGlucoseColumn.TYPE.value).str.strip_chars()
+            frames.append(
+                readings.with_columns(
+                    # Only `cgm` is a sensor trace. Everything else is a
+                    # fingerstick and says so.
+                    pl.when(type_col.is_in(list(D1NAMO_SENSOR_TYPES)))
+                    .then(pl.lit(UnifiedEventType.GLUCOSE.value))
+                    .otherwise(pl.lit(UnifiedEventType.CALIBRATION.value))
+                    .alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                    cls._glucose_to_canonical(
+                        D1NAMO_GLUCOSE_SCHEMA, gcol, pl.col("_gl")
+                    ).alias("glucose"),
+                    pl.format(
+                        '{{"reading_type":"{}"}}',
+                        type_col.fill_null(""),
+                    ).alias("annotations"),
+                ).select("datetime", "event_type", "quality", "glucose", "annotations")
+            )
+
+        # --- insulin.csv: diabetes subset only ---
+        insulin_path = directory / "insulin.csv"
+        if insulin_path.exists():
+            ins = pl.read_csv(insulin_path, infer_schema_length=0)
+            ins = ins.rename({c: c.strip() for c in ins.columns})
+            ins = ins.with_columns(
+                cls._d1namo_timestamp(
+                    ins,
+                    D1namoInsulinColumn.DATE.value,
+                    D1namoInsulinColumn.TIME.value,
+                ).alias("datetime"),
+                pl.col(D1namoInsulinColumn.FAST_INSULIN.value)
+                .cast(pl.Float64, strict=False)
+                .alias("insulin_fast"),
+                pl.col(D1namoInsulinColumn.SLOW_INSULIN.value)
+                .cast(pl.Float64, strict=False)
+                .alias("insulin_slow"),
+            ).drop_nulls("datetime")
+
+            fast = ins.filter(pl.col("insulin_fast").is_not_null()).with_columns(
+                pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+                pl.lit(0, dtype=pl.Int64).alias("quality"),
+            )
+            if len(fast) > 0:
+                frames.append(
+                    fast.select("datetime", "event_type", "quality", "insulin_fast")
+                )
+            slow = ins.filter(pl.col("insulin_slow").is_not_null()).with_columns(
+                pl.lit(UnifiedEventType.INSULIN_SLOW.value).alias("event_type"),
+                pl.lit(0, dtype=pl.Int64).alias("quality"),
+            )
+            if len(slow) > 0:
+                frames.append(
+                    slow.select("datetime", "event_type", "quality", "insulin_slow")
+                )
+
+        # --- annotations.csv: healthy subset only, interval-shaped events ---
+        # Detection REQUIRES this file for the healthy subset, so reading the
+        # directory and then ignoring it would be a silent drop of primary
+        # data. Only the interval START becomes a row: the unified format is
+        # instant-shaped, and inventing an end row would double-count the
+        # event. The end is preserved in the annotation so nothing is lost.
+        annotations_path = directory / "annotations.csv"
+        if annotations_path.exists():
+            events = pl.read_csv(annotations_path, infer_schema_length=0)
+            events = events.rename({c: c.strip() for c in events.columns})
+            if len(events) > 0:
+                events = events.with_columns(
+                    cls._d1namo_timestamp(
+                        events,
+                        D1namoAnnotationColumn.START_DATE.value,
+                        D1namoAnnotationColumn.START_TIME.value,
+                    ).alias("datetime"),
+                ).drop_nulls("datetime")
+            if len(events) > 0:
+                frames.append(
+                    events.with_columns(
+                        pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                        pl.lit(0, dtype=pl.Int64).alias("quality"),
+                        pl.format(
+                            '{{"annotation_type":{},"description":{},"end_date":{},"end_time":{}}}',
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.TYPE.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.DESCRIPTION.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.END_DATE.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.END_TIME.value).str.strip_chars()
+                            ),
+                        ).alias("annotations"),
+                    ).select("datetime", "event_type", "quality", "annotations")
+                )
+
+        # --- food.csv: two different headers, one per subset ---
+        food_path = directory / "food.csv"
+        if food_path.exists():
+            frames.extend(cls._d1namo_food_frames(food_path, directory))
+
+        if not frames:
+            raise ZeroValidInputError(
+                f"No usable D1NAMO rows in {directory}"
+            )
+
+        unified = pl.concat(frames, how="diagonal")
+        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+        return cls._postprocess_unified(unified, schema=schema)
+
+    @classmethod
+    def _d1namo_food_frames(
+        cls,
+        food_path: Path,
+        directory: Path,
+    ) -> List[pl.DataFrame]:
+        """Meal rows from either subset's `food.csv`.
+
+        The two headers are a different column set, not a rename: the diabetes
+        subset carries one EXIF-style `datetime`, the healthy subset a split
+        `date` + `time`. Dispatch is on which columns are present.
+
+        Photo references get two distinct reports. A blank cell is "the subject
+        recorded no photograph"; a cell naming a file that is not on disk is
+        "the source said something we cannot resolve". Collapsing them into one
+        message would lose the difference.
+        """
+        food = pl.read_csv(food_path, infer_schema_length=0)
+        food = food.rename({c: c.strip() for c in food.columns})
+
+        if D1namoFoodColumn.DATETIME.value in food.columns:
+            stamp = None
+            for fmt in D1NAMO_FOOD_DATETIME_FORMATS:
+                probe = food.select(
+                    pl.col(D1namoFoodColumn.DATETIME.value)
+                    .str.strip_chars()
+                    .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    .alias("p")
+                )
+                if probe["p"].null_count() < len(food):
+                    stamp = (
+                        pl.col(D1namoFoodColumn.DATETIME.value)
+                        .str.strip_chars()
+                        .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    )
+                    break
+            if stamp is None:
+                # Diabetes subject 005 carries the literal "NA" in `datetime`
+                # on every one of its 9 meal rows — the only subject in the
+                # corpus that does. A meal with no time cannot be placed on a
+                # timeline, so the file yields nothing; but that is a reason to
+                # drop the *meals*, not the subject's glucose and insulin.
+                # Reported prominently, never silently.
+                logger.warning(
+                    "%s: no meal timestamp could be parsed from %s (all values "
+                    "unparseable, e.g. the literal 'NA'). Meals are omitted "
+                    "for this subject; glucose and insulin are unaffected.",
+                    directory.name,
+                    food_path.name,
+                )
+                return []
+        else:
+            stamp = cls._d1namo_timestamp(
+                food,
+                D1namoHealthyFoodColumn.DATE.value,
+                D1namoHealthyFoodColumn.TIME.value,
+            )
+
+        picture = pl.col(D1namoFoodColumn.PICTURE.value).str.strip_chars()
+        balance = pl.col(D1namoFoodColumn.BALANCE.value).str.strip_chars()
+        quality_label = pl.col(D1namoFoodColumn.QUALITY.value).str.strip_chars()
+
+        food = food.with_columns(
+            stamp.alias("datetime"),
+            pl.col(D1namoFoodColumn.CALORIES.value)
+            .str.strip_chars()
+            .cast(pl.Float64, strict=False)
+            .alias("calories"),
+        ).drop_nulls("datetime")
+
+        # Two separate reports, deliberately.
+        photo_dir = directory / "food_pictures"
+        on_disk = (
+            {p.name for p in photo_dir.iterdir() if p.suffix.lower() == ".jpg"}
+            if photo_dir.is_dir()
+            else set()
+        )
+        referenced = [
+            v.strip()
+            for v in food.get_column(D1namoFoodColumn.PICTURE.value).to_list()
+            if v and v.strip()
+        ]
+        absent = len(food) - len(referenced)
+        dangling_rows = [v for v in referenced if v not in on_disk]
+        dangling = sorted(set(dangling_rows))
+        if dangling:
+            # Both numbers, because they differ: fifty rows may reference one
+            # missing file. Reporting only the set size would understate the
+            # affected rows, and only the row count would hide that they are
+            # the same reference repeated.
+            logger.warning(
+                "%s: %d meal row(s) reference %d photograph(s) not on disk: %s. "
+                "The cells hold text where a filename belongs, so the "
+                "reference cannot be resolved (distinct from a blank cell).",
+                directory.name,
+                len(dangling_rows),
+                len(dangling),
+                ", ".join(repr(d) for d in dangling[:8]),
+            )
+        if absent:
+            logger.info(
+                "%s: %d meal row(s) recorded no photograph at all.",
+                directory.name,
+                absent,
+            )
+
+        annotations = pl.format(
+            '{{"balance":{},"description":{},"picture":{},"quality":{}}}',
+            cls._d1namo_json_str(balance),
+            cls._d1namo_json_str(
+                pl.col(D1namoFoodColumn.DESCRIPTION.value)
+                .str.strip_chars()
+                # Free text containing commas is already handled by the CSV
+                # reader; quotes would break the JSON, so they are stripped.
+                .str.replace_all('"', "")
+            ),
+            cls._d1namo_json_str(picture),
+            cls._d1namo_json_str(quality_label),
+        )
+
+        meals = food.with_columns(
+            pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            annotations.alias("annotations"),
+        )
+        if len(meals) == 0:
+            return []
+        # `carbs` is deliberately absent: D1NAMO records no carbohydrate
+        # anywhere, and _postprocess_unified will add it as a typed null. A
+        # zero would assert something the source never said.
+        return [meals.select("datetime", "event_type", "quality", "calories", "annotations")]
+
+    @staticmethod
+    def _d1namo_json_str(expr: pl.Expr) -> pl.Expr:
+        """Render a text column as a JSON string or literal null.
+
+        `No information` and an empty cell both mean the source did not say, so
+        both become JSON `null` rather than the string "No information" — but
+        the corrupt `8 Balance""` is a real value we cannot interpret and is
+        preserved verbatim for a reader to see.
+        """
+        return (
+            pl.when(expr.is_null() | expr.is_in(list(D1NAMO_NULL_LITERALS)))
+            .then(pl.lit("null"))
+            .otherwise(pl.format('"{}"', expr.str.replace_all('"', "")))
+        )
+
+    @classmethod
+    def _parse_d1namo_corpus(
+        cls,
+        root: Path,
+        subjects: Optional[Sequence[str]] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Walk a D1NAMO subset directory, one bundle per subject.
+
+        Single-track, so keys are bare subject ids with no `/track` suffix.
+        Subject ids come from the directory names, which is why the separator
+        cannot be `_`: the healthy subset's twelfth subject is literally named
+        `012_diabetes`, and a `_` split would mis-key it.
+        """
+        subject_dirs = cls._select_subject_dirs(
+            sorted(
+                (
+                    d for d in root.iterdir()
+                    if d.is_dir() and (d / "glucose.csv").exists()
+                ),
+                key=lambda d: d.name,
+            ),
+            subjects,
+            root,
+        )
+
+        results: Dict[str, UnifiedFormat] = {}
+        failures: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            try:
+                results[subject_dir.name] = cls._process_d1namo_subject(subject_dir)
+            except (MalformedDataError, ZeroValidInputError) as e:
+                failures[subject_dir.name] = str(e)[:200]
+
+        if failures:
+            logger.warning(
+                "parse_corpus: %d of %d D1NAMO subject(s) yielded no frame: %s",
+                len(failures),
+                len(subject_dirs),
+                "; ".join(f"{k} ({v})" for k, v in sorted(failures.items())),
+            )
+
+        if not results:
+            raise ZeroValidInputError(f"No parseable D1NAMO subjects under {root}")
+
+        return results

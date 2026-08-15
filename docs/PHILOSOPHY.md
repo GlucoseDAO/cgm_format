@@ -46,9 +46,31 @@ The pipeline has a hard boundary between vendor-specific and vendor-agnostic cod
 
 **Parser (Stages 1–3):** Knows about BOM marks, Dexcom metadata rows, Libre record types, and vendor timestamp formats. Its job is to emit a `UnifiedFormat` DataFrame. Once that DataFrame exists, the vendor is irrelevant.
 
-**Processor (Stages 4–6):** Operates only on `UnifiedFormat`. Sequences, interpolation, synchronization, calibration marking, and inference preparation are vendor-agnostic. A new sensor format requires zero changes to the processor.
+**Processor (Stages 4–6):** Operates only on `UnifiedFormat`. Sequences, interpolation, synchronization, calibration marking, and inference preparation are vendor-agnostic. The processor never learns a vendor — that boundary is absolute. It does learn a *schema*: `FormatProcessor.schema` is a `ClassVar` naming the schema every stage validates, enforces, sorts and narrows against, so a source whose signal does not fit the six core data columns is served by a subclass (`ExtendedFormatProcessor`, schema `CGM_SCHEMA_EXTENDED`) rather than by a vendor branch. A new sensor format still requires zero changes to the processor; a new *measurement channel* requires a wider schema and nothing else.
 
-**Registry (`supported.py`):** Detection patterns, schema mappings, and known validation suppressions live in a central registry — not scattered across parser branches. Adding a vendor means adding entries here, not modifying core logic.
+**Registry (`supported.py`):** Detection patterns, schema mappings, source categories, path probes, and known validation suppressions live in a central registry — not scattered across parser branches. Adding a vendor means adding entries here, not modifying core logic. Registries hold **data only, never callables**: a predicate in a registry is parser logic that has escaped the parser.
+
+---
+
+## Source Categories
+
+A source is described by two independent questions — how many *files* arrive, and how many *subjects* are in them. Those axes are orthogonal, so they give three categories rather than a spectrum:
+
+**Export** — one file, one subject. `parse_file(path) -> UnifiedFormat`. Every vendor export.
+
+**Bundle** — several files, **one** subject, each file a different *modality*: glucose here, insulin there, meals in a third. `parse_bundle(paths) -> UnifiedFormat`, merging on the modality axis with a diagonal concat. A member may be the subject's *directory* rather than its files, because for a corpus whose members are folders the directory is the bundle — and naming the files individually cannot work where one modality alone is not a record.
+
+**Corpus** — many subjects. `parse_corpus(root) -> dict[str, UnifiedFormat]`, one frame per subject.
+
+The categories **compose**: a corpus's member is a bundle or an export, so `parse_corpus` is built out of `parse_bundle` rather than implemented a third time.
+
+**Selecting a subject is part of the category, not a convenience.** A corpus entry point that only ever returns everything makes the smallest useful question — "parse this one person" — cost the largest possible answer, and pushes callers into reaching past the API for it. So `parse_corpus(root, subjects=[...])` prunes the walk *before* parsing, and `list_subjects(root)` enumerates what may be passed to it, with each subject's modality files and per-track glucose coverage. The ids are read off the corpus rather than derived: D1NAMO's healthy subset contains a directory named `012_diabetes` and CGMacros runs `001`–`049` with four numbers missing, so no convention predicts them. A filter naming a subject that is not there **raises** rather than returning a smaller mapping — a silent miss is indistinguishable from a subject with no data.
+
+**Coverage counts what the source offered, not what the schema kept.** `list_subjects` reads raw glucose cells; the parser then rejects what it cannot represent and says so. The two numbers legitimately differ, and that difference is a finding rather than an inconsistency to reconcile — collapsing them into one would hide exactly the defect the parser's warning exists to surface.
+
+**A bundle merges modalities. It never merges subjects.** Two files from different people concatenate exactly as cleanly as two modalities from one person, and nothing downstream objects: parsing sorts by `datetime`, so the subjects interleave; sequence detection then splices them into shared sequences; interpolation invents rows bridging one person's Tuesday to another's Thursday. No check can catch this, because a subject's identity is not in the data — which is the whole reason identity lives in a mapping key and never in a column. The caller owns that guarantee, and the docstrings say so.
+
+**Detection has two mechanisms and three registries.** `detect_format` matches patterns against a text prefix, which works when a source is a single file. A bundle or corpus is identified by *directory shape* instead, so `detect_path_format` matches glob probes against a tree, and `detect_subject_format` does the same one directory level down. Two path registries rather than one, because "is this a corpus?" and "is this one member of one?" are different questions and the shapes differ by exactly that level — a probe answering both would make a root indistinguishable from its own subject, which would parse a whole corpus as one person. Same contract throughout: registry order is priority, probes are conjunctive, first match wins, unknown raises rather than guesses. When a subject probe fails on something that *is* a corpus root, the error says so and names `parse_corpus`; an unqualified "unknown" would withhold the answer the caller needs.
 
 ---
 
@@ -140,4 +162,6 @@ These principles translate into a concrete checklist:
 
 6. **Write integration tests**: Use real vendor CSV files in `data/input/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
 
-The processor, schema validation, CLI, and all downstream consumers require zero changes — they only see `UnifiedFormat`.
+The processor and schema validation require no changes for a new *vendor* — they only see `UnifiedFormat`, and the processor reads its target schema from `FormatProcessor.schema` rather than naming one. A source that carries measurement channels the core six data columns cannot hold (macronutrients, wearable streams, free-form annotations) targets `CGM_SCHEMA_EXTENDED` and is processed by `ExtendedFormatProcessor`; that is a schema choice, not a vendor branch.
+
+The CLI is the exception, and it is worth being honest about why. It is not derived from the registries by construction — it is written against them by hand — so it can fall behind them without anything failing. It did: until 0.10.0, `cgm-cli report` enumerated a hardcoded three-format list and silently omitted four formats the library had supported for releases. It iterates `SCHEMA_MAP` now, but the general hazard is unchanged. Adding a format means adding its registry entries **and** checking that the CLI actually reaches it.

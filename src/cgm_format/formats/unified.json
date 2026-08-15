@@ -19,7 +19,7 @@
     {
       "name": "quality",
       "type": "integer",
-      "description": "Data quality indicator (0=GOOD, 1=ILL, 2=SENSOR_CALIBRATION)",
+      "description": "Data quality indicator \u2014 bitwise Quality flags stored as Int64 (0=GOOD_QUALITY, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, 32=TRACK_MERGE; combine with |, test with &)",
       "constraints": {
         "required": true,
         "enum": [
@@ -28,7 +28,8 @@
           2,
           4,
           8,
-          16
+          16,
+          32
         ]
       }
     },
@@ -112,7 +113,7 @@
       "name": "exercise",
       "type": "integer",
       "description": "Duration of exercise activity",
-      "unit": "seconds",
+      "unit": "s",
       "constraints": {
         "minimum": 0
       }

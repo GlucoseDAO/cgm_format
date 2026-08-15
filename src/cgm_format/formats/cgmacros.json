@@ -1,0 +1,127 @@
+{
+  "fields": [
+    {
+      "name": "Timestamp",
+      "type": "string",
+      "description": "Reading timestamp on the authors' common 1-minute grid",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Libre GL",
+      "type": "number",
+      "description": "FreeStyle Libre Pro glucose reading",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Dexcom GL",
+      "type": "number",
+      "description": "Dexcom G6 Pro glucose reading",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "HR",
+      "type": "number",
+      "description": "Heart rate from the wearable",
+      "unit": "bpm",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Calories (Activity)",
+      "type": "number",
+      "description": "Energy expenditure attributed to activity",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "METs",
+      "type": "number",
+      "description": "Metabolic equivalent of task, stored multiplied by 10",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Meal Type",
+      "type": "string",
+      "description": "Meal label; ten raw spellings for four meals"
+    },
+    {
+      "name": "Calories",
+      "type": "number",
+      "description": "Energy content of the recorded meal",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Carbs",
+      "type": "number",
+      "description": "Carbohydrate content of the recorded meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Protein",
+      "type": "number",
+      "description": "Protein content of the recorded meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Fat",
+      "type": "number",
+      "description": "Fat content of the recorded meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Fiber",
+      "type": "number",
+      "description": "Fiber content of the recorded meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Amount Consumed",
+      "type": "number",
+      "description": "Percentage of the recorded meal actually eaten. Absent entirely from 2 of 45 subjects; one more spells it with a trailing space.",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "Image path",
+      "type": "string",
+      "description": "Meal photograph, relative to the subject directory"
+    },
+    {
+      "name": "Steps",
+      "type": "number",
+      "description": "Step count; present for 1 of 45 subjects",
+      "constraints": {
+        "minimum": 0
+      }
+    }
+  ]
+}

@@ -4,6 +4,8 @@ This test suite verifies that all commonly used classes, functions, and constant
 are properly exported at the appropriate package levels for user convenience.
 """
 
+import types
+
 import pytest
 
 
@@ -188,18 +190,49 @@ class TestMainPackageExports:
         assert LibreRecordType.FOOD == 5
 
     def test_all_exports_listed_in_all(self) -> None:
-        """Test that __all__ is properly defined."""
+        """`__all__` matches what the package actually imports, exactly.
+
+        An equality assertion rather than a spot check on four names: this is a
+        published package with an API contract (`CLAUDE.md` §5), and the failure
+        this guards is a new entry point being added to the import block in
+        `__init__.py` and forgotten in `__all__` — which a presence check on
+        four unrelated names cannot see.
+
+        The comparison is against the module's own public namespace, so it
+        needs no hand-maintained list to drift from. Submodules are excluded —
+        `cgm_format.formats` is bound as a side effect of importing from it,
+        not because the package exports it — while `__version__` is kept, since
+        the package does deliberately export it.
+        """
         import cgm_format
-        
-        assert hasattr(cgm_format, '__all__')
+
         assert isinstance(cgm_format.__all__, list)
-        assert len(cgm_format.__all__) > 0
-        
-        # Check that key items are in __all__
-        assert 'FormatParser' in cgm_format.__all__
-        assert 'FormatProcessor' in cgm_format.__all__
-        assert 'ValidationMethod' in cgm_format.__all__
-        assert 'CGM_SCHEMA' in cgm_format.__all__
+        assert len(cgm_format.__all__) == len(set(cgm_format.__all__)), (
+            "__all__ contains duplicate entries"
+        )
+
+        public_namespace = {
+            name
+            for name in vars(cgm_format)
+            if (not name.startswith('_') or name == '__version__')
+            and not isinstance(getattr(cgm_format, name), types.ModuleType)
+        }
+
+        assert set(cgm_format.__all__) == public_namespace, (
+            "__all__ and the imported public namespace disagree — "
+            f"missing from __all__: {sorted(public_namespace - set(cgm_format.__all__))}; "
+            f"in __all__ but not imported: {sorted(set(cgm_format.__all__) - public_namespace)}"
+        )
+
+    def test_every_name_in_all_is_actually_importable(self) -> None:
+        """A name in `__all__` that resolves to nothing breaks `import *`."""
+        import cgm_format
+
+        unresolvable = [
+            name for name in cgm_format.__all__ if not hasattr(cgm_format, name)
+        ]
+
+        assert not unresolvable, f"__all__ names nothing importable: {unresolvable}"
 
 
 class TestCrossPackageImportConsistency:

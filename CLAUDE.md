@@ -42,7 +42,8 @@ Delegation is for finding things, never for deciding them.
    [docs/PIPELINE.md](docs/PIPELINE.md) (stage detail),
    [docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md) (schema),
    [docs/USAGE.md](docs/USAGE.md) (public API),
-   [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist).
+   [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist),
+   [docs/RESEARCH_CORPORA.md](docs/RESEARCH_CORPORA.md) (multi-subject / multi-device datasets).
 
 Everything below is self-contained: no rule here requires following a link to know what you must not
 do. Links carry positive detail only.
@@ -64,7 +65,12 @@ Supporting modules:
   `CGMSchemaDefinition`).
 - `formats/{dexcom,dexcom_eu,libre,libre_eu,medtronic,nightscout}.py` — vendor column enums, detection
   patterns, schemas.
-- `formats/supported.py` — `FORMAT_DETECTION_PATTERNS`, `SCHEMA_MAP`, `KNOWN_ISSUES_TO_SUPPRESS`.
+- `formats/supported.py` — eight registries: `SCHEMA_MAP`, `FORMAT_DETECTION_PATTERNS`,
+  `FORMAT_DETECTION_LINE_COUNT`, `UNIFIED_TARGET_SCHEMA`, `FORMAT_CATEGORY`,
+  `KNOWN_ISSUES_TO_SUPPRESS` (all six exhaustive over `SupportedCGMFormat`), plus
+  `PATH_DETECTION_PROBES` and `SUBJECT_PATH_PROBES` for directory-shaped sources only. The last two
+  must stay disjoint — a corpus root that matches a subject probe parses the whole corpus as one
+  person.
 - `interface/cgm_interface.py` — abstract `CGMParser` / `CGMProcessor`, all exception types,
   `ProcessingWarning`, constants, the `SupportedCGMFormat` enum.
 - `interface/schema.py` — `CGMSchemaDefinition`, `ColumnSchema`, `EnumLiteral`, Frictionless export
@@ -334,7 +340,7 @@ show the output, and wait for approval. Installation-specific files stay out.
   appears (a Nightscout response model behind the `cli` extra is the plausible one), that is a §1
   questionnaire, not a silent adoption.
 - **Standard-library `logging` for diagnostics — never `print`.** `print` is only for CLI output the
-  user asked to see. *(Tech debt: `interface/schema.py:477` prints from a schema-regen helper — RM1
+  user asked to see. *(Tech debt: `interface/schema.py:519` prints from a schema-regen helper — RM1
   in `docs/ROADMAP.md`.)*
 - **Polars idiom.** Prefer expressions (`with_columns`, `filter`, `group_by`, `join_asof`) over
   Python loops; lazyframes (`scan_*`) and streaming (`sink_*`) on large data paths — keep hot paths
@@ -375,7 +381,7 @@ show the output, and wait for approval. Installation-specific files stay out.
   free to change. The exception is the *contract* — the schema shape, the CLI surface, the public
   API: breaking it is allowed, but deliberate and versioned (see the active-development note above).
 - **Version comes only from `importlib.metadata.version("cgm-format")`.** *(Tech debt:
-  `__init__.py:27` hardcodes a dev-fallback literal; the right fix is an editable install
+  `__init__.py:33` hardcodes a dev-fallback literal; the right fix is an editable install
   (`uv sync`) so metadata is always present, then drop it — RM2 in `docs/ROADMAP.md`.)*
 
 ### 5.1 Type system — this repo's idiom
@@ -604,8 +610,11 @@ Repo-specific detail that has no home in the house sections. Prohibitions here a
 
 1. **Create `formats/<vendor>.py`**: file-layout constants, detection patterns, column enums
    (subclassing `EnumLiteral`), and a `CGMSchemaDefinition` for the raw CSV columns.
-2. **Register in `supported.py`**: `FORMAT_DETECTION_PATTERNS`, `SCHEMA_MAP`, and optionally
-   `KNOWN_ISSUES_TO_SUPPRESS` for vendor CSV quirks Frictionless would flag.
+2. **Register in `supported.py`**: an entry in each of the six exhaustive registries —
+   `SCHEMA_MAP`, `FORMAT_DETECTION_PATTERNS`, `FORMAT_DETECTION_LINE_COUNT`, `UNIFIED_TARGET_SCHEMA`,
+   `FORMAT_CATEGORY`, `KNOWN_ISSUES_TO_SUPPRESS` (`[]` if the format has no Frictionless quirks to
+   tolerate) — plus `PATH_DETECTION_PROBES` and `SUBJECT_PATH_PROBES` if the source is a directory
+   rather than a file. `docs/NEW_SCHEMA.md` has the table with what each one holds.
 3. **Add the enum value** to `SupportedCGMFormat` in `interface/cgm_interface.py`.
 4. **Implement parsing**: a `_process_<vendor>` method + dispatch branch in `FormatParser`. It must
    map vendor→unified columns, probe/normalize timestamps, handle edge cases (out-of-range markers,

@@ -81,6 +81,21 @@ uv run python examples/example_cli_usage.py --skip-slow
 
 See [scripts/README.md](scripts/README.md) for complete command reference.
 
+### Corpora
+
+```bash
+cgm-cli detect   /data/CGMacros                   # identifies a directory by shape
+cgm-cli subjects /data/CGMacros                   # ids, modalities, glucose coverage
+cgm-cli corpus   /data/CGMacros --out parsed/     # one CSV per subject per track
+cgm-cli corpus   /data/d1namo/healthy_subset      # single-track: no --track
+cgm-cli corpus   /data/CGMacros --track libre     # multi-track: one sensor
+cgm-cli corpus   /data/CGMacros --subject CGMacros-001   # one subject's worth of work
+```
+
+`corpus` is a separate command rather than an option on `parse` or `batch`: `batch` globs a directory
+of *independent* files with one output each, while a corpus is one dataset whose members are keyed by
+subject.
+
 ## Quick Start
 
 ### Basic Parsing
@@ -583,6 +598,30 @@ df = FormatParser.parse_file("nightscout-data-with-treatments.csv")
 - ISO 8601 timestamps
 - Service columns + data columns
 - Validates existing unified format files
+
+### Research corpora (0.10.0)
+
+| Corpus | Shape | Entry point |
+|---|---|---|
+| **CGMacros** | 45 subjects, **two concurrent sensors** each | `parse_corpus()` → `"CGMacros-001/libre"` |
+| **D1NAMO** | 29 subjects, each a directory of modality files | `parse_corpus()` → `"012_diabetes"` |
+
+`list_subjects(root)` enumerates a corpus without parsing it — subject ids, which modality files each
+has, and how much glucose each track carries — and `parse_corpus(root, subjects=[...])` parses only
+the ones you pick. A D1NAMO subject can also be parsed on its own with
+`parse_bundle([subject_dir])`: for a corpus whose members are folders, the directory is the bundle.
+
+These carry channels the six core data columns cannot hold — macronutrients, heart rate, meal
+photographs — so they target `CGM_SCHEMA_EXTENDED` and are processed by `ExtendedFormatProcessor`.
+
+Neither corpus travels with the repo: CGMacros is CC BY-NC-SA and D1NAMO is CC BY-**SA**, whose
+share-alike carries onward to an excerpt. Synthetic fixtures reproducing their real defects are
+committed instead, and tests locate the real data by environment variable
+(`CGM_FORMAT_CGMACROS_DIR`, `CGM_FORMAT_D1NAMO_DIR`), skipping when it is absent.
+
+**Tracks are alternatives, never shards.** A CGMacros subject yields a `libre` frame and a `dexcom`
+frame, each a complete view of those ten days through one sensor, with meals and annotations
+replicated into both. Concatenating them double-counts every meal — pick one, or compare them.
 
 ## Project Structure
 

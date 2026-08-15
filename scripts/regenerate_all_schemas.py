@@ -67,7 +67,15 @@ def regenerate_schema(module_name: str, module_path: Path) -> bool:
         # Call the regenerate function
         regenerate_func: Callable[[], None] = getattr(module, "regenerate_schema_json")
         regenerate_func()
-        
+
+        # A module may declare a second schema whose JSON filename the
+        # one-JSON-per-module rule cannot derive (formats/unified.py declares
+        # both CGM_SCHEMA and CGM_SCHEMA_EXTENDED). Such a module exposes an
+        # extra, explicitly named regenerator.
+        if hasattr(module, "regenerate_extended_schema_json"):
+            extended_func: Callable[[], None] = getattr(module, "regenerate_extended_schema_json")
+            extended_func()
+
         return True
         
     except Exception as e:

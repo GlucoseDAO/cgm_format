@@ -5,7 +5,7 @@ Adapted from glucose_ml_preprocessor.py for single-user unified format processin
 """
 
 import polars as pl
-from typing import List, Tuple, ClassVar, Optional
+from typing import Dict, List, Tuple, ClassVar, Optional, Union
 from datetime import timedelta, datetime
 from cgm_format.interface.cgm_interface import (
     CGMProcessor,
@@ -22,7 +22,19 @@ from cgm_format.interface.cgm_interface import (
     CALIBRATION_GAP_THRESHOLD,
     CALIBRATION_PERIOD_HOURS,
 )
-from cgm_format.formats.unified import UnifiedEventType, Quality, CGM_SCHEMA
+from cgm_format.interface.schema import CGMSchemaDefinition
+from cgm_format.formats.unified import (
+    UnifiedEventType,
+    Quality,
+    CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+)
+
+
+# One imputed row, keyed by whatever columns the active schema declares. The
+# value union spans every dtype the unified schemas use; a key is always present
+# and maps to None when the row has nothing to say for that column.
+InterpolatedRow = Dict[str, Union[int, float, str, datetime, None]]
 
 
 class FormatProcessor(CGMProcessor):
@@ -36,9 +48,18 @@ class FormatProcessor(CGMProcessor):
     
     All methods are classmethods - no need to instantiate.
     Configuration constants can be overridden via optional method parameters.
+
+    The processor is **schema-parameterized, never vendor-aware**: `schema`
+    names the unified schema every stage validates, enforces, sorts and narrows
+    against. It is read as `cls.schema` at every site, including the ones that
+    enforce unconditionally regardless of `validation_mode` — those are the ones
+    that silently drop columns, so a subclass that overrode only the gated ones
+    would still lose data. Use `ExtendedFormatProcessor` for frames carrying the
+    extended schema's columns.
     """
-    
+
     # Configuration constants as ClassVars
+    schema: ClassVar[CGMSchemaDefinition] = CGM_SCHEMA
     expected_interval_minutes: ClassVar[int] = EXPECTED_INTERVAL_MINUTES
     small_gap_max_minutes: ClassVar[int] = SMALL_GAP_MAX_MINUTES
     minimum_duration_minutes: ClassVar[int] = MINIMUM_DURATION_MINUTES
@@ -75,7 +96,7 @@ class FormatProcessor(CGMProcessor):
 
         # Validate input if validation mode includes INPUT
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # For each datetime, mark which rows are duplicates (all but the first)
         # is_duplicated() returns True for ALL occurrences including the first
@@ -92,7 +113,7 @@ class FormatProcessor(CGMProcessor):
         
         # Validate output if validation mode includes OUTPUT
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df_marked, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(df_marked, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df_marked
         
@@ -142,7 +163,7 @@ class FormatProcessor(CGMProcessor):
         
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
         # Process each sequence separately
         unique_sequences = dataframe['sequence_id'].unique().to_list()
@@ -165,11 +186,11 @@ class FormatProcessor(CGMProcessor):
             synchronized_sequences.append(synced_seq)
         
         # Combine all sequences with stable sorting from schema definition
-        result_df = pl.concat(synchronized_sequences).sort(CGM_SCHEMA.get_stable_sort_keys())
+        result_df = pl.concat(synchronized_sequences).sort(cls.schema.get_stable_sort_keys())
         
         # Verify output dataframe matches schema
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return result_df
     
@@ -407,7 +428,7 @@ class FormatProcessor(CGMProcessor):
         # but that's handled during interpolation, not here
         
         # Ensure column order matches unified format
-        result = CGM_SCHEMA.validate_columns(result, enforce=True)
+        result = cls.schema.validate_columns(result, enforce=True)
         
         return result
     
@@ -461,7 +482,7 @@ class FormatProcessor(CGMProcessor):
         
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Process each sequence separately for interpolation
         unique_sequences = dataframe['sequence_id'].unique().to_list()
@@ -480,20 +501,47 @@ class FormatProcessor(CGMProcessor):
             processed_sequences.append(interpolated_seq)
         
         # Combine all sequences with stable sorting from schema definition
-        result_df = pl.concat(processed_sequences).sort(CGM_SCHEMA.get_stable_sort_keys())
+        result_df = pl.concat(processed_sequences).sort(cls.schema.get_stable_sort_keys())
         
         
         # Verify output dataframe matches schema
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return result_df
  
     
     @classmethod
+    def _build_interpolated_row(
+        cls,
+        seq_id: int,
+        interpolated_time: datetime,
+        glucose: float,
+        quality: int,
+    ) -> InterpolatedRow:
+        """Build one imputed glucose row shaped by `cls.schema`.
+
+        Derived from the schema rather than restated beside it: a literal dict
+        of the six core columns would silently drop every extended column when
+        the frame is wider than the core schema, and `pl.DataFrame(rows,
+        schema=...)` would then be handed rows whose keys do not cover the
+        frame. Every column the row does not carry is null — an interpolated
+        point says nothing about carbs, macros or heart rate, and null is how
+        the schema spells "did not say".
+        """
+        row: InterpolatedRow = {name: None for name in cls.schema.get_column_names()}
+        row['sequence_id'] = seq_id
+        row['event_type'] = UnifiedEventType.GLUCOSE.value
+        row['quality'] = quality
+        row['original_datetime'] = interpolated_time
+        row['datetime'] = interpolated_time
+        row['glucose'] = glucose
+        return row
+
+    @classmethod
     def _interpolate_sequence(
         cls,
-        seq_data: pl.DataFrame, 
+        seq_data: pl.DataFrame,
         seq_id: int,
         expected_interval_minutes: int,
         small_gap_max_minutes: int,
@@ -606,19 +654,14 @@ class FormatProcessor(CGMProcessor):
                                           Quality.IMPUTATION.value | 
                                           Quality.SYNCHRONIZATION.value)
                         
-                        new_row = {
-                            'sequence_id': seq_id,
-                            'event_type': UnifiedEventType.GLUCOSE.value,
-                            'quality': combined_quality,
-                            'original_datetime': interpolated_time,  # Grid-aligned position
-                            'datetime': interpolated_time,  # Both are the same for new interpolated points
-                            'glucose': interpolated_glucose,
-                            'carbs': None,
-                            'insulin_slow': None,
-                            'insulin_fast': None,
-                            'exercise': None,
-                        }
-                        new_rows.append(new_row)
+                        new_rows.append(cls._build_interpolated_row(
+                            seq_id=seq_id,
+                            # Grid-aligned position; datetime and original_datetime
+                            # are the same for a newly created point
+                            interpolated_time=interpolated_time,
+                            glucose=interpolated_glucose,
+                            quality=combined_quality,
+                        ))
             else:
                 # Non-grid logic: place points at regular intervals from previous timestamp
                 # Calculate number of missing points
@@ -649,19 +692,13 @@ class FormatProcessor(CGMProcessor):
                         curr_quality = current_row.get('quality', 0) or 0
                         combined_quality = prev_quality | curr_quality | Quality.IMPUTATION.value
                         
-                        new_row = {
-                            'sequence_id': seq_id,
-                            'event_type': UnifiedEventType.GLUCOSE.value,
-                            'quality': combined_quality,
-                            'original_datetime': interpolated_time,  # Set original to interpolated position
-                            'datetime': interpolated_time,  # Both are the same for new interpolated points
-                            'glucose': interpolated_glucose,
-                            'carbs': None,
-                            'insulin_slow': None,
-                            'insulin_fast': None,
-                            'exercise': None,
-                        }
-                        new_rows.append(new_row)
+                        new_rows.append(cls._build_interpolated_row(
+                            seq_id=seq_id,
+                            # Original position, not grid-aligned in this branch
+                            interpolated_time=interpolated_time,
+                            glucose=interpolated_glucose,
+                            quality=combined_quality,
+                        ))
         
         # Add interpolated rows to glucose events
         if new_rows:
@@ -677,7 +714,7 @@ class FormatProcessor(CGMProcessor):
         # Merge glucose events (with interpolation) back with non-glucose events
         # Use schema-defined stable sort, but skip sequence_id (already within same sequence)
         if len(non_glucose_events) > 0:
-            sort_keys = [k for k in CGM_SCHEMA.get_stable_sort_keys() if k != 'sequence_id']
+            sort_keys = [k for k in cls.schema.get_stable_sort_keys() if k != 'sequence_id']
             result = pl.concat([glucose_with_interpolation, non_glucose_events]).sort(sort_keys)
         else:
             result = glucose_with_interpolation
@@ -726,7 +763,7 @@ class FormatProcessor(CGMProcessor):
         
         # Validate input if validation mode includes INPUT
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Use original_datetime for gap detection (idempotent regardless of sync)
         timestamp_col = 'original_datetime' #if 'original_datetime' in dataframe.columns else 'datetime'
@@ -799,7 +836,7 @@ class FormatProcessor(CGMProcessor):
         
         # Validate output if validation mode includes OUTPUT
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df
     
@@ -856,7 +893,7 @@ class FormatProcessor(CGMProcessor):
         
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Check for valid glucose readings
         valid_glucose_count = dataframe.filter(
@@ -969,7 +1006,7 @@ class FormatProcessor(CGMProcessor):
         
         # Verify output dataframe matches schema
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(df_truncated, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(df_truncated, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return df_truncated, combined_warnings
     
@@ -1042,8 +1079,10 @@ class FormatProcessor(CGMProcessor):
         This is a small optional pipeline-terminating function that removes metadata columns
         (sequence_id, event_type, quality) and keeps only the data columns needed for inference.
         
-        Data columns are computed from the unified format schema definition.
-        Currently includes:
+        Data columns are computed from `cls.schema`, so an ExtendedFormatProcessor
+        keeps the extended data columns (including `annotations`). Use
+        `to_core_df()` first if you want the core six regardless of schema.
+        For the core schema this is:
         - datetime: Timestamp of the reading
         - glucose: Blood glucose value (mg/dL)
         - carbs: Carbohydrate intake (grams)
@@ -1067,7 +1106,7 @@ class FormatProcessor(CGMProcessor):
 
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
         # Filter to glucose-only events if requested (before truncation)
         if glucose_only:
@@ -1078,11 +1117,38 @@ class FormatProcessor(CGMProcessor):
             unified_df = unified_df.unique(subset=['datetime'], keep='first')
 
         if drop_service_columns:
-            data_columns = [col['name'] for col in CGM_SCHEMA.data_columns]
+            data_columns = [col['name'] for col in cls.schema.data_columns]
             unified_df = unified_df.select(data_columns)
         #no Output validation - is not unified format
         return unified_df
-    
+
+    @classmethod
+    def to_core_df(cls, unified_df: UnifiedFormat) -> UnifiedFormat:
+        """Narrow a frame to the core CGM_SCHEMA shape.
+
+        The escape hatch for consumers that only speak the six core data
+        columns. An extended frame carries columns they have no code for, and
+        `ExtraColumnError` deliberately refuses to pretend otherwise — so the
+        way across the seam is an explicit, named narrowing rather than a
+        relaxed check.
+
+        This is **lossy by design and by name**: every extended column is
+        dropped. Rows are not: enforcement adds, casts and reorders columns and
+        stable-sorts, it never filters. A row whose only content was a
+        macronutrient or an annotation survives as a row with null data.
+
+        Targets CGM_SCHEMA unconditionally, *not* `cls.schema` — "narrow to
+        core" is the whole meaning of the method, so following an overridden
+        schema would make it a no-op on exactly the frames it exists for.
+
+        Args:
+            unified_df: DataFrame in any unified shape (core or extended)
+
+        Returns:
+            DataFrame conforming to CGM_SCHEMA
+        """
+        return CGM_SCHEMA.validate_dataframe(unified_df, enforce=True)
+
     @classmethod
     def split_glucose_events(
         cls,
@@ -1121,7 +1187,7 @@ class FormatProcessor(CGMProcessor):
 
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
         # Filter for glucose events (GLUCOSE event type)
         glucose_df = unified_df.filter(
@@ -1135,8 +1201,8 @@ class FormatProcessor(CGMProcessor):
         
         # Verify output dataframes match schema
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(glucose_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
-            CGM_SCHEMA.validate_dataframe(events_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(glucose_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(events_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return glucose_df, events_df
     
@@ -1221,13 +1287,13 @@ class FormatProcessor(CGMProcessor):
         
         # Verify input dataframe matches schema
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+            cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
 
         # IDEMPOTENCY: Reset existing sequence_id to 0 to ensure consistent results
         # This allows re-running sequence detection with different gap thresholds
         # Get canonical sequence_id dtype from schema
         sequence_id_dtype = next(
-            col['dtype'] for col in CGM_SCHEMA.service_columns if col['name'] == 'sequence_id'
+            col['dtype'] for col in cls.schema.service_columns if col['name'] == 'sequence_id'
         )
         
         df = dataframe.with_columns([
@@ -1299,11 +1365,11 @@ class FormatProcessor(CGMProcessor):
             result_df = pl.concat([glucose_events, non_glucose_with_seq], how='diagonal')
             
             # Reorder columns to match schema (use existing validation method)
-            result_df = CGM_SCHEMA.validate_dataframe(result_df, enforce=True)
+            result_df = cls.schema.validate_dataframe(result_df, enforce=True)
         
         # Verify output dataframe matches schema
         if validation_mode & (ValidationMethod.OUTPUT | ValidationMethod.OUTPUT_FORCED):
-            CGM_SCHEMA.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
+            cls.schema.validate_dataframe(result_df, enforce=validation_mode & ValidationMethod.OUTPUT_FORCED)
         
         return result_df
     
@@ -1323,3 +1389,26 @@ class FormatProcessor(CGMProcessor):
             "_split_sequences_with_internal_gaps is deprecated. "
             "Use detect_and_assign_sequences instead."
         )
+
+
+class ExtendedFormatProcessor(FormatProcessor):
+    """FormatProcessor targeting the extended unified schema.
+
+    Identical behavior to FormatProcessor, with one thing changed: the schema.
+    Every stage validates, enforces, sorts and narrows against
+    CGM_SCHEMA_EXTENDED, so macronutrients, wearable streams, ketones and
+    annotations survive sequence detection, interpolation and synchronization
+    instead of being dropped by the unconditional enforcement inside them.
+
+    Note the widened total ordering. `get_stable_sort_keys()` returns every
+    column, so the extended schema's appended columns are appended tie-breakers.
+    Row order is still fully deterministic, but a core frame and its extended
+    counterpart are not guaranteed to order identically where earlier keys tie.
+
+    `annotations` is a data column and therefore part of both the sort keys and
+    the primary key. Serialize it only with
+    `cgm_format.formats.unified.annotations_to_json`, whose deterministic output
+    is what keeps that ordering stable across runs.
+    """
+
+    schema: ClassVar[CGMSchemaDefinition] = CGM_SCHEMA_EXTENDED

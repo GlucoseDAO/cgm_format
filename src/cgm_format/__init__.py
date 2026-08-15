@@ -20,19 +20,29 @@ Quick Start:
 """
 
 try:
-    from importlib.metadata import version
-    __version__ = version("cgm-format")
+    # Aliased with a leading underscore so the package namespace holds only
+    # names that belong in __all__ (tests/test_package_exports.py asserts the
+    # two are equal).
+    from importlib.metadata import version as _package_version
+    __version__ = _package_version("cgm-format")
 except Exception:
-    # Fallback if package not installed (e.g., during development)
-    __version__ = "0.9.0"  # Keep in sync with pyproject.toml
+    # Fallback if package not installed (e.g., during development).
+    # Tech debt: RM2 in docs/ROADMAP.md. Two sources of truth drift, and the
+    # one you read is the wrong one -- the right fix is an editable install so
+    # metadata is always present, then dropping this branch.
+    __version__ = "0.10.0"  # Keep in sync with pyproject.toml
 
 # Core classes
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor
+from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 
 # Interface classes and exceptions
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    FormatCategory,
+    SubjectEntry,
+    TrackCoverage,
+    MultiTrackSourceError,
     ValidationMethod,
     CGMParser,
     CGMProcessor,
@@ -65,14 +75,20 @@ from cgm_format.interface.schema import (
     FrictionlessDialect,
     FrictionlessTableSchema,
     CGMSchemaDefinition,
+    derive_schema,
 )
 
 # Format schemas and enums (commonly used)
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+    EXTENDED_DATA_COLUMNS,
     UnifiedEventType,
     Quality,
     GOOD_QUALITY,
+    AnnotationValue,
+    AnnotationMapping,
+    annotations_to_json,
 )
 
 from cgm_format.formats.dexcom import (
@@ -99,6 +115,25 @@ from cgm_format.formats.libre_eu import (
     LibreEUColumn,
 )
 
+from cgm_format.formats.cgmacros import (
+    CGMACROS_SCHEMA,
+    CGMACROS_TRACKS,
+    CGMACROS_MEAN_TRACK,
+    CGMacrosColumn,
+    CGMacrosMealType,
+)
+
+from cgm_format.formats.d1namo import (
+    D1NAMO_GLUCOSE_SCHEMA,
+    D1NAMO_TRACK,
+    D1namoGlucoseColumn,
+    D1namoGlucoseType,
+    D1namoInsulinColumn,
+    D1namoFoodColumn,
+    D1namoHealthyFoodColumn,
+    D1namoAnnotationColumn,
+)
+
 from cgm_format.formats.medtronic import (
     MEDTRONIC_SCHEMA,
     MedtronicColumn,
@@ -121,9 +156,14 @@ __all__ = [
     # Main classes
     "FormatParser",
     "FormatProcessor",
-    
+    "ExtendedFormatProcessor",
+
     # Core interfaces
     "SupportedCGMFormat",
+    "FormatCategory",
+    "SubjectEntry",
+    "TrackCoverage",
+    "MultiTrackSourceError",
     "ValidationMethod",
     "CGMParser",
     "CGMProcessor",
@@ -162,13 +202,22 @@ __all__ = [
     "FrictionlessDialect",
     "FrictionlessTableSchema",
     "CGMSchemaDefinition",
-    
+    "derive_schema",
+
     # Unified format
     "CGM_SCHEMA",
     "UnifiedEventType",
     "Quality",
     "GOOD_QUALITY",
-    
+
+    # Extended unified format (macros, wearables, annotations)
+    "CGM_SCHEMA_EXTENDED",
+    "EXTENDED_DATA_COLUMNS",
+    "AnnotationValue",
+    "AnnotationMapping",
+    "annotations_to_json",
+
+
     # Dexcom format
     "DEXCOM_SCHEMA",
     "DexcomEventType",
@@ -188,6 +237,19 @@ __all__ = [
     # Libre EU format (mmol/L)
     "LIBRE_EU_SCHEMA",
     "LibreEUColumn",
+    "CGMACROS_SCHEMA",
+    "CGMACROS_TRACKS",
+    "CGMACROS_MEAN_TRACK",
+    "CGMacrosColumn",
+    "CGMacrosMealType",
+    "D1NAMO_GLUCOSE_SCHEMA",
+    "D1NAMO_TRACK",
+    "D1namoGlucoseColumn",
+    "D1namoGlucoseType",
+    "D1namoInsulinColumn",
+    "D1namoFoodColumn",
+    "D1namoHealthyFoodColumn",
+    "D1namoAnnotationColumn",
     
     # Medtronic format
     "MEDTRONIC_SCHEMA",

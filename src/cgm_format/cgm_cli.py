@@ -15,7 +15,7 @@ Can be used as:
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Union, Protocol, TypedDict
+from typing import List, Optional, Dict, Type, Union, Protocol, TypedDict
 
 import typer
 import polars as pl
@@ -24,16 +24,27 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor
+from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    MultiTrackSourceError,
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
     ProcessingWarning,
 )
-from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType, Quality
-from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
+from cgm_format.formats.unified import (
+    CGM_SCHEMA,
+    CGM_SCHEMA_EXTENDED,
+    UnifiedEventType,
+    Quality,
+)
+from cgm_format.formats.supported import (
+    FORMAT_CATEGORY,
+    SCHEMA_MAP,
+    KNOWN_ISSUES_TO_SUPPRESS,
+    UNIFIED_TARGET_SCHEMA,
+)
 # Optional: Frictionless library
 try:
     from frictionless import Resource, Schema as FrictionlessSchema, Dialect
@@ -49,11 +60,50 @@ app = typer.Typer(
 console = Console()
 
 
+def _processor_for(dataframe: pl.DataFrame) -> Type[FormatProcessor]:
+    """Pick the processor whose schema matches the frame's shape.
+
+    The CLI parses a file and then hands the frame to a processor. Naming
+    `FormatProcessor` literally worked only while every unified frame had the
+    same ten columns: once `UNIFIED_EXTENDED` became detectable, an extended
+    file would parse at stage 1 and then die against the core schema with
+    "Schema has 10 columns, dataframe has 22 columns" — a shape error reported
+    to a user who did nothing wrong.
+
+    Dispatch is by exact column tuple rather than by the detected format,
+    mirroring `FormatParser._schema_for_serialization`: the processor's contract
+    is with the frame in front of it, and `parse_bundle`-style entry points can
+    hand it a frame no single detected format accounts for. A frame matching
+    neither schema falls back to the core processor, which is what then raises —
+    so a malformed frame still fails exactly as it does today.
+    """
+    columns = tuple(dataframe.columns)
+    if columns == tuple(CGM_SCHEMA_EXTENDED.get_column_names(data_only=False)):
+        return ExtendedFormatProcessor
+    return FormatProcessor
+
+
+def _multi_track_hint(input_file: Path, error: Exception) -> None:
+    """Report a multi-track refusal in CLI terms, not Python ones.
+
+    `MultiTrackSourceError` names `FormatParser.parse_tracks(...)`, which is the
+    right advice for a library caller and useless to someone at a shell. The
+    refusal itself is correct — a multi-track file has no single frame — so the
+    fix is to translate the remedy, not to weaken the error.
+    """
+    console.print(f"[red]✗ {error}[/red]")
+    console.print(
+        f"\n[yellow]From the CLI:[/yellow] use "
+        f"[bold]cgm-cli corpus {input_file.parent.parent}[/bold] to parse every "
+        "subject and track, which writes one CSV per track."
+    )
+
+
 # ===== Format Detection & Parsing Commands =====
 
 @app.command()
 def detect(
-    input_file: Path = typer.Argument(..., help="Input CSV file to detect format"),
+    input_file: Path = typer.Argument(..., help="Input CSV file, or a corpus directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed information"),
 ) -> None:
     """Detect the format of a CGM data file."""
@@ -61,7 +111,20 @@ def detect(
         if not input_file.exists():
             console.print(f"[red]Error: File not found: {input_file}[/red]")
             raise typer.Exit(1)
-        
+
+        # A directory is identified by its shape, not by sniffing a file
+        # inside it: a corpus member's contents often look like a plain
+        # vendor export, so reading one would give the wrong answer.
+        if input_file.is_dir():
+            detected_format = FormatParser.detect_path_format(input_file)
+            console.print(
+                f"\n[green]✓[/green] Detected corpus: [bold]{detected_format.value}[/bold]"
+            )
+            if verbose:
+                console.print(f"\nDirectory: {input_file}")
+                console.print(f"Category: {FORMAT_CATEGORY[detected_format].value}")
+            return
+
         with open(input_file, 'rb') as f:
             raw_data = f.read()
         
@@ -112,6 +175,9 @@ def parse(
             FormatParser.to_csv_file(unified_df, str(output_file))
             console.print(f"\n[green]✓[/green] Saved to: {output_file}")
         
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except (UnknownFormatError, MalformedDataError, ZeroValidInputError) as e:
         console.print(f"[red]✗ Parse error: {e}[/red]")
         raise typer.Exit(1)
@@ -146,8 +212,9 @@ def process(
         console.print(f"[green]✓[/green] Loaded {original_rows} rows")
         
         # Detect sequences
+        processor = _processor_for(df)
         with console.status("[bold green]Detecting sequences..."):
-            df = FormatProcessor.detect_and_assign_sequences(
+            df = processor.detect_and_assign_sequences(
                 df,
                 expected_interval_minutes=interval,
                 large_gap_threshold_minutes=max_gap
@@ -159,7 +226,7 @@ def process(
         # Interpolate gaps
         if interpolate:
             with console.status("[bold green]Interpolating gaps..."):
-                df = FormatProcessor.interpolate_gaps(
+                df = processor.interpolate_gaps(
                     df,
                     expected_interval_minutes=interval,
                     small_gap_max_minutes=max_gap
@@ -171,7 +238,7 @@ def process(
         # Synchronize timestamps
         if synchronize:
             with console.status("[bold green]Synchronizing timestamps..."):
-                df = FormatProcessor.synchronize_timestamps(
+                df = processor.synchronize_timestamps(
                     df,
                     expected_interval_minutes=interval
                 )
@@ -184,6 +251,12 @@ def process(
             FormatParser.to_csv_file(df, str(output_file))
             console.print(f"\n[green]✓[/green] Saved to: {output_file}")
         
+    except typer.Exit:
+        # A deliberate exit is not an error to re-report.
+        raise
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
@@ -226,8 +299,9 @@ def pipeline(
         console.print(f"[green]✓[/green] Stage 1: Parsed {parsed_rows} rows")
         
         # Stage 2: Detect sequences
+        processor = _processor_for(unified_df)
         with console.status("[bold green]Stage 2/6: Detecting sequences..."):
-            unified_df = FormatProcessor.detect_and_assign_sequences(
+            unified_df = processor.detect_and_assign_sequences(
                 unified_df,
                 expected_interval_minutes=interval,
                 large_gap_threshold_minutes=max_gap
@@ -237,7 +311,7 @@ def pipeline(
         
         # Stage 3: Interpolate
         with console.status("[bold green]Stage 3/6: Interpolating gaps..."):
-            unified_df = FormatProcessor.interpolate_gaps(
+            unified_df = processor.interpolate_gaps(
                 unified_df,
                 expected_interval_minutes=interval,
                 small_gap_max_minutes=max_gap
@@ -247,7 +321,7 @@ def pipeline(
         
         # Stage 4: Synchronize
         with console.status("[bold green]Stage 4/6: Synchronizing timestamps..."):
-            unified_df = FormatProcessor.synchronize_timestamps(
+            unified_df = processor.synchronize_timestamps(
                 unified_df,
                 expected_interval_minutes=interval
             )
@@ -255,7 +329,7 @@ def pipeline(
         
         # Stage 5: Prepare for inference
         with console.status("[bold green]Stage 5/6: Preparing for inference..."):
-            inference_df, warnings = FormatProcessor.prepare_for_inference(
+            inference_df, warnings = processor.prepare_for_inference(
                 unified_df,
                 minimum_duration_minutes=min_duration,
                 maximum_wanted_duration=max_duration
@@ -274,7 +348,7 @@ def pipeline(
         
         # Stage 6: Convert to data-only format
         with console.status("[bold green]Stage 6/6: Converting to final format..."):
-            final_df = FormatProcessor.to_data_only_df(
+            final_df = processor.to_data_only_df(
                 inference_df,
                 drop_service_columns=True,
                 drop_duplicates=drop_duplicates,
@@ -295,6 +369,9 @@ def pipeline(
         
     except (UnknownFormatError, MalformedDataError, ZeroValidInputError) as e:
         console.print(f"\n[red]✗ Pipeline error: {e}[/red]")
+        raise typer.Exit(1)
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]✗ Error: {e}[/red]")
@@ -341,8 +418,19 @@ def validate(
         with console.status("[bold green]Validating..."):
             try:
                 df = FormatParser.parse_to_unified(text_data, detected_format)
-                CGM_SCHEMA.validate_dataframe(df, enforce=False)
+                # Validate against the schema this format is parsed INTO, not
+                # CGM_SCHEMA unconditionally: an extended-target format
+                # produces a wider frame, and checking it against the core
+                # schema reports a shape error for a correct parse.
+                UNIFIED_TARGET_SCHEMA.get(detected_format, CGM_SCHEMA).validate_dataframe(
+                    df, enforce=False
+                )
                 validation_passed = True
+            except MultiTrackSourceError:
+                # Not a validation failure: the file is well-formed, it simply
+                # has no single frame to validate. Reporting it as invalid
+                # would tell the user their data is broken when it is not.
+                raise
             except Exception as e:
                 validation_passed = False
                 validation_error = str(e)
@@ -363,6 +451,9 @@ def validate(
             console.print(f"  Error: {validation_error}")
             raise typer.Exit(1)
 
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except typer.Exit:
         raise
     except Exception as e:
@@ -506,6 +597,149 @@ def report(
 # ===== Batch Processing Commands =====
 
 @app.command()
+def corpus(
+    root: Path = typer.Argument(..., help="Corpus root directory"),
+    output_dir: Optional[Path] = typer.Option(None, "--out", "-o", help="Write one CSV per subject"),
+    track: Optional[str] = typer.Option(None, "--track", "-t", help="Restrict to one track (multi-track corpora)"),
+    subject: Optional[List[str]] = typer.Option(None, "--subject", "-s", help="Restrict to these subject ids (repeatable); see 'cgm-cli subjects'"),
+    show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show a per-subject summary"),
+) -> None:
+    """Parse a many-subject research corpus into one frame per subject.
+
+    A separate command rather than an option on `parse` or `batch`: `batch`
+    already globs a directory with a different meaning (independent files, one
+    output each), while a corpus is one dataset whose members are keyed by
+    subject. Detection here is by directory shape, not by sniffing a file.
+
+    `--subject` prunes before parsing, so one subject costs one subject's work.
+    `cgm-cli subjects <root>` lists the ids it accepts.
+    """
+    try:
+        if not root.exists():
+            console.print(f"[red]Error: Directory not found: {root}[/red]")
+            raise typer.Exit(1)
+
+        detected = FormatParser.detect_path_format(root)
+        console.print(f"\n[green]✓[/green] Detected corpus: [bold]{detected.value}[/bold]")
+
+        with console.status("[bold green]Parsing corpus..."):
+            # Typer hands back an empty list when the option is absent, but an
+            # empty `subjects=` legitimately means "you selected nothing" to
+            # the library. Normalize to None so the two stay distinguishable.
+            frames = FormatParser.parse_corpus(
+                root, track=track, subjects=list(subject) if subject else None
+            )
+
+        console.print(f"[green]✓[/green] Parsed {len(frames)} frame(s)")
+
+        if show_stats:
+            table = Table(title="Corpus Contents")
+            table.add_column("Key", style="cyan")
+            table.add_column("Rows", justify="right")
+            table.add_column("Glucose", justify="right")
+            table.add_column("Span", style="dim")
+            for key in sorted(frames):
+                frame = frames[key]
+                glucose = frame.filter(pl.col("glucose").is_not_null())
+                if len(frame):
+                    span = f"{frame['datetime'].min()} → {frame['datetime'].max()}"
+                else:
+                    span = "-"
+                table.add_row(key, str(len(frame)), str(len(glucose)), span)
+            console.print(table)
+
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for key, frame in sorted(frames.items()):
+                # The "/" in a composite key is the corpus contract, not a
+                # path separator — flatten it so one subject does not become a
+                # nested directory on disk.
+                filename = key.replace("/", "__") + ".csv"
+                FormatParser.to_csv_file(frame, str(output_dir / filename))
+            console.print(f"\n[green]✓[/green] Wrote {len(frames)} file(s) to: {output_dir}")
+
+    except UnknownFormatError as e:
+        console.print(f"[red]✗ Not a recognized corpus: {e}[/red]")
+        raise typer.Exit(1)
+    except (MalformedDataError, ZeroValidInputError) as e:
+        console.print(f"[red]✗ Corpus error: {e}[/red]")
+        raise typer.Exit(1)
+    except ValueError as e:
+        # An unknown --track name. Every other CLI path reports a bad argument
+        # as one line and exits 1; a raw traceback here would be the odd one
+        # out, and it is the user's typo rather than a library fault.
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def subjects(
+    root: Path = typer.Argument(..., help="Corpus root directory"),
+) -> None:
+    """List a corpus's subjects and how much glucose each carries.
+
+    The companion to `corpus --subject`: it names the ids that option accepts,
+    and shows enough per subject to decide which are worth parsing without
+    paying to parse them all first.
+
+    `Values` counts cells the source filled, which is deliberately not the same
+    as readings the schema can hold — a parser that drops an unrepresentable
+    value says so, and the two numbers differing is information rather than a
+    discrepancy.
+    """
+    try:
+        if not root.exists():
+            console.print(f"[red]Error: Directory not found: {root}[/red]")
+            raise typer.Exit(1)
+
+        detected = FormatParser.detect_path_format(root)
+        console.print(f"\n[green]✓[/green] Detected corpus: [bold]{detected.value}[/bold]")
+
+        with console.status("[bold green]Reading subjects..."):
+            entries = FormatParser.list_subjects(root)
+
+        table = Table(title=f"Subjects in {root.name}")
+        table.add_column("Subject", style="cyan")
+        table.add_column("Track")
+        table.add_column("Values", justify="right")
+        table.add_column("Rows", justify="right")
+        table.add_column("Coverage", justify="right")
+        table.add_column("Span", style="dim")
+        for entry in entries:
+            if not entry.tracks:
+                # Empty means the glucose source could not be read at all,
+                # which is not the same answer as a track that reported
+                # nothing — say so rather than printing a plausible 0.
+                table.add_row(entry.subject_id, "[yellow]unreadable[/yellow]", "-", "-", "-", "-")
+                continue
+            for i, cov in enumerate(entry.tracks):
+                span = (
+                    f"{cov.first} → {cov.last}" if cov.first is not None else "-"
+                )
+                pct = f"{100 * cov.values / cov.rows:.0f}%" if cov.rows else "-"
+                table.add_row(
+                    entry.subject_id if i == 0 else "",
+                    cov.track,
+                    str(cov.values),
+                    str(cov.rows),
+                    pct,
+                    span,
+                )
+        console.print(table)
+        console.print(
+            f"\n[dim]{len(entries)} subject(s). "
+            f"Parse a selection with: cgm-cli corpus {root} --subject <id>[/dim]"
+        )
+
+    except UnknownFormatError as e:
+        console.print(f"[red]✗ Not a recognized corpus: {e}[/red]")
+        raise typer.Exit(1)
+    except (MalformedDataError, ZeroValidInputError) as e:
+        console.print(f"[red]✗ Corpus error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def batch(
     input_dir: Path = typer.Argument(..., help="Directory containing CGM data files"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
@@ -559,18 +793,20 @@ def batch(
                             FormatParser.to_csv_file(df, str(output_path))
                     elif command == "process":
                         df = FormatParser.parse_file(file_path)
-                        df = FormatProcessor.detect_and_assign_sequences(df)
-                        df = FormatProcessor.interpolate_gaps(df)
-                        df = FormatProcessor.synchronize_timestamps(df)
+                        batch_processor = _processor_for(df)
+                        df = batch_processor.detect_and_assign_sequences(df)
+                        df = batch_processor.interpolate_gaps(df)
+                        df = batch_processor.synchronize_timestamps(df)
                         if output_path:
                             FormatParser.to_csv_file(df, str(output_path))
                     elif command == "pipeline":
                         df = FormatParser.parse_file(file_path)
-                        df = FormatProcessor.detect_and_assign_sequences(df)
-                        df = FormatProcessor.interpolate_gaps(df)
-                        df = FormatProcessor.synchronize_timestamps(df)
-                        df, _ = FormatProcessor.prepare_for_inference(df)
-                        df = FormatProcessor.to_data_only_df(df, drop_service_columns=True)
+                        batch_processor = _processor_for(df)
+                        df = batch_processor.detect_and_assign_sequences(df)
+                        df = batch_processor.interpolate_gaps(df)
+                        df = batch_processor.synchronize_timestamps(df)
+                        df, _ = batch_processor.prepare_for_inference(df)
+                        df = batch_processor.to_data_only_df(df, drop_service_columns=True)
                         if output_path:
                             df.write_csv(str(output_path))
                     else:
@@ -662,6 +898,17 @@ def info(
         if not input_file.exists():
             console.print(f"[red]Error: File not found: {input_file}[/red]")
             raise typer.Exit(1)
+
+        if input_file.is_dir():
+            # A raw "Is a directory" errno tells the user nothing about
+            # which command they actually wanted.
+            console.print(
+                f"[red]✗ {input_file} is a directory.[/red] `info` describes "
+                f"one file; use [bold]cgm-cli detect {input_file}[/bold] to "
+                f"identify a corpus, or [bold]cgm-cli corpus {input_file}[/bold] "
+                "to parse it."
+            )
+            raise typer.Exit(1)
         
         # Detect format
         with console.status("[bold green]Analyzing file..."):
@@ -734,6 +981,12 @@ def info(
             
             console.print(detail_table)
         
+    except typer.Exit:
+        # A deliberate exit is not an error to re-report.
+        raise
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
@@ -1124,7 +1377,10 @@ def _write_validation_report(
                 f.write("\n")
             
             # Group by format type
-            for format_type in [SupportedCGMFormat.UNIFIED_CGM, SupportedCGMFormat.DEXCOM, SupportedCGMFormat.LIBRE]:
+            # Iterate the registry, not a hardcoded list: the old three-format
+            # literal silently omitted DEXCOM_EU, LIBRE_EU, MEDTRONIC and
+            # NIGHTSCOUT from this section, so a supported format looked absent.
+            for format_type in SCHEMA_MAP:
                 format_results = [
                     (fp, fmt, v, m, ec, sc) for fp, fmt, v, m, ec, sc in validation_results 
                     if fmt == format_type
