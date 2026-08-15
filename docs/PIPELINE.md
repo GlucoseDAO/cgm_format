@@ -678,6 +678,31 @@ All convenience methods automatically:
 - Initialize sequence_id to 0 (sequences assigned during processing)
 - Validate schema
 
+
+## Stage 3 variants: bundles, tracks and corpora
+
+Stages 1–3 assume one file yields one frame. Three entry points relax that, and all of them converge
+on the same `_postprocess_unified` contract, so Stages 4–6 are unaffected:
+
+| Entry point | Input | Output |
+|---|---|---|
+| `parse_file` | one file, one subject | one frame |
+| `parse_bundle` | several files, one subject, one modality each | one frame (diagonal concat) |
+| `parse_tracks` | one file, several sensors | one frame per sensor |
+| `parse_corpus` | a directory of subjects | one frame per subject (per track) |
+
+Detection splits the same way. `detect_format` reads a text prefix, which works for a single file;
+`detect_path_format` matches glob probes against a directory, because a corpus has no single text to
+sniff and a member's contents often look like a plain vendor export.
+
+The **target schema** is looked up per format in `UNIFIED_TARGET_SCHEMA`, so a source carrying
+macronutrients or wearable streams is enforced against `CGM_SCHEMA_EXTENDED` rather than having those
+columns dropped at the unified boundary. `FormatProcessor.schema` mirrors this on the processor side;
+`ExtendedFormatProcessor` is the extended-schema subclass.
+
+**No parser resamples.** A corpus on a 1-minute grid emits 1-minute rows; regridding is Stage 5's job
+and is lossy, so the caller passes `expected_interval_minutes`.
+
 ## Design Principles
 
 ### Idempotency

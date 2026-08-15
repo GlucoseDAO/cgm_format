@@ -1,0 +1,4 @@
+date,time,picture,description,calories,balance,quality
+2014-10-04,12:15,"lunch","Rice with vegetables",540,"Balance","Good quality"
+2014-10-04,19:40,"diner","Soup and bread",380,"Unbalance","Low quality"
+2014-10-04,08:00,,"Coffee only",,,

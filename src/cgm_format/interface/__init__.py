@@ -10,9 +10,12 @@ from cgm_format.interface.schema import (
     FrictionlessDialect,
     FrictionlessTableSchema,
     CGMSchemaDefinition,
+    derive_schema,
 )
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    FormatCategory,
+    MultiTrackSourceError,
     ValidationMethod,
     CGMParser,
     CGMProcessor,
@@ -45,8 +48,11 @@ __all__ = [
     "FrictionlessDialect",
     "FrictionlessTableSchema",
     "CGMSchemaDefinition",
+    "derive_schema",
     # Core interfaces
     "SupportedCGMFormat",
+    "FormatCategory",
+    "MultiTrackSourceError",
     "ValidationMethod",
     "CGMParser",
     "CGMProcessor",

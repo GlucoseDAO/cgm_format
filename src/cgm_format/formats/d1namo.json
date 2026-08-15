@@ -1,0 +1,36 @@
+{
+  "fields": [
+    {
+      "name": "date",
+      "type": "string",
+      "description": "Reading date, ISO year-first",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "time",
+      "type": "string",
+      "description": "Reading time; seconds omitted in the healthy subset",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "description": "cgm/manual (diabetes) or meal-relative label (healthy)"
+    },
+    {
+      "name": "glucose",
+      "type": "string",
+      "description": "Glucose reading in mmol/L. Read as text because the healthy subset contains literals a numeric reader would silently drop (a colon typed for a decimal point, leading zeros).",
+      "unit": "mmol/L"
+    },
+    {
+      "name": "comments",
+      "type": "string",
+      "description": "Free-text comment"
+    }
+  ]
+}

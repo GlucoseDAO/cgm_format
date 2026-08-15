@@ -1,0 +1,246 @@
+{
+  "fields": [
+    {
+      "name": "sequence_id",
+      "type": "integer",
+      "description": "Unique identifier for the data sequence",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "original_datetime",
+      "type": "datetime",
+      "description": "Original timestamp before any modifications (preserved from conversion)",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "quality",
+      "type": "integer",
+      "description": "Data quality indicator \u2014 bitwise Quality flags stored as Int64 (0=GOOD_QUALITY, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, 32=TRACK_MERGE; combine with |, test with &)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          0,
+          1,
+          2,
+          4,
+          8,
+          16,
+          32
+        ]
+      }
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "description": "Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE)",
+      "constraints": {
+        "required": true,
+        "enum": [
+          "EGV_READ",
+          "CALIBRAT",
+          "CARBS_IN",
+          "INS_FAST",
+          "INS_SLOW",
+          "XRCS_LTE",
+          "XRCS_MED",
+          "XRCS_HVY",
+          "ALRT_HIG",
+          "ALRT_LOG",
+          "ALRT_ULG",
+          "ALRT_ULS",
+          "ALRT_RIS",
+          "ALRT_FAL",
+          "ALRT_SIG",
+          "HLTH_ILL",
+          "HLTH_STR",
+          "HLTH_LSY",
+          "HLTH_CYC",
+          "HLTH_ALC",
+          "OTHEREVT",
+          "IMPUTATN"
+        ]
+      }
+    },
+    {
+      "name": "datetime",
+      "type": "datetime",
+      "description": "Timestamp of the event in ISO 8601 format",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "glucose",
+      "type": "number",
+      "description": "Blood glucose reading from CGM sensor",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "carbs",
+      "type": "number",
+      "description": "Carbohydrate intake",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "insulin_slow",
+      "type": "number",
+      "description": "Long-acting (basal) insulin dose",
+      "unit": "u",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "insulin_fast",
+      "type": "number",
+      "description": "Short-acting (bolus) insulin dose",
+      "unit": "u",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "exercise",
+      "type": "integer",
+      "description": "Duration of exercise activity",
+      "unit": "s",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "calories",
+      "type": "number",
+      "description": "Energy content of a logged meal",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "protein",
+      "type": "number",
+      "description": "Protein content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "fat",
+      "type": "number",
+      "description": "Fat content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "fiber",
+      "type": "number",
+      "description": "Dietary fibre content of a logged meal",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "heart_rate",
+      "type": "number",
+      "description": "Heart rate reported by a wearable device",
+      "unit": "bpm",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "breathing_rate",
+      "type": "number",
+      "description": "Breathing rate reported by a wearable device",
+      "unit": "breaths/min",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "acceleration",
+      "type": "number",
+      "description": "Accelerometer magnitude reported by a wearable device",
+      "unit": "g",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "mets",
+      "type": "number",
+      "description": "Metabolic equivalent of task reported by a wearable device",
+      "unit": "MET",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "activity_calories",
+      "type": "number",
+      "description": "Energy expenditure reported by a wearable device",
+      "unit": "kcal",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "steps",
+      "type": "integer",
+      "description": "Step count reported by a wearable device",
+      "unit": "count",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "ketones",
+      "type": "number",
+      "description": "Blood ketone (beta-hydroxybutyrate) reading",
+      "unit": "mmol/L",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "annotations",
+      "type": "string",
+      "description": "JSON object holding source detail with no typed home (meal photo path, free-text description, the raw vendor column a value came from). Serialize with annotations_to_json(); null when absent"
+    }
+  ],
+  "primaryKey": [
+    "datetime",
+    "glucose",
+    "carbs",
+    "insulin_slow",
+    "insulin_fast",
+    "exercise",
+    "calories",
+    "protein",
+    "fat",
+    "fiber",
+    "heart_rate",
+    "breathing_rate",
+    "acceleration",
+    "mets",
+    "activity_calories",
+    "steps",
+    "ketones",
+    "annotations"
+  ]
+}

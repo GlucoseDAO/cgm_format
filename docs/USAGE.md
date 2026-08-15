@@ -581,6 +581,64 @@ carb_intake = events_df.filter(
 ).select(['datetime', 'carbs'])
 ```
 
+## Multi-File and Multi-Subject Sources
+
+Three source shapes, three entry points. The categories compose: a corpus's member is a bundle or an
+export, so `parse_corpus` is built out of the other two.
+
+```python
+from cgm_format import FormatParser
+
+# EXPORT — one file, one subject (every vendor export)
+frame = FormatParser.parse_file("Clarity_Export.csv")
+
+# BUNDLE — several files, ONE subject, each a different modality
+frame = FormatParser.parse_bundle(["glucose.csv", "insulin.csv", "food.csv"])
+
+# CORPUS — many subjects, identity in the key and never in a column
+corpus = FormatParser.parse_corpus("/data/CGMacros")
+corpus["CGMacros-001/libre"]      # multi-track: "subject/track"
+corpus["012_diabetes"]            # single-track: bare subject id
+```
+
+**A bundle merges modalities, never subjects.** Two files from different people concatenate exactly
+as cleanly as two modalities from one person, and nothing downstream objects — the frames interleave
+on the datetime sort, sequence detection splices them together, and interpolation invents rows
+bridging one person's Tuesday to another's Thursday. The library cannot detect this, because a
+subject's identity is not in the data. Use `parse_corpus` for many subjects.
+
+### Tracks
+
+```python
+tracks = FormatParser.parse_tracks("CGMacros-001.csv")
+tracks.keys()          # dict_keys(['libre', 'dexcom'])
+```
+
+`parse_file` on a multi-track source raises `MultiTrackSourceError` rather than silently picking a
+sensor. **Never concatenate two tracks** — see `docs/UNIFIED_FORMAT.md`.
+
+The synthetic mean is opt-in and never appears in the default output:
+
+```python
+mean = FormatParser.parse_tracks(path, track="mean")["mean"]
+```
+
+Every row it synthesizes from two readings is flagged `Quality.TRACK_MERGE`. Rows where only one
+sensor reported are deliberately **not** flagged — they are that sensor's real reading, unaltered —
+so the composition is inspectable per row rather than something you have to infer.
+
+### Native cadence
+
+Neither corpus parser resamples. CGMacros ships on a 1-minute grid, so pass the interval explicitly
+and set the gap threshold with it — `small_gap_max_minutes` defaults to 15, which against a 1-minute
+interval is 15x the interval rather than the intended 3x:
+
+```python
+frame = FormatProcessor.detect_and_assign_sequences(
+    frame, expected_interval_minutes=1, large_gap_threshold_minutes=3
+)
+```
+
 ## Error Handling
 
 ### Common Exceptions

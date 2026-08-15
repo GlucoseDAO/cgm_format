@@ -75,53 +75,114 @@ Legality: additive (a new optional config path), so minor.
 
 ---
 
-## RM6 — parse Libre ketone readings into UnifiedFormat
+## RM6 — event type and parser mapping for ketone readings
 
-**Severity:** medium · **Status:** open · **Owner:** unassigned
+**Severity:** medium · **Status:** open, **narrowed by 0.10.0** · **Owner:** unassigned
 
-Libre vendor schemas already declare ketone columns: `Ketone mmol/L` on `LIBRE_SCHEMA`, plus
-`Historic Ketone mmol/L` and `Scan Ketone mmol/L` appended on `LIBRE_EU_SCHEMA`. `_process_libre`
-never selects them. `CGM_SCHEMA` has no ketone field, so `validate_dataframe(enforce=True)` would
-drop any extra column the parser tried to smuggle through. The values are gone after Stage 3.
+**0.10.0 settled two of the four decisions and shipped the column. What remains is the event type
+and the parser mapping, and it is blocked on a real fixture.**
 
-The JonGrove mmol/L export (local, gitignored) carries all three headers and **zero populated
-cells**. The committed Libre fixtures are the same. There is no real ketone reading in the tree.
-Do not implement against an invented row.
+Settled and shipped:
 
-Left out of 0.9.0 on purpose: that release put the columns on the *vendor* schema so Frictionless
-accepts the 21-column header. Putting them on the *unified* schema is a shape a consumer reads —
-a design, not a parser follow-up.
+- **Shape (part).** `ketones` is a data column on `CGM_SCHEMA_EXTENDED` (`formats/unified.py`), null
+  meaning the vendor did not say. `CGM_SCHEMA` is untouched, so nothing a core consumer reads changed.
+- **Canonical unit.** mmol/L, declared on the column and **not** routed through
+  `_glucose_to_canonical` (decision D8). Clinical ketones are already mmol/L; borrowing the glucose
+  convention would apply one analyte's rule to another.
 
-**Decisions to settle before writing code** (do not infer):
+Still open, and deliberately not guessed at:
 
-1. **Shape.** A new optional data column (`ketones`, null = the vendor did not say) vs a new
-   8-char `UnifiedEventType` vs both. A column without an event type leaves a ketone row looking
-   like an empty glucose event; an event type without a column has nowhere to put the number.
-   Reusing `glucose` to hold ketones redefines a column a consumer already reads — that would be
-   major and silent.
-2. **Canonical unit.** Clinical ketones are already mmol/L. Routing them through
-   `_glucose_to_canonical` / `CANONICAL_GLUCOSE_UNIT` applies a glucose convention to a different
-   analyte. Stay mmol/L, or name a ketone target in `UNIT_CONVERSIONS` — pick one, don't borrow.
-3. **Historic vs scan vs the older `Ketone mmol/L` column.** Merge into one series (as scan
-   glucose merged into `EGV_READ`) or keep distinct event types. Merging re-opens F1 on a new
-   analyte.
-4. **Fixture.** Need a real export with nonempty ketone cells. Skip-if-absent until then.
+1. **What `event_type` a ketone row carries.** A column with no event type leaves a ketone row
+   looking like an empty glucose event — the failure this item was opened for. A new 8-char
+   `UnifiedEventType` member is the obvious candidate, but it is a vocabulary a consumer reads.
+2. **Historic vs scan vs the older `Ketone mmol/L` column.** Merge into one series (as scan glucose
+   merged into `EGV_READ`) or keep them distinct. Merging re-opens F1 on a new analyte. 0.10.0's
+   intent was one series with the raw source column recorded in `annotations`, but that is not
+   implemented and should not be treated as decided.
+3. **`_process_libre` never selects the columns.** They stay on the vendor schema and are dropped at
+   the unified boundary.
 
-**Legality:** minor if we *add* a column and/or event type. Major if we reuse an existing unified
-column.
+**Blocked on a fixture, not on a decision.** The JonGrove mmol/L export (local, gitignored) carries
+all three ketone headers and **zero populated cells**; every committed Libre fixture is the same.
+There is no real ketone reading anywhere in the tree, and `CLAUDE.md` §2 forbids implementing
+against an invented row. Skip-if-absent until a real export arrives.
+
+**Legality:** minor — a new `UnifiedEventType` member and a parser mapping onto a column that already
+exists.
 
 ---
 
-## Idea book
+## RM7 — lazy `scan_csv` ingest path
 
-Freeform, unsized, no commitment. An item here has not been triaged.
+**Severity:** medium · **Status:** open · **Owner:** unassigned
 
-- A `--strict` / determinism mode for the CLI would be useful for reproducible dataset builds — with
-  the caveat stated loudly in the docs that it means *reproducible*, not *correct*. A parser mapping
-  the wrong vendor column to `glucose` passes every determinism check we have.
-- Aggregate the per-row parse warnings by reason rather than by row before they reach a user running
-  `cgm-cli parse` on a full multi-year export. Worth measuring the actual volume on the largest
-  fixture first, rather than assuming it is already a problem.
-- Nothing currently distinguishes "the vendor did not record a carb entry" from "the vendor recorded
-  something the schema cannot hold" in the warning stream. They are different reports and a consumer
-  reading the log cannot tell them apart.
+Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
+detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest
+is therefore capped at whatever fits in memory, and the cap is silent — there is no size at which the
+library says "use the streaming path", because there isn't one.
+
+This is worth doing on its own merits (multi-year Dexcom exports are already the slowest thing in the
+test suite), and it is a hard blocker for the Loop corpus, where a single `LOOPDeviceCGM*.txt` is
+about 2.3 GB. See [RESEARCH_CORPORA.md](RESEARCH_CORPORA.md).
+
+Shape: a `pl.scan_csv`-based entry point sitting **beside** the eager ones, not replacing them, with
+`sink_parquet` for output. The eager path stays the default and stays simplest — most vendor exports
+are a few megabytes and lazy evaluation buys them nothing.
+
+**Decisions to settle before writing code:**
+
+1. **Detection on a prefix.** `detect_format` currently takes the whole decoded text. A lazy path has
+   only the first N lines, which is all detection actually reads (`DETECTION_LINE_COUNT`) — so this
+   is a refactor of the *signature*, not the logic. Confirm that before assuming it's free.
+2. **Where `decode_raw_data` fits.** BOM and encoding-artifact normalization only runs on `bytes`
+   (`CLAUDE.md` §12). A streaming reader hands Polars a path, not bytes, so either the artifacts are
+   handled by a prefix sniff or the lazy path documents that it does not fix them. Do not let it
+   silently skip normalization.
+3. **What the lazy path returns.** A `LazyFrame` gives the caller the streaming win but breaks the
+   `UnifiedFormat = pl.DataFrame` alias every signature uses. Collecting internally is honest but
+   forfeits most of the benefit for large inputs.
+
+**Legality:** a new entry point beside the existing ones, nothing removed or retyped, so **minor**.
+
+---
+
+## RM11 — Loop dataset support
+
+**Severity:** low · **Status:** open, blocked on RM7 · **Owner:** unassigned
+
+**RM9 no longer blocks this** — 0.10.0 shipped `parse_corpus`, so the many-subjects-out half is
+solved. Loop is subject-as-key-column rather than subject-per-directory, so it needs an *iterator*
+form of the corpus entry point (the eager `dict` fits CGMacros' 45 and D1NAMO's 29; it does not fit
+~1,000 participants across 111 million rows). That is a new sibling entry point, not a retype —
+adding it later stays cheap, which is what made deferring Loop the right call.
+
+The Loop observational study (NCT03838900, Jaeb Center for Health Research), dataset 560. Roughly a
+thousand participants of automated insulin delivery data — the largest real-world AID corpus
+available to us.
+
+Lower priority than RM10 for practical reasons, not scientific ones: it is DUA-gated, needs ~20 GB on
+disk before a single test runs, and is hard-blocked on RM7. Appendix B of
+[RESEARCH_CORPORA.md](RESEARCH_CORPORA.md) has what we know.
+
+**Read `DataGlossary.rtf` from inside the archive before writing any code.** The column lists we
+currently hold were reconstructed from third-party parsers' `usecols` arguments, not from the
+authoritative file. Do not implement against them.
+
+Constraints already settled:
+
+- **No zip handling in the library.** The archive is deflate64, which the standard library cannot
+  open, and the workaround is a third-party package. That must not touch the Polars-only core —
+  extraction is a documented user-side step, or a `scripts/` helper at most.
+- **Keep `UTCDtTm` verbatim as `datetime`.** `TmZnOffset` is reportedly null for ~63% of patients, so
+  reconstructing local time from `PtRoster.PtTimezoneOffset` is a substitution. Opt-in with a
+  warning, never silent (`CLAUDE.md` §2).
+- **Glucose is mmol/L.** Route it through the column's declared `unit` and `_glucose_to_canonical`,
+  never a hardcoded 18.018 — that is what the units mechanism exists for.
+- **Dedupe is a parser step, not a caller's problem.** A reported ~35% of CGM rows are exact
+  duplicates. First-occurrence with deterministic sort keys, with its own test.
+- **Carbs span two mutually exclusive eras** (`LOOPDeviceWizard.txt` to mid-2018,
+  `LOOPDeviceFood.txt` after), overlapping in patients but not in time.
+
+**Legality:** a new format, nothing removed, so **minor**.
+
+---

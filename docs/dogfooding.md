@@ -49,3 +49,37 @@ Commit `44e3bb9` dropped the `!` so `data/input/` is ignored outright. Only fixt
 history stay tracked; a new vendor file cannot be committed without `git add -f`. The mmol/L
 Libre fixture therefore stays local, and tests skip when it is absent. CLAUDE.md §3 records the
 current ignore rule.
+
+### F3 — a stale `cgm_format.egg-info` silently shadows the installed version
+
+Found while verifying the 0.10.0 bump. `cgm_format.__version__` reported **0.2.2** on a checkout
+whose `pyproject.toml` said `0.10.0` and whose `.venv` dist-info said `0.10.0` too.
+
+The cause is a stale `cgm_format.egg-info/` directory in the repo root, dated November 2025, left by
+some earlier non-uv build. `importlib.metadata.distributions()` finds it first because the repo root
+sorts ahead of `site-packages` on `sys.path`, so `version("cgm-format")` returns whatever that
+directory's `PKG-INFO` says — forever, and silently.
+
+It is gitignored (`.gitignore:27`) and untracked, so it never travels and CI is unaffected. But any
+local run — a CLI `info`, a log line, anything embedding `__version__` in output — reported a version
+from a build nobody remembers making. Nothing errors, which is what makes it worth recording.
+
+**Mitigated, not fixed.** The stale directory was moved aside. The library cannot defend against
+this on its own: it is doing exactly what `CLAUDE.md` §2 prescribes (read the version from installed
+metadata, never hardcode it), and the metadata it reads is genuinely present and genuinely wrong.
+
+Two things would help, both RM2's territory:
+
+- Drop the `except Exception` fallback once an editable install is guaranteed, so a missing
+  distribution fails loudly instead of serving a literal that drifts. The literal was still `0.9.0`
+  at the moment the bump landed, which is the same class of bug one level down.
+- Consider whether `uv sync` should prune a root `*.egg-info/`. That is a uv question, not ours.
+
+Check for it with:
+
+```bash
+uv run python -c "from importlib.metadata import distributions; \
+  print([(d.metadata['Name'], d.version) for d in distributions() if 'cgm' in (d.metadata['Name'] or '')])"
+```
+
+Two entries means the shadow is back.

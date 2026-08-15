@@ -8,11 +8,14 @@ Separated into two concerns:
 from datetime import datetime
 from abc import ABC, abstractmethod
 from enum import Flag, auto
-from typing import Union, Tuple, List
+from typing import Union, Tuple, List, Dict, Sequence, ClassVar, TYPE_CHECKING
 from enum import Enum
 from pathlib import Path
 import polars as pl
 from base64 import b64decode
+
+if TYPE_CHECKING:
+    from cgm_format.interface.schema import CGMSchemaDefinition
 
 # Check pandas availability
 try:
@@ -57,6 +60,48 @@ class SupportedCGMFormat(Enum):
     MEDTRONIC = "medtronic"
     NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides
+    UNIFIED_EXTENDED = "unified_extended"  # Unified format widened with macros/wearables/annotations
+    CGMACROS = "cgmacros"  # PhysioNet research corpus: 45 subjects, two concurrent sensors
+    # Two registered formats, not one with a flag: the subsets differ in
+    # food.csv's header, in which modality files exist, and in a disjoint
+    # glucose type vocabulary. derive_schema patches names and units, not a
+    # different column set.
+    D1NAMO_DIABETES = "d1namo_diabetes"  # glucose + insulin + meals, CGM present
+    D1NAMO_HEALTHY = "d1namo_healthy"  # glucose + meals + annotations, fingersticks only
+
+class FormatCategory(Enum):
+    """How many files a source arrives as, and how many subjects are in them.
+
+    Every format the library supported before 0.10.0 was one shape — one file,
+    one subject, one device — and that assumption was never written down
+    because nothing violated it. It is baked into `parse_file(path) ->
+    UnifiedFormat` and into `detect_format`, which reads a text prefix of a
+    single file. Research corpora break it along two *orthogonal* axes: how
+    many files come in, and how many subjects are in them. Two axes give three
+    categories rather than a spectrum.
+
+    The categories **compose**: a corpus's member is a bundle or an export, so
+    `parse_corpus` is built out of `parse_bundle` rather than implemented a
+    third time. That composition is most of the value of naming them.
+
+    A plain `Enum`, not an `EnumLiteral`: this vocabulary describes a source's
+    shape and is never written into a frame or a CSV, so it needs no
+    string-comparison behaviour. `EnumLiteral` exists for values that must
+    survive a round-trip through a data column.
+    """
+
+    #: One file, one subject. `parse_file(path) -> UnifiedFormat`.
+    EXPORT = "export"
+
+    #: Several files, ONE subject, each file a different modality —
+    #: glucose here, insulin there, meals in a third.
+    #: `parse_bundle(paths) -> UnifiedFormat`, merging on the modality axis.
+    BUNDLE = "bundle"
+
+    #: Many subjects. `parse_corpus(root) -> dict[str, UnifiedFormat]`,
+    #: one frame per subject, identity living in the key and never in a column.
+    CORPUS = "corpus"
+
 
 class ValidationMethod(Flag):
     """Validation method for validating the input and output dataframes."""
@@ -126,6 +171,18 @@ class ZeroValidInputError(ValueError):
     """Raised when there are no valid data points in the sequence."""
     pass
 
+class MultiTrackSourceError(ValueError):
+    """Raised when a multi-track source is parsed as if it were a single frame.
+
+    A multi-track source carries more than one independent measurement of the
+    same quantity — CGMacros wears a Libre and a Dexcom over the same ten days.
+    There is no honest way for `parse_file` to return one frame from that: it
+    would have to pick a sensor silently, and the caller could not see which.
+    So it refuses and names both the tracks and the entry point that returns
+    them.
+    """
+    pass
+
 # Maximum length for error messages to prevent huge CSV dumps in logs
 MAX_ERROR_MESSAGE_LENGTH = 8192
 
@@ -156,7 +213,16 @@ class CGMParser(ABC):
     After stage 3, data is in UnifiedFormat and can be serialized or passed to CGMProcessor.
 
     """
-    
+
+    #: Unified schemas a merged frame may conform to, widest first. Used only
+    #: to give `merge_bundle_frames` a canonical column ordering. Declared here
+    #: and populated by the concrete parser because `formats.unified` imports
+    #: `interface.schema`, which imports this module — naming a schema at this
+    #: level would close an import cycle. Empty is safe: the canonical ordering
+    #: then degrades to alphabetical, which is still a pure function of the
+    #: column set and so still deterministic.
+    unified_schemas: ClassVar[Tuple["CGMSchemaDefinition", ...]] = ()
+
     # ===== STAGE 1: Preprocess Raw Data =====
     
     @classmethod
@@ -330,6 +396,242 @@ class CGMParser(ABC):
         
         return cls.parse_from_bytes(raw_data)
     
+    @classmethod
+    def parse_bundle(cls, paths: Sequence[Union[str, Path]]) -> UnifiedFormat:
+        """Parse several files describing ONE subject into a single frame.
+
+        A **bundle** is the second source category: several files, one subject,
+        each file a different *modality* — glucose in one, insulin in another,
+        meals in a third. They merge to one frame because they are different
+        views of the same record, which is a diagonal concat.
+
+        This category already existed unrecognized: `from_nightscout_exports`
+        takes entries + treatments describing one person and merges exactly
+        this way. It was written as a Nightscout special case and is in fact
+        the general shape, which is why an app-API pull (several endpoints, one
+        user) is a bundle by any other name.
+
+        **Merging modalities is not merging subjects, and the library cannot
+        tell them apart.** Two files from *different people* concatenate just
+        as cleanly as two modalities from one, and nothing downstream raises:
+        `_postprocess_unified` sorts by `datetime`, so two subjects interleave,
+        and `detect_and_assign_sequences` then splices them into shared
+        sequences. Interpolation will happily invent rows bridging one person's
+        Tuesday to another's Thursday. No check here can catch that — a
+        subject's identity is not in the data — so **the caller owns the
+        guarantee that these paths describe one subject.** For many subjects,
+        parse each subject separately and keep them in a mapping keyed by
+        subject id; identity belongs in that key and never in a column.
+        (`parse_corpus` will do exactly this — it is not implemented yet.)
+
+        Each file is detected and parsed independently, so a bundle may mix
+        formats. Rows are concatenated diagonally, so a column absent from one
+        member is null there rather than an error — "this modality did not say"
+        rather than a shape mismatch.
+
+        **Members must be disjoint modalities, not two views of the same one.**
+        Bundling two *glucose* sources for one subject — two sensors worn
+        concurrently, or an export overlapping a Nightscout pull — yields two
+        readings per timestamp, which then splice into shared sequences and get
+        interpolated across, exactly as two subjects would. That case is a
+        *track*, not a bundle: keep each sensor's series as its own frame and
+        compare them rather than stacking them. (`parse_tracks` will serve
+        this case, flagging any synthesized value with `Quality.TRACK_MERGE`;
+        it is not implemented yet.) Nothing on this path sets that flag,
+        because nothing here merges readings.
+
+        The result is **not** revalidated against a schema. A bundle of a core
+        and an extended member is legitimately the wider shape, and narrowing
+        it here would discard the extended member's channels; conversely
+        enforcing the wider schema would invent columns for a core-only bundle.
+        Validate against the schema you expect, or narrow with
+        `FormatProcessor.to_core_df`.
+
+        Args:
+            paths: Files describing one subject, as a sequence. Order does not
+                matter — the result is deterministically ordered either way.
+                A bare `str` or `Path` is rejected rather than iterated.
+
+        Returns:
+            One DataFrame in unified format.
+
+        Raises:
+            TypeError: If `paths` is a single `str` or `Path` rather than a
+                sequence of them. A `str` is itself a sequence of `str`, so it
+                would otherwise be walked character by character and fail on a
+                one-letter filename.
+            ValueError: If `paths` is empty. An empty bundle has no
+                meaningful frame to return, and returning an empty one would
+                be a silent substitute for "you gave me nothing".
+            FileNotFoundError: If any path does not exist.
+            UnknownFormatError: If any member's format cannot be determined.
+            MalformedDataError: If any member cannot be parsed.
+        """
+        if isinstance(paths, (str, Path)):
+            raise TypeError(
+                "parse_bundle takes a sequence of paths, not a single path — "
+                f"got {type(paths).__name__}. A str is itself a sequence of "
+                "str, so iterating it would walk the filename character by "
+                f"character. Pass [{paths!r}], or use parse_file for one file."
+            )
+
+        resolved = [Path(p) for p in paths]
+        if not resolved:
+            raise ValueError(
+                "parse_bundle requires at least one path; got an empty sequence"
+            )
+
+        # Every bundle goes through the merge, including a one-member one: the
+        # merge is the documented subclass extension point, and skipping it for
+        # a single file would make an override's behaviour depend on how many
+        # files the caller happened to pass.
+        return cls.merge_bundle_frames([cls.parse_file(path) for path in resolved])
+
+    @classmethod
+    def merge_bundle_frames(cls, frames: Sequence[UnifiedFormat]) -> UnifiedFormat:
+        """Merge already-parsed bundle members into one frame.
+
+        Split out from `parse_bundle` so a caller that already holds frames —
+        `from_nightscout_url` pulling several API endpoints, or a corpus
+        walker that has parsed a subject directory — reuses the same merge
+        rather than reimplementing the concat. Subclasses that need
+        vendor-specific merge behaviour override this one method.
+
+        Ordering is taken from the merged frame's own columns rather than from
+        a named schema, because a diagonal concat of a core member and an
+        extended one yields the wider shape and the core key list would leave
+        the extended columns outside the total ordering.
+
+        But the concat's *own* column order is not usable as a sort key
+        either: it is union-by-first-appearance, so two members carrying
+        **disjoint** extra columns produce a different key list depending on
+        which was passed first (`[…, calories, heart_rate]` one way,
+        `[…, heart_rate, calories]` the other). Sorting by that would make row
+        order depend on argument order — the precise nondeterminism the
+        stable-sort invariant exists to remove. So the keys are canonicalized:
+        columns present in the schema keep their schema order, and any
+        remainder follows in a stable alphabetical tail.
+
+        This method does **not** validate: a bundle may legitimately be wider
+        than the core schema, and both narrowing and enforcing would lose
+        information. Its only job is a defined row order.
+
+        Args:
+            frames: Parsed unified frames belonging to one subject.
+
+        Returns:
+            One DataFrame in unified format, diagonally concatenated.
+
+        Raises:
+            ValueError: If `frames` is empty.
+        """
+        if not frames:
+            raise ValueError(
+                "merge_bundle_frames requires at least one frame; got none"
+            )
+
+        merged = pl.concat(frames, how="diagonal")
+        keys = cls._canonical_sort_keys(merged.columns)
+        # Canonicalize the column *layout* as well as the row order. `sort`
+        # only permutes rows, so without the `select` a frame's columns would
+        # still sit in concat order and two argument orders would produce
+        # frames that differ by layout alone — CSV bytes included.
+        return merged.select(keys).sort(keys)
+
+    @classmethod
+    def _canonical_sort_keys(cls, columns: Sequence[str]) -> List[str]:
+        """Order a merged frame's columns independently of concat order.
+
+        Known columns first, in the order the widest registered unified schema
+        declares them — that is the total ordering the determinism invariant is
+        defined against. Anything no schema declares follows in a sorted tail.
+        Either way the result is a pure function of the column *set*, never of
+        the order the members arrived in.
+
+        The schemas come from `unified_schemas`, a ClassVar the concrete parser
+        populates, rather than from an import: `formats.unified` imports
+        `interface.schema`, which imports this module, so naming a schema here
+        would close a cycle.
+        """
+        present = set(columns)
+        known: List[str] = []
+        for schema in cls.unified_schemas:
+            for name in schema.get_column_names():
+                if name in present and name not in known:
+                    known.append(name)
+        return known + sorted(present - set(known))
+
+    @classmethod
+    def parse_tracks(cls, file_path: Union[str, Path]) -> "Dict[str, UnifiedFormat]":
+        """Parse a multi-track source into one frame per track.
+
+        A **track** is one of several independent measurements of the same
+        quantity in one source — CGMacros wears a Libre and a Dexcom over the
+        same ten days, and the two disagree by design.
+
+        **Tracks are alternative views, never shards.** Rows belonging to
+        neither device — meals, macronutrients, heart rate, photo annotations —
+        are *replicated into every track*, so each frame is a complete
+        self-contained view of the period as seen through one sensor. The
+        consequence matters more than the rule: **concatenating two track
+        frames double-counts every meal**, giving carbohydrate totals exactly
+        twice reality with nothing raised anywhere. Pick one, or compare them.
+        Never add them.
+
+        Args:
+            file_path: A multi-track source file.
+
+        Returns:
+            Track name → frame. Keys are the source's real sensors; a synthetic
+            track (a per-timestamp mean, say) is never among them, because it
+            is a derived view rather than a member of the corpus.
+
+        Raises:
+            UnknownFormatError: If the format cannot be determined.
+            NotImplementedError: If the format is single-track — `parse_file`
+                is the entry point for those, and returning a one-entry mapping
+                would blur a distinction the categories exist to draw.
+        """
+        raise NotImplementedError(
+            "parse_tracks is implemented by the concrete parser"
+        )
+
+    @classmethod
+    def parse_corpus(cls, root: Union[str, Path]) -> "Dict[str, UnifiedFormat]":
+        """Parse a many-subject corpus into one frame per subject (per track).
+
+        The third source category. Built out of `parse_file` / `parse_tracks`
+        rather than implemented a third time — that composition is most of the
+        value of naming the categories.
+
+        **Identity lives in the key and never in a column.** The reason is
+        mechanical, not aesthetic: parsing sorts by `datetime`, so many
+        subjects in one frame interleave; `detect_and_assign_sequences` then
+        splices them into shared sequences with nothing raised; and
+        interpolation invents rows bridging one person's Tuesday to another's
+        Thursday. A `dict[str, UnifiedFormat]` holds exactly the same
+        information, and every frame in it is independently valid.
+
+        Keys are flat composite strings for a multi-track corpus —
+        `"CGMacros-001/libre"` — which keeps the return type a plain mapping
+        rather than a nested one. **The `/` separator is part of the public
+        contract.** A subject id may contain `_` but never `/`; D1NAMO's
+        `012_diabetes` directory is exactly why the separator cannot be `_`.
+
+        Args:
+            root: Corpus root directory.
+
+        Returns:
+            Subject id (or `subject/track`) → frame, one entry per subject per
+            track.
+
+        Raises:
+            UnknownFormatError: If `root` is not a recognized corpus.
+        """
+        raise NotImplementedError(
+            "parse_corpus is implemented by the concrete parser"
+        )
+
     @classmethod
     def parse_base64(cls, base64_data: str) -> UnifiedFormat:
         """Parse CGM data from base64 encoded string.
