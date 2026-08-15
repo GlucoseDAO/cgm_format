@@ -26,8 +26,11 @@ try:
     from importlib.metadata import version as _package_version
     __version__ = _package_version("cgm-format")
 except Exception:
-    # Fallback if package not installed (e.g., during development)
-    __version__ = "0.9.0"  # Keep in sync with pyproject.toml
+    # Fallback if package not installed (e.g., during development).
+    # Tech debt: RM2 in docs/ROADMAP.md. Two sources of truth drift, and the
+    # one you read is the wrong one -- the right fix is an editable install so
+    # metadata is always present, then dropping this branch.
+    __version__ = "0.10.0"  # Keep in sync with pyproject.toml
 
 # Core classes
 from cgm_format.format_parser import FormatParser
