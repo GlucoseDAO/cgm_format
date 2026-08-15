@@ -27,6 +27,7 @@ from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
+    MultiTrackSourceError,
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
@@ -80,6 +81,22 @@ def _processor_for(dataframe: pl.DataFrame) -> Type[FormatProcessor]:
     if columns == tuple(CGM_SCHEMA_EXTENDED.get_column_names(data_only=False)):
         return ExtendedFormatProcessor
     return FormatProcessor
+
+
+def _multi_track_hint(input_file: Path, error: Exception) -> None:
+    """Report a multi-track refusal in CLI terms, not Python ones.
+
+    `MultiTrackSourceError` names `FormatParser.parse_tracks(...)`, which is the
+    right advice for a library caller and useless to someone at a shell. The
+    refusal itself is correct — a multi-track file has no single frame — so the
+    fix is to translate the remedy, not to weaken the error.
+    """
+    console.print(f"[red]✗ {error}[/red]")
+    console.print(
+        f"\n[yellow]From the CLI:[/yellow] use "
+        f"[bold]cgm-cli corpus {input_file.parent.parent}[/bold] to parse every "
+        "subject and track, which writes one CSV per track."
+    )
 
 
 # ===== Format Detection & Parsing Commands =====
@@ -158,6 +175,9 @@ def parse(
             FormatParser.to_csv_file(unified_df, str(output_file))
             console.print(f"\n[green]✓[/green] Saved to: {output_file}")
         
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except (UnknownFormatError, MalformedDataError, ZeroValidInputError) as e:
         console.print(f"[red]✗ Parse error: {e}[/red]")
         raise typer.Exit(1)
@@ -231,6 +251,12 @@ def process(
             FormatParser.to_csv_file(df, str(output_file))
             console.print(f"\n[green]✓[/green] Saved to: {output_file}")
         
+    except typer.Exit:
+        # A deliberate exit is not an error to re-report.
+        raise
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
@@ -344,6 +370,9 @@ def pipeline(
     except (UnknownFormatError, MalformedDataError, ZeroValidInputError) as e:
         console.print(f"\n[red]✗ Pipeline error: {e}[/red]")
         raise typer.Exit(1)
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)
@@ -397,6 +426,11 @@ def validate(
                     df, enforce=False
                 )
                 validation_passed = True
+            except MultiTrackSourceError:
+                # Not a validation failure: the file is well-formed, it simply
+                # has no single frame to validate. Reporting it as invalid
+                # would tell the user their data is broken when it is not.
+                raise
             except Exception as e:
                 validation_passed = False
                 validation_error = str(e)
@@ -417,6 +451,9 @@ def validate(
             console.print(f"  Error: {validation_error}")
             raise typer.Exit(1)
 
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except typer.Exit:
         raise
     except Exception as e:
@@ -785,6 +822,17 @@ def info(
         if not input_file.exists():
             console.print(f"[red]Error: File not found: {input_file}[/red]")
             raise typer.Exit(1)
+
+        if input_file.is_dir():
+            # A raw "Is a directory" errno tells the user nothing about
+            # which command they actually wanted.
+            console.print(
+                f"[red]✗ {input_file} is a directory.[/red] `info` describes "
+                f"one file; use [bold]cgm-cli detect {input_file}[/bold] to "
+                f"identify a corpus, or [bold]cgm-cli corpus {input_file}[/bold] "
+                "to parse it."
+            )
+            raise typer.Exit(1)
         
         # Detect format
         with console.status("[bold green]Analyzing file..."):
@@ -857,6 +905,12 @@ def info(
             
             console.print(detail_table)
         
+    except typer.Exit:
+        # A deliberate exit is not an error to re-report.
+        raise
+    except MultiTrackSourceError as e:
+        _multi_track_hint(input_file, e)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         raise typer.Exit(1)

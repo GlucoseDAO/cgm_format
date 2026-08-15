@@ -82,6 +82,24 @@ Neither parser resamples: CGMacros' native cadence is 1 minute, and callers pass
 - Processing commands (`pipeline`, `process`, `batch`) now pick their processor from the frame's
   shape instead of hardcoding the core one.
 
+### Surface consistency
+
+Auditing the API and CLI against the docs turned up four mismatches, all fixed before release:
+
+- **`MultiTrackSourceError` was caught nowhere in the CLI.** Five commands (`parse`, `process`,
+  `pipeline`, `validate`, `info`) handed a shell user a message naming `FormatParser.parse_tracks(...)`
+  — correct advice for a library caller, useless at a prompt. They now print the refusal plus the
+  `cgm-cli corpus` invocation that works. `validate` additionally reported it as a *validation
+  failure*, which told the user their data was broken when it was not.
+- **`parse_corpus(root, track=...)` silently ignored the track on a single-track corpus**, returning
+  every subject while the caller believed they had filtered. Now refuses. Found by running a README
+  example verbatim.
+- **`cgm-cli info <directory>`** surfaced a raw `Is a directory` errno instead of naming `detect` or
+  `corpus`.
+- `docs/NEW_SCHEMA.md` still described **four** registries; there are seven, six of them exhaustive
+  over `SupportedCGMFormat`. The checklist now lists each one and notes that `detect_format` is
+  disjunctive while `detect_path_format` is conjunctive.
+
 ### Docs
 
 `docs/PHILOSOPHY.md` gained a Source Categories section and corrected two claims: the processor is

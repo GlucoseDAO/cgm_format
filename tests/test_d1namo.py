@@ -437,6 +437,30 @@ class TestUnreadableTimestampsAreReported:
         assert "timestamp" in caplog.text.lower()
 
 
+class TestSingleTrackCorpusRefusesATrack:
+    """A flag that selects nothing must say so, not be ignored."""
+
+    def test_passing_a_track_to_a_single_track_corpus_raises(self) -> None:
+        """Silently ignoring it returns every subject while the caller believes
+        they filtered — the same quiet mismatch `parse_file` refuses for a
+        multi-track source. Found by testing a README example verbatim.
+        """
+        root = FIXTURE_DIR / "healthy_subset"
+        _skip_if_missing(root)
+
+        with pytest.raises(ValueError, match="single-track"):
+            FormatParser.parse_corpus(root, track="libre")
+
+    def test_omitting_the_track_still_parses_every_subject(self) -> None:
+        root = FIXTURE_DIR / "healthy_subset"
+        _skip_if_missing(root)
+
+        corpus = FormatParser.parse_corpus(root)
+
+        assert len(corpus) > 0
+        assert all("/" not in key for key in corpus)
+
+
 class TestRealCorpus:
     """Against both real subsets, when the archives are available."""
 

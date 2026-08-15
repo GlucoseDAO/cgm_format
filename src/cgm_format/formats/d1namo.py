@@ -48,6 +48,10 @@ File                             Literal                         Format
 `annotations.csv` (healthy)      `2014-10-01` / `11:35`          `%Y-%m-%d` / `%H:%M`
 ===============================  ==============================  ==========================
 
+`annotations.csv` (healthy subset) **is** parsed: only the interval start becomes a row, because
+the unified frame is instant-shaped and emitting an end row would double-count the event. The end is
+preserved inside the annotation rather than discarded.
+
 The Zephyr physiological streams are **deliberately not parsed** (D7). ECG is
 250 Hz — roughly 86 million samples per subject over four days — and this is a
 library whose unified schema is event- and reading-shaped. Declining loudly is
