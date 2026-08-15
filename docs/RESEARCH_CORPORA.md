@@ -3,10 +3,17 @@
 A design proposal. The library today absorbs **vendor exports**: one file, one person, one device,
 glucose plus a handful of events. Research datasets — CGMacros, D1NAMO, Loop — are a different kind
 of source, and they break that shape along several axes at once. This document names the categories,
-writes down the design, and records what it must not cost us. The work itself is filed as RM7–RM13 in
+writes down the design, and records what it must not cost us. The work itself was filed as RM7–RM13 in
 [ROADMAP.md](ROADMAP.md).
 
-Nothing here is implemented yet.
+**Shipped in 0.10.0:** the source categories (RM12), faceted output (RM9), the extended schema
+(RM8), CGMacros (RM10) and D1NAMO (RM13). Their entries are in
+[ROADMAP_HISTORY.md](ROADMAP_HISTORY.md). Still open: the lazy `scan_csv` ingest path (RM7) and
+Loop (RM11), which needs an iterator form of `parse_corpus` rather than the eager mapping that fits
+CGMacros and D1NAMO.
+
+Appendix C was written before the archives were read end to end, and implementing D1NAMO falsified
+three of its claims. They are corrected in place below and marked **[corrected 0.10.0]**.
 
 ---
 
@@ -395,10 +402,30 @@ bare filename resolving against that sibling directory. 352 JPEGs across the cor
 `005` has none at all, so a parser must tolerate a `food_pictures/` directory that is empty. Stray
 `.DS_Store` files sit inside several directories and need filtering.
 
-Real dirt to expect, reported by third-party parsers and partly seen in the files: `No information`
-as a value, a `:` typed instead of `.` in a glucose reading, leading zeros (`08.2`), and a corrupt
-literal `8 Balance""` in the `balance` column. `description` is free text containing commas, so a
-real CSV reader is mandatory.
+Real dirt, **[corrected 0.10.0]** — every item verified against the archives, and the distribution
+matters more than the list:
+
+- **All of it is in the healthy subset.** The diabetes subset's `glucose.csv` is clean: 8,055 `cgm`
+  and 166 `manual` rows, every value a plain decimal in 2.2–22.2 mmol/L.
+- `7:0` — a `:` typed for a `.` — is a single row, in subject **017**.
+- The leading zeros (`08.2`, `05.4`, …) are **all in `012_diabetes`**, the same subject as the
+  directory-name trap. Both traps in one subject.
+- `No information` appears in `balance`/`quality` (3 rows) and the corrupt `8 Balance""` once; 102
+  food rows carry empty balance/quality.
+- `description` is free text containing commas, so a real CSV reader is mandatory.
+
+**A "dangling `picture` reference" is not a missing file.** Ten rows across healthy subjects 002,
+004, 007 and 013 hold *words* — `lunch`, `diner`, `breakfast` — where a filename belongs. That is
+"the source said something we cannot resolve", a different report from diabetes subject 005's nine
+rows with an empty `picture` cell ("the source did not say"). Both instances are real, so the
+distinction is testable against data rather than only against a synthetic.
+
+**`insulin.csv`'s header was never recorded here:** `date,time,fast_insulin,slow_insulin,comment`.
+It maps straight onto `insulin_fast` / `insulin_slow`.
+
+**Diabetes subject 005 carries the literal `NA` in every `food.csv` `datetime` cell** — the only
+subject in the corpus that does, and absent from every prior survey of this dataset. Its meals
+cannot be placed on a timeline; its glucose and insulin are unaffected.
 
 Public parsers worth reading before writing ours: `IrinaStatsLab/Awesome-CGM`
 (`R/Dubosson2018/preprocessor.r`, the reference harmonization — filters `type == "cgm"`, ×18 to

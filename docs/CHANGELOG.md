@@ -11,6 +11,85 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.10.0 — 2026-08-15
+
+**Minor.** Everything is additive: `CGM_SCHEMA` is untouched, every existing entry point keeps its
+shape, and no existing flag or column changed meaning. Two new source categories and three new
+registered formats.
+
+### The extended schema (RM8)
+
+`CGM_SCHEMA_EXTENDED` sits **beside** `CGM_SCHEMA`, adding food (`calories`, `protein`, `fat`,
+`fiber`), wearable (`heart_rate`, `breathing_rate`, `acceleration`, `mets`, `activity_calories`,
+`steps`), `ketones`, and `annotations`. The core schema is an exact prefix of it, so an extended
+frame narrows to a core one by projection alone (`FormatProcessor.to_core_df`).
+
+`FormatProcessor.schema` is now a `ClassVar` and every one of its 24 `CGM_SCHEMA` usages reads it —
+including 7 ungated structural reads that were **silently dropping extra columns mid-pipeline**.
+`ExtendedFormatProcessor` carries the extended schema. `to_csv_string` / `to_csv_file` became
+classmethods; as staticmethods naming `FormatParser` literally, a subclass override of
+`validation_mode` had no effect. Call sites are unchanged.
+
+`Quality.TRACK_MERGE` (bit 32) is new. `annotations_to_json` is the single deterministic serializer
+for the `annotations` column — sorted keys, `None` for nothing-to-record — which matters because
+that column joins the sort keys and the byte-level round-trip guarantee.
+
+Also: `derive_schema` is now exported, and `exercise` declares unit `"s"` rather than `"seconds"`,
+the spelling `UNIT_CONVERSIONS` is actually keyed on.
+
+### Source categories and faceted output (RM12, RM9)
+
+`FormatCategory` (`EXPORT` / `BUNDLE` / `CORPUS`) names an assumption the library had never written
+down: one file, one subject, one device.
+
+- `parse_bundle(paths)` — several files, **one** subject, each a different modality.
+  `from_nightscout_exports` was already this shape and keeps its name.
+- `parse_tracks(path)` — one file, several independent measurements of the same quantity.
+- `parse_corpus(root)` — many subjects, keyed `"subject"` or `"subject/track"`.
+- `detect_path_format(path)` identifies a directory by shape, beside the existing text-prefix
+  detection. Driven by `PATH_DETECTION_PROBES`: glob patterns only, never callables.
+
+**Two things a consumer must know.** A bundle merges *modalities*, never *subjects* — two people's
+files concatenate just as cleanly as two modalities and nothing raises, so the caller owns that
+guarantee. And **tracks are alternatives, never shards**: non-sensor rows are replicated into every
+track, so concatenating two of them double-counts every meal.
+
+`parse_file` on a multi-track source now raises `MultiTrackSourceError` naming both tracks rather
+than silently picking a sensor.
+
+### Research corpora (RM10, RM13)
+
+**CGMacros** — 45 subjects, two concurrent sensors, macronutrients and meal photos. All 9 real
+header variants are absorbed declaratively. The opt-in synthetic `mean` track averages the two
+sensors and flags every synthesized row `TRACK_MERGE`; rows with only one contributing sensor are
+deliberately not flagged, because they are that sensor's real reading.
+
+**D1NAMO** — two registered formats, not one with a flag: the subsets differ in `food.csv`'s column
+set, in which modality files exist, and in a disjoint glucose `type` vocabulary. Fingersticks map to
+`CALIBRAT`, never `EGV_READ` — the healthy subset has no CGM at all. `carbs` stays null throughout
+because D1NAMO records no carbohydrate anywhere.
+
+Neither parser resamples: CGMacros' native cadence is 1 minute, and callers pass
+`expected_interval_minutes`.
+
+### CLI
+
+- New `cgm-cli corpus <root> --out <dir>`. `cgm-cli detect` accepts a directory.
+- **Fixed:** `cgm-cli report` iterated a hardcoded three-format list, so `DEXCOM_EU`, `LIBRE_EU`,
+  `MEDTRONIC` and `NIGHTSCOUT` were **already** silently absent from its output before this release.
+- **Fixed:** `cgm-cli validate` checked every format against `CGM_SCHEMA` regardless of the schema it
+  is actually parsed into.
+- Processing commands (`pipeline`, `process`, `batch`) now pick their processor from the frame's
+  shape instead of hardcoding the core one.
+
+### Docs
+
+`docs/PHILOSOPHY.md` gained a Source Categories section and corrected two claims: the processor is
+now schema-parameterized (the vendor boundary is intact), and "the CLI requires zero changes" was
+already false. RM8, RM9, RM10, RM12 and RM13 moved to `docs/ROADMAP_HISTORY.md`. RM6 is narrowed to
+its remainder — the `ketones` column ships, but what `event_type` a ketone row carries still needs a
+real export with populated cells.
+
 ## 0.9.0 — 2026-08-13
 
 - European / mmol/L FreeStyle Libre exports (`LIBRE_EU`, RM5): glucose columns relabeled mmol/L, two

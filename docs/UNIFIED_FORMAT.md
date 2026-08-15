@@ -168,6 +168,56 @@ To regenerate `unified.json` after modifying the schema:
 python3 -c "from formats.unified import regenerate_schema_json; regenerate_schema_json()"
 ```
 
+## The Extended Schema
+
+`CGM_SCHEMA_EXTENDED` (0.10.0) is `CGM_SCHEMA` plus the channels research corpora carry and the six
+core data columns have no home for. It sits **beside** the core schema, which is unchanged — an
+existing consumer sees exactly the frame it saw before.
+
+| Group | Columns | Unit |
+|---|---|---|
+| Food | `calories`, `protein`, `fat`, `fiber` | kcal, g, g, g |
+| Wearable | `heart_rate`, `breathing_rate`, `acceleration`, `mets`, `activity_calories`, `steps` | bpm, breaths/min, g, —, kcal, count |
+| Analyte | `ketones` | mmol/L |
+| Escape hatch | `annotations` | JSON object |
+
+The core columns keep their positions, so the core schema is an exact **prefix** of the extended
+one. That is what lets `FormatProcessor.to_core_df()` narrow a frame by projection alone.
+
+`annotations` is a **data** column, not a service column, so it joins `primary_key` and the sort
+keys. That is deliberate: it is what keeps two annotation-only rows at the same timestamp
+distinguishable, and CGMacros has 1,553 such rows. It also means the JSON must serialize
+deterministically — sorted keys, stable floats — because the byte-level round-trip guarantee depends
+on it. Use `annotations_to_json`; do not build the string by hand.
+
+`ketones` is mmol/L and is **not** routed through the glucose conversion. Clinical ketones are
+already mmol/L, and borrowing another analyte's convention would scale them by 18.
+
+Frames targeting the extended schema are processed by `ExtendedFormatProcessor`. Handing one to the
+core `FormatProcessor` raises under the default validation mode rather than silently narrowing.
+
+## Tracks are alternatives, never shards
+
+A multi-track source — CGMacros wears a Libre and a Dexcom over the same ten days — yields one frame
+per sensor from `parse_tracks()`. Rows belonging to *neither* device (meals, macronutrients, heart
+rate, photo annotations) are **replicated into every track**, so each frame is a complete
+self-contained view of that period as seen through one sensor.
+
+The consequence matters more than the rule: **concatenating two track frames double-counts every
+meal.** A consumer who reasonably assumes tracks are shards of one dataset and stacks them gets
+carbohydrate totals that are exactly twice reality, with nothing raised anywhere.
+
+```python
+libre = tracks["libre"]
+dexcom = tracks["dexcom"]
+
+pl.concat([libre, dexcom])   # WRONG — every meal counted twice
+libre                         # right — pick one
+libre["glucose"] - dexcom["glucose"]   # right — or compare them
+```
+
+Pick one, or compare them. Never add them.
+
 ## Format Detection
 
 The unified format can be detected by the presence of these unique identifiers in CSV headers:

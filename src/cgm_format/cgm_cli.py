@@ -39,6 +39,7 @@ from cgm_format.formats.unified import (
     Quality,
 )
 from cgm_format.formats.supported import (
+    FORMAT_CATEGORY,
     SCHEMA_MAP,
     KNOWN_ISSUES_TO_SUPPRESS,
     UNIFIED_TARGET_SCHEMA,
@@ -85,7 +86,7 @@ def _processor_for(dataframe: pl.DataFrame) -> Type[FormatProcessor]:
 
 @app.command()
 def detect(
-    input_file: Path = typer.Argument(..., help="Input CSV file to detect format"),
+    input_file: Path = typer.Argument(..., help="Input CSV file, or a corpus directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed information"),
 ) -> None:
     """Detect the format of a CGM data file."""
@@ -93,7 +94,20 @@ def detect(
         if not input_file.exists():
             console.print(f"[red]Error: File not found: {input_file}[/red]")
             raise typer.Exit(1)
-        
+
+        # A directory is identified by its shape, not by sniffing a file
+        # inside it: a corpus member's contents often look like a plain
+        # vendor export, so reading one would give the wrong answer.
+        if input_file.is_dir():
+            detected_format = FormatParser.detect_path_format(input_file)
+            console.print(
+                f"\n[green]✓[/green] Detected corpus: [bold]{detected_format.value}[/bold]"
+            )
+            if verbose:
+                console.print(f"\nDirectory: {input_file}")
+                console.print(f"Category: {FORMAT_CATEGORY[detected_format].value}")
+            return
+
         with open(input_file, 'rb') as f:
             raw_data = f.read()
         
@@ -544,6 +558,67 @@ def report(
 
 
 # ===== Batch Processing Commands =====
+
+@app.command()
+def corpus(
+    root: Path = typer.Argument(..., help="Corpus root directory"),
+    output_dir: Optional[Path] = typer.Option(None, "--out", "-o", help="Write one CSV per subject"),
+    track: Optional[str] = typer.Option(None, "--track", "-t", help="Restrict to one track (multi-track corpora)"),
+    show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show a per-subject summary"),
+) -> None:
+    """Parse a many-subject research corpus into one frame per subject.
+
+    A separate command rather than an option on `parse` or `batch`: `batch`
+    already globs a directory with a different meaning (independent files, one
+    output each), while a corpus is one dataset whose members are keyed by
+    subject. Detection here is by directory shape, not by sniffing a file.
+    """
+    try:
+        if not root.exists():
+            console.print(f"[red]Error: Directory not found: {root}[/red]")
+            raise typer.Exit(1)
+
+        detected = FormatParser.detect_path_format(root)
+        console.print(f"\n[green]✓[/green] Detected corpus: [bold]{detected.value}[/bold]")
+
+        with console.status("[bold green]Parsing corpus..."):
+            frames = FormatParser.parse_corpus(root, track=track)
+
+        console.print(f"[green]✓[/green] Parsed {len(frames)} frame(s)")
+
+        if show_stats:
+            table = Table(title="Corpus Contents")
+            table.add_column("Key", style="cyan")
+            table.add_column("Rows", justify="right")
+            table.add_column("Glucose", justify="right")
+            table.add_column("Span", style="dim")
+            for key in sorted(frames):
+                frame = frames[key]
+                glucose = frame.filter(pl.col("glucose").is_not_null())
+                if len(frame):
+                    span = f"{frame['datetime'].min()} → {frame['datetime'].max()}"
+                else:
+                    span = "-"
+                table.add_row(key, str(len(frame)), str(len(glucose)), span)
+            console.print(table)
+
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for key, frame in sorted(frames.items()):
+                # The "/" in a composite key is the corpus contract, not a
+                # path separator — flatten it so one subject does not become a
+                # nested directory on disk.
+                filename = key.replace("/", "__") + ".csv"
+                FormatParser.to_csv_file(frame, str(output_dir / filename))
+            console.print(f"\n[green]✓[/green] Wrote {len(frames)} file(s) to: {output_dir}")
+
+    except UnknownFormatError as e:
+        console.print(f"[red]✗ Not a recognized corpus: {e}[/red]")
+        raise typer.Exit(1)
+    except (MalformedDataError, ZeroValidInputError) as e:
+        console.print(f"[red]✗ Corpus error: {e}[/red]")
+        raise typer.Exit(1)
+
 
 @app.command()
 def batch(
