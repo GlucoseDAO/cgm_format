@@ -618,6 +618,12 @@ def corpus(
     except (MalformedDataError, ZeroValidInputError) as e:
         console.print(f"[red]✗ Corpus error: {e}[/red]")
         raise typer.Exit(1)
+    except ValueError as e:
+        # An unknown --track name. Every other CLI path reports a bad argument
+        # as one line and exits 1; a raw traceback here would be the odd one
+        # out, and it is the user's typo rather than a library fault.
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()

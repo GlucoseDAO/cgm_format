@@ -74,8 +74,12 @@ CGMACROS_TIMESTAMP_FORMATS: Tuple[str, ...] = (
     "%m/%d/%Y %H:%M",
 )
 
-# Both sensor columns together identify the format: either alone would be too
-# loose, and no other supported export carries this pair.
+# `detect_format` is DISJUNCTIVE — it returns on the first pattern that appears
+# anywhere in the scanned lines — so each entry here must be specific enough to
+# identify CGMacros on its own. "Libre GL" and "Dexcom GL" both are: no other
+# supported export uses either spelling. (Contrast `detect_path_format`, whose
+# probes are conjunctive; the two mechanisms differ deliberately, because a
+# directory match sends a whole tree to one parser.)
 CGMACROS_DETECTION_PATTERNS = [
     "Libre GL",
     "Dexcom GL",
@@ -282,14 +286,24 @@ CGMACROS_OPTIONAL_COLUMNS: Tuple[str, ...] = (
     CGMacrosColumn.METS.value,
 )
 
-#: Columns seen in real files that the unified format has no home for. Dropped
-#: rather than smuggled into `annotations`: `Unnamed: 0` and `RecordIndex` are
-#: row indices with no meaning outside their own file, and `Sugar` is a
-#: macronutrient the extended schema does not declare.
-CGMACROS_IGNORED_COLUMNS: Tuple[str, ...] = (
+#: File-local row indices. Dropped without comment: they carry no measurement
+#: and mean nothing outside the file they came from.
+CGMACROS_INDEX_COLUMNS: Tuple[str, ...] = (
     "Unnamed: 0",
     "RecordIndex",
-    "Sugar",
+)
+
+#: Real measurements the schema cannot hold. Dropped, but **reported** — "the
+#: source said something we cannot represent" is a different statement from
+#: "the source did not say", and silently discarding a macronutrient someone
+#: measured is the half of that distinction it would be easy to get wrong.
+#: `Sugar` appears on 1 of 45 subjects; declaring it is a schema decision, not
+#: something to settle inside a parser.
+CGMACROS_UNREPRESENTABLE_COLUMNS: Tuple[str, ...] = ("Sugar",)
+
+#: Everything dropped, for the single `drop` call.
+CGMACROS_IGNORED_COLUMNS: Tuple[str, ...] = (
+    CGMACROS_INDEX_COLUMNS + CGMACROS_UNREPRESENTABLE_COLUMNS
 )
 
 

@@ -223,20 +223,62 @@ class TestTracksAreAlternativesNotShards:
         assert stacked["carbs"].sum() == 2 * libre_meals["carbs"].sum()
 
     def test_annotation_rows_are_replicated_into_both_tracks(self) -> None:
-        """Photo-only rows belong to neither sensor, so both tracks carry them."""
+        """Photo-only rows belong to neither sensor, so both tracks carry them.
+
+        Filtered on a populated `annotations` cell rather than on `OTHEREVT`
+        alone: wearable-only rows share that event type and carry no
+        annotation, so an event-type filter would compare two different kinds
+        of row.
+        """
         path = FIXTURE_DIR / "CGMacros-001" / "CGMacros-001.csv"
         _skip_if_missing(path)
 
         tracks = FormatParser.parse_tracks(path)
-        annotations_of = lambda df: set(
-            df.filter(pl.col("event_type") == UnifiedEventType.OTHER.value)[
-                "annotations"
-            ].to_list()
+        photo_annotations_of = lambda df: set(
+            df.filter(
+                (pl.col("event_type") == UnifiedEventType.OTHER.value)
+                & pl.col("annotations").is_not_null()
+            )["annotations"].to_list()
         )
 
-        assert annotations_of(tracks[CGMACROS_TRACKS[0]]) == annotations_of(
-            tracks[CGMACROS_TRACKS[1]]
+        assert photo_annotations_of(tracks[CGMACROS_TRACKS[0]]) == (
+            photo_annotations_of(tracks[CGMACROS_TRACKS[1]])
         )
+
+    def test_the_wearable_stream_is_replicated_into_both_tracks(self) -> None:
+        """The wrist wearable is not a glucose sensor.
+
+        Heart rate, METs and activity calories belong to the subject, not to
+        Libre or Dexcom, and D4 lists them among the rows replicated into every
+        track. Before this was fixed, a timestamp where *this* track's sensor
+        was null contributed no row at all and its wearable sample vanished —
+        about 8% of the stream on the dexcom track, since `Dexcom GL` is
+        populated on roughly 92% of rows, with nothing raised or logged.
+        """
+        path = FIXTURE_DIR / "CGMacros-001" / "CGMacros-001.csv"
+        _skip_if_missing(path)
+
+        tracks = FormatParser.parse_tracks(path)
+        wearable_moments_of = lambda df: set(
+            df.filter(pl.col("heart_rate").is_not_null())["datetime"].to_list()
+        )
+
+        libre = wearable_moments_of(tracks[CGMACROS_TRACKS[0]])
+        dexcom = wearable_moments_of(tracks[CGMACROS_TRACKS[1]])
+
+        assert libre == dexcom, (
+            "wearable samples differ between tracks: "
+            f"{len(libre ^ dexcom)} timestamp(s) present in one but not the other"
+        )
+
+        # And every wearable sample in the source survived into both.
+        with open(path, encoding="utf-8-sig") as fh:
+            source_moments = {
+                r[CGMacrosColumn.TIMESTAMP.value]
+                for r in csv.DictReader(fh)
+                if (r.get(CGMacrosColumn.HEART_RATE.value) or "").strip()
+            }
+        assert {m.strftime("%Y-%m-%d %H:%M:%S") for m in libre} == source_moments
 
 
 class TestMeanTrackIsAuditable:

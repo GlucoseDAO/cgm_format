@@ -350,6 +350,93 @@ class TestDirtIsReportedNotSwallowed:
         assert len(frame) > 0
 
 
+class TestBundleOnlyEntryPoints:
+    """A bare glucose.csv is one modality, not a record."""
+
+    def test_parsing_a_lone_glucose_csv_refuses_and_names_the_alternative(
+        self,
+    ) -> None:
+        """It detects, so it must not then fail as "unknown format".
+
+        `format_supported()` returns True for these files, so a caller is
+        entitled to expect `parse_file` to work. Parsing it alone would drop
+        every insulin dose and every meal silently, so the refusal names the
+        entry points that do not.
+        """
+        path = DIABETES_FIXTURE / "glucose.csv"
+        _skip_if_missing(path)
+
+        assert FormatParser.format_supported(path.read_bytes())
+
+        with pytest.raises(Exception) as excinfo:
+            FormatParser.parse_file(path)
+
+        message = str(excinfo.value)
+        assert "parse_corpus" in message or "parse_bundle" in message
+        assert "unknown" not in message.lower()
+
+
+class TestAnnotationsAreParsed:
+    """`annotations.csv` is required for detection, so it cannot be ignored."""
+
+    def test_annotation_rows_reach_the_frame(self) -> None:
+        """Reading the directory and skipping the file would be a silent drop."""
+        _skip_if_missing(HEALTHY_FIXTURE)
+
+        frame = FormatParser._process_d1namo_subject(HEALTHY_FIXTURE)
+        raw = pl.read_csv(HEALTHY_FIXTURE / "annotations.csv", infer_schema_length=0)
+
+        annotations = frame.filter(
+            (pl.col("event_type") == UnifiedEventType.OTHER.value)
+            & pl.col("annotations").str.contains("annotation_type")
+        )
+        assert len(annotations) == len(raw)
+
+    def test_the_interval_end_is_preserved_in_the_annotation(self) -> None:
+        """Only the start becomes a row; the frame is instant-shaped.
+
+        Emitting an end row too would double-count the event, so the end is
+        kept in the annotation rather than discarded.
+        """
+        _skip_if_missing(HEALTHY_FIXTURE)
+
+        frame = FormatParser._process_d1namo_subject(HEALTHY_FIXTURE)
+        annotations = frame.filter(
+            pl.col("annotations").str.contains("annotation_type")
+        )
+
+        assert len(annotations) > 0
+        for value in annotations["annotations"]:
+            assert '"end_time":' in value
+
+
+class TestUnreadableTimestampsAreReported:
+    """The docstring calls this the trap most likely to produce wrong data."""
+
+    def test_dropped_rows_are_counted_in_a_warning(
+        self, tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A row dropped for an unreadable timestamp must not vanish quietly.
+
+        Glucose values we cannot represent already get a warning; before this,
+        timestamps got none at all.
+        """
+        subject = Path(tmp_path) / "099"
+        subject.mkdir(parents=True)
+        (subject / "glucose.csv").write_text(
+            "date,time,glucose,type,comments\n"
+            "2014-10-01,11:35,5.4,BL,\n"
+            "2014-10-01,not-a-time,6.1,AL,\n"
+            "2014-10-01,12:40,7.2,AD,\n"
+        )
+
+        with caplog.at_level("WARNING"):
+            frame = FormatParser._process_d1namo_subject(subject)
+
+        assert len(frame.filter(pl.col("glucose").is_not_null())) == 2
+        assert "timestamp" in caplog.text.lower()
+
+
 class TestRealCorpus:
     """Against both real subsets, when the archives are available."""
 

@@ -126,13 +126,13 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
 # format added without a category fails the suite rather than silently
 # defaulting to EXPORT.
 #
-# Everything here is EXPORT today, and that is the honest state rather than an
-# oversight: BUNDLE and CORPUS describe entry points (parse_bundle,
-# parse_corpus) that no *registered format* uses yet. Nightscout is the case
-# worth explaining — `from_nightscout_exports` genuinely takes several files
-# and is the bundle shape, but SupportedCGMFormat.NIGHTSCOUT identifies the
-# single-file exporter CSV that `detect_format` recognizes. The bundle-ness
-# lives in the entry point, not in the format identity.
+# Nightscout is the case worth explaining: `from_nightscout_exports` genuinely
+# takes several files and is the bundle shape, yet NIGHTSCOUT is EXPORT here.
+# That is because SupportedCGMFormat.NIGHTSCOUT identifies the single-file
+# exporter CSV that `detect_format` recognizes — the bundle-ness lives in the
+# entry point, not in the format identity. No registered format is BUNDLE
+# today for that reason; the corpora below are CORPUS because their identity
+# genuinely is many-subjects.
 FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
     SupportedCGMFormat.UNIFIED_EXTENDED: FormatCategory.EXPORT,
     SupportedCGMFormat.UNIFIED_CGM: FormatCategory.EXPORT,

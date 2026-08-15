@@ -17,6 +17,7 @@ from cgm_format.formats.d1namo import (
     D1NAMO_NULL_LITERALS,
     D1NAMO_SENSOR_TYPES,
     D1NAMO_TIME_FORMATS,
+    D1namoAnnotationColumn,
     D1namoFoodColumn,
     D1namoGlucoseColumn,
     D1namoHealthyFoodColumn,
@@ -31,6 +32,7 @@ from cgm_format.formats.cgmacros import (
     CGMACROS_SCHEMA,
     CGMACROS_TIMESTAMP_FORMATS,
     CGMACROS_TRACKS,
+    CGMACROS_UNREPRESENTABLE_COLUMNS,
     CGMacrosColumn,
 )
 from cgm_format.formats.supported import (
@@ -330,6 +332,28 @@ class FormatParser(CGMParser):
                 "FormatParser.parse_tracks(path) for a frame per sensor, or "
                 f"parse_tracks(path, track={CGMACROS_MEAN_TRACK!r}) for the "
                 "opt-in synthetic mean."
+            )
+        elif format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            # A D1NAMO subject is a BUNDLE: glucose, insulin, meals and
+            # annotations are separate files describing one person, and a bare
+            # glucose.csv is one modality of that record rather than the whole
+            # of it. Parsing it alone would silently return a frame missing
+            # every insulin dose and every meal, which is worse than refusing.
+            #
+            # Both subsets share glucose.csv's header, so text detection cannot
+            # tell them apart either — the subset is identified by which files
+            # sit beside it. Hence the pointer to the directory-shaped entry
+            # points rather than a "try the other format" hint.
+            raise MalformedDataError(
+                "A D1NAMO glucose.csv is one modality of a subject bundle, not "
+                "a complete record: insulin, meals and annotations live in "
+                "sibling files, and parsing this file alone would drop them "
+                "silently. Pass the subject *directory* to "
+                "FormatParser.parse_bundle([...]) , or the subset root to "
+                "FormatParser.parse_corpus(root) for one frame per subject."
             )
         else:
             raise UnknownFormatError(f"Unknown CGM data format: {format_type}")
@@ -1756,6 +1780,20 @@ class FormatParser(CGMParser):
         # match what the header never normalized.
         raw = raw.rename({c: c.strip() for c in raw.columns})
         raw = CGMACROS_SCHEMA.normalize_headers(raw)
+        measured_but_unheld = [
+            c for c in CGMACROS_UNREPRESENTABLE_COLUMNS if c in raw.columns
+        ]
+        if measured_but_unheld:
+            # "The source said something we cannot represent" — a different
+            # report from the absent-column warning below, and it must not be
+            # silent: someone measured this and the schema has nowhere to put it.
+            logger.warning(
+                "CGMacros subject file carries %d measured column(s) the unified "
+                "schema cannot hold, which are dropped: %s. Declaring them is a "
+                "schema decision, not a parser one.",
+                len(measured_but_unheld),
+                ", ".join(measured_but_unheld),
+            )
         raw = raw.drop([c for c in CGMACROS_IGNORED_COLUMNS if c in raw.columns])
 
         # Typed nulls for columns this subject simply lacks. Done once, up
@@ -1825,6 +1863,39 @@ class FormatParser(CGMParser):
             frames.append(
                 glucose_rows.select(
                     "datetime", "event_type", "quality", "glucose",
+                    *cls._cgmacros_wearable_columns(),
+                )
+            )
+
+        # --- Wearable-only rows: a sample this track's sensor did not cover ---
+        # The wrist wearable is not a glucose sensor: its heart rate, METs and
+        # activity calories belong to the subject, not to Libre or Dexcom. D4
+        # lists them among the rows replicated into every track, and the
+        # docstrings promise each track is "a complete self-contained view".
+        # Without this, a timestamp where THIS track's sensor was null
+        # contributes no row at all and its wearable sample is silently lost —
+        # about 8% of the stream on the dexcom track, since `Dexcom GL` is
+        # populated on ~92% of rows.
+        wearable_source = [
+            CGMacrosColumn.HEART_RATE.value,
+            CGMacrosColumn.METS.value,
+            CGMacrosColumn.ACTIVITY_CALORIES.value,
+            CGMacrosColumn.STEPS.value,
+        ]
+        has_wearable = pl.any_horizontal(
+            [pl.col(c).is_not_null() for c in wearable_source]
+        )
+        wearable_only = raw.filter(pl.col("_glucose").is_null() & has_wearable)
+        if len(wearable_only) > 0:
+            frames.append(
+                wearable_only.with_columns(
+                    # OTHEREVT: the row records a wearable sample, which is a
+                    # real observation with no more specific member in the
+                    # vocabulary. Inventing a code for it would be worse.
+                    pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                ).select(
+                    "datetime", "event_type", "quality",
                     *cls._cgmacros_wearable_columns(),
                 )
             )
@@ -2127,6 +2198,7 @@ class FormatParser(CGMParser):
             [pl.col(date_col).str.strip_chars(), pl.col(time_col).str.strip_chars()],
             separator=" ",
         )
+        best: Optional[Tuple[str, int]] = None
         for date_fmt in D1NAMO_DATE_FORMATS:
             for time_fmt in D1NAMO_TIME_FORMATS:
                 candidate = f"{date_fmt} {time_fmt}"
@@ -2135,10 +2207,32 @@ class FormatParser(CGMParser):
                         pl.Datetime("ms"), candidate, strict=False
                     ).alias("probe")
                 )
-                if probe["probe"].null_count() < len(frame):
-                    return combined.str.strptime(
-                        pl.Datetime("ms"), candidate, strict=False
-                    )
+                unparsed = probe["probe"].null_count()
+                if unparsed < len(frame) and (best is None or unparsed < best[1]):
+                    best = (candidate, unparsed)
+                    if unparsed == 0:
+                        break
+            if best is not None and best[1] == 0:
+                break
+
+        if best is not None:
+            candidate, unparsed = best
+            if unparsed:
+                # The module docstring calls mixed timestamp conventions "the
+                # trap most likely to produce silently wrong data", so a row
+                # dropped for an unreadable timestamp gets the same visibility
+                # a glucose value we cannot represent already gets. Aggregated
+                # by reason with a count, never one warning per row.
+                logger.warning(
+                    "%d of %d row(s) had a %s+%s value that no D1NAMO timestamp "
+                    "format could read and were dropped (best match %r).",
+                    unparsed,
+                    len(frame),
+                    date_col,
+                    time_col,
+                    candidate,
+                )
+            return combined.str.strptime(pl.Datetime("ms"), candidate, strict=False)
         raise MalformedDataError(
             f"No D1NAMO timestamp format parsed {date_col}+{time_col}; "
             f"tried {D1NAMO_DATE_FORMATS} x {D1NAMO_TIME_FORMATS}"
@@ -2268,6 +2362,47 @@ class FormatParser(CGMParser):
                     slow.select("datetime", "event_type", "quality", "insulin_slow")
                 )
 
+        # --- annotations.csv: healthy subset only, interval-shaped events ---
+        # Detection REQUIRES this file for the healthy subset, so reading the
+        # directory and then ignoring it would be a silent drop of primary
+        # data. Only the interval START becomes a row: the unified format is
+        # instant-shaped, and inventing an end row would double-count the
+        # event. The end is preserved in the annotation so nothing is lost.
+        annotations_path = directory / "annotations.csv"
+        if annotations_path.exists():
+            events = pl.read_csv(annotations_path, infer_schema_length=0)
+            events = events.rename({c: c.strip() for c in events.columns})
+            if len(events) > 0:
+                events = events.with_columns(
+                    cls._d1namo_timestamp(
+                        events,
+                        D1namoAnnotationColumn.START_DATE.value,
+                        D1namoAnnotationColumn.START_TIME.value,
+                    ).alias("datetime"),
+                ).drop_nulls("datetime")
+            if len(events) > 0:
+                frames.append(
+                    events.with_columns(
+                        pl.lit(UnifiedEventType.OTHER.value).alias("event_type"),
+                        pl.lit(0, dtype=pl.Int64).alias("quality"),
+                        pl.format(
+                            '{{"annotation_type":{},"description":{},"end_date":{},"end_time":{}}}',
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.TYPE.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.DESCRIPTION.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.END_DATE.value).str.strip_chars()
+                            ),
+                            cls._d1namo_json_str(
+                                pl.col(D1namoAnnotationColumn.END_TIME.value).str.strip_chars()
+                            ),
+                        ).alias("annotations"),
+                    ).select("datetime", "event_type", "quality", "annotations")
+                )
+
         # --- food.csv: two different headers, one per subset ---
         food_path = directory / "food.csv"
         if food_path.exists():
@@ -2365,13 +2500,19 @@ class FormatParser(CGMParser):
             if v and v.strip()
         ]
         absent = len(food) - len(referenced)
-        dangling = sorted({v for v in referenced if v not in on_disk})
+        dangling_rows = [v for v in referenced if v not in on_disk]
+        dangling = sorted(set(dangling_rows))
         if dangling:
+            # Both numbers, because they differ: fifty rows may reference one
+            # missing file. Reporting only the set size would understate the
+            # affected rows, and only the row count would hide that they are
+            # the same reference repeated.
             logger.warning(
-                "%s: %d meal row(s) name a photograph that is not on disk: %s. "
+                "%s: %d meal row(s) reference %d photograph(s) not on disk: %s. "
                 "The cells hold text where a filename belongs, so the "
                 "reference cannot be resolved (distinct from a blank cell).",
                 directory.name,
+                len(dangling_rows),
                 len(dangling),
                 ", ".join(repr(d) for d in dangling[:8]),
             )
