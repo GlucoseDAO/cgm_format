@@ -2131,6 +2131,15 @@ class FormatParser(CGMParser):
             SupportedCGMFormat.D1NAMO_DIABETES,
             SupportedCGMFormat.D1NAMO_HEALTHY,
         ):
+            if track is not None:
+                # Silently ignoring it would hand back every track's worth of
+                # data while the caller believed they had filtered — the same
+                # class of quiet mismatch `parse_file` refuses for multi-track
+                # sources.
+                raise ValueError(
+                    f"{format_type.value} is a single-track corpus, so track="
+                    f"{track!r} selects nothing. Omit the argument."
+                )
             return cls._parse_d1namo_corpus(root_path)
 
         if format_type != SupportedCGMFormat.CGMACROS:

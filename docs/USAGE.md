@@ -617,6 +617,20 @@ tracks.keys()          # dict_keys(['libre', 'dexcom'])
 `parse_file` on a multi-track source raises `MultiTrackSourceError` rather than silently picking a
 sensor. **Never concatenate two tracks** — see `docs/UNIFIED_FORMAT.md`.
 
+### What each corpus refuses, and why
+
+A file that *detects* is not always a file you can parse alone, and both refusals name the entry
+point that works:
+
+| You call | On | You get |
+|---|---|---|
+| `parse_file` | a CGMacros subject CSV | `MultiTrackSourceError` — two sensors, no single frame |
+| `parse_file` | a D1NAMO `glucose.csv` | `MalformedDataError` — one modality of a bundle; insulin and meals live in sibling files |
+
+Both would otherwise be silent losses: a sensor picked without telling you, or a record missing
+every insulin dose. From the shell, `cgm-cli parse` on either prints the same refusal plus the
+`cgm-cli corpus` invocation that does work.
+
 The synthetic mean is opt-in and never appears in the default output:
 
 ```python
@@ -634,7 +648,12 @@ and set the gap threshold with it — `small_gap_max_minutes` defaults to 15, wh
 interval is 15x the interval rather than the intended 3x:
 
 ```python
-frame = FormatProcessor.detect_and_assign_sequences(
+from cgm_format import ExtendedFormatProcessor
+
+# ExtendedFormatProcessor, not FormatProcessor: a corpus frame carries the
+# extended schema's 22 columns, and the core processor rejects it rather than
+# silently narrowing it.
+frame = ExtendedFormatProcessor.detect_and_assign_sequences(
     frame, expected_interval_minutes=1, large_gap_threshold_minutes=3
 )
 ```

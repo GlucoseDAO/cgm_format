@@ -244,10 +244,25 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
     units, constraints, and the file-layout constants).
   - [ ] A module-level `regenerate_schema_json()` that calls the shared helper with `__file__`.
 
-- [ ] **3. Wire the registry** in `formats/supported.py` — add your format to **all four** dicts:
-  `SCHEMA_MAP`, `FORMAT_DETECTION_PATTERNS`, `FORMAT_DETECTION_LINE_COUNT`, and a
-  `KNOWN_ISSUES_TO_SUPPRESS` entry (`[]` if none). **Order matters** in `FORMAT_DETECTION_PATTERNS`:
-  place more-specific formats before ones whose patterns they'd also match.
+- [ ] **3. Wire the registry** in `formats/supported.py`. Seven registries live there. **Six are
+  exhaustive over `SupportedCGMFormat`** — a missing entry fails the suite — and the seventh is
+  populated only for directory-shaped sources:
+
+  | Registry | Every format? | Holds |
+  |---|---|---|
+  | `SCHEMA_MAP` | yes | the raw vendor schema |
+  | `FORMAT_DETECTION_PATTERNS` | yes | text patterns; **insertion order is priority** |
+  | `FORMAT_DETECTION_LINE_COUNT` | yes | how many lines detection scans |
+  | `UNIFIED_TARGET_SCHEMA` | yes | `CGM_SCHEMA`, or `CGM_SCHEMA_EXTENDED` if the source carries macronutrients, wearable streams or annotations |
+  | `FORMAT_CATEGORY` | yes | `EXPORT` / `BUNDLE` / `CORPUS` |
+  | `KNOWN_ISSUES_TO_SUPPRESS` | yes (`[]` if none) | Frictionless quirks to tolerate |
+  | `PATH_DETECTION_PROBES` | only directory-shaped sources | glob patterns, **conjunctive** |
+
+  **Order matters** in `FORMAT_DETECTION_PATTERNS`: place more-specific formats before ones whose
+  patterns they'd also match. Note the two detection mechanisms differ deliberately —
+  `detect_format` is **disjunctive** (any pattern matches, so each must identify the format on its
+  own), while `detect_path_format` is **conjunctive** (every probe must match, because a directory
+  match routes a whole tree to one parser). An empty probe tuple never matches.
 
 - [ ] **4. Implement parsing** in `format_parser.py`:
   - [ ] Import the vendor's columns/constants at the top (grouped with the other format imports).
@@ -256,7 +271,15 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
     `quality` → `pl.concat(how="diagonal")` → add `sequence_id=0` → `return
     cls._postprocess_unified(unified)`. Convert units to mg/dL / seconds here. Wrap the body so
     `pl.exceptions.PolarsError` becomes a `MalformedDataError` (via `cls._truncate_error_message`).
-  - [ ] Add the dispatch arm in `parse_to_unified()`.
+  - [ ] Add the dispatch arm in `parse_to_unified()`. Pass the target schema through:
+    `cls._postprocess_unified(unified, schema=UNIFIED_TARGET_SCHEMA[<YOUR_FORMAT>])`. Omitting it
+    enforces the *core* schema and silently drops any extended column you just parsed.
+  - [ ] **If the source is not one-file-one-subject**, `_process_*` is not the whole story. A
+    multi-track file needs `parse_tracks` and a `MultiTrackSourceError` from the dispatch arm
+    (never a silent sensor pick); a subject-per-directory corpus needs a corpus walker reached from
+    `parse_corpus`. A source that detects but has no dispatch arm fails as "unknown format" while
+    `format_supported()` says `True` — refuse with a typed error naming the right entry point
+    instead.
 
 - [ ] **5. Export** the new schema and public enums from `__init__.py` — add to the import block **and**
   the `__all__` list (keep the two in sync; no `import *`).

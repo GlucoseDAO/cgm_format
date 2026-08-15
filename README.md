@@ -86,7 +86,8 @@ See [scripts/README.md](scripts/README.md) for complete command reference.
 ```bash
 cgm-cli detect  /data/CGMacros                    # identifies a directory by shape
 cgm-cli corpus  /data/CGMacros --out parsed/      # one CSV per subject per track
-cgm-cli corpus  /data/d1namo/healthy_subset --track libre
+cgm-cli corpus  /data/d1namo/healthy_subset             # single-track: no --track
+cgm-cli corpus  /data/CGMacros --track libre           # multi-track: one sensor
 ```
 
 `corpus` is a separate command rather than an option on `parse` or `batch`: `batch` globs a directory

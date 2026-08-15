@@ -355,7 +355,7 @@ two must be merged by session-directory name — a bundle assembled across archi
 |---|---|---|
 | `food.csv` header | `picture,description,calories,balance,quality,datetime` | `date,time,picture,description,calories,balance,quality` |
 | `insulin.csv` | present | **absent** |
-| `annotations.csv` | absent | present |
+| `annotations.csv` | absent | present — parsed; start becomes a row, end kept in the annotation |
 | `glucose.csv` `type` values | `cgm` (5-min automatic) / `manual` | `BB,AB,BL,AL,BD,AD` (before/after meal) and empty |
 | photo numbering | 1-based (`001.jpg`) | 0-based (`000.jpg`) |
 
