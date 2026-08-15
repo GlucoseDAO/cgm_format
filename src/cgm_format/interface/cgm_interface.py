@@ -62,6 +62,12 @@ class SupportedCGMFormat(Enum):
     UNIFIED_CGM = "unified"  # Format that this library provides
     UNIFIED_EXTENDED = "unified_extended"  # Unified format widened with macros/wearables/annotations
     CGMACROS = "cgmacros"  # PhysioNet research corpus: 45 subjects, two concurrent sensors
+    # Two registered formats, not one with a flag: the subsets differ in
+    # food.csv's header, in which modality files exist, and in a disjoint
+    # glucose type vocabulary. derive_schema patches names and units, not a
+    # different column set.
+    D1NAMO_DIABETES = "d1namo_diabetes"  # glucose + insulin + meals, CGM present
+    D1NAMO_HEALTHY = "d1namo_healthy"  # glucose + meals + annotations, fingersticks only
 
 class FormatCategory(Enum):
     """How many files a source arrives as, and how many subjects are in them.

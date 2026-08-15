@@ -10,6 +10,18 @@ from base64 import b64decode
 
 logger = logging.getLogger(__name__)
 
+from cgm_format.formats.d1namo import (
+    D1NAMO_DATE_FORMATS,
+    D1NAMO_FOOD_DATETIME_FORMATS,
+    D1NAMO_GLUCOSE_SCHEMA,
+    D1NAMO_NULL_LITERALS,
+    D1NAMO_SENSOR_TYPES,
+    D1NAMO_TIME_FORMATS,
+    D1namoFoodColumn,
+    D1namoGlucoseColumn,
+    D1namoHealthyFoodColumn,
+    D1namoInsulinColumn,
+)
 from cgm_format.formats.cgmacros import (
     CGMACROS_IGNORED_COLUMNS,
     CGMACROS_MEAL_TYPE_NORMALIZATION,
@@ -2044,6 +2056,12 @@ class FormatParser(CGMParser):
         root_path = Path(root)
         format_type = cls.detect_path_format(root_path)
 
+        if format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            return cls._parse_d1namo_corpus(root_path)
+
         if format_type != SupportedCGMFormat.CGMACROS:
             raise NotImplementedError(
                 f"No corpus walker registered for {format_type.value}"
@@ -2087,5 +2105,355 @@ class FormatParser(CGMParser):
             raise ZeroValidInputError(
                 f"No parseable subjects found under {root_path}"
             )
+
+        return results
+
+    # ===== D1NAMO: a bundle-per-subject corpus =====
+
+    @classmethod
+    def _d1namo_timestamp(
+        cls,
+        frame: pl.DataFrame,
+        date_col: str,
+        time_col: str,
+    ) -> pl.Expr:
+        """Combine D1NAMO's split date and time into one datetime expression.
+
+        The healthy subset omits seconds (`11:35`), the diabetes subset does
+        not (`19:14:00`), and both appear under the same header. Concatenating
+        then probing a format tuple handles both without a per-subset branch.
+        """
+        combined = pl.concat_str(
+            [pl.col(date_col).str.strip_chars(), pl.col(time_col).str.strip_chars()],
+            separator=" ",
+        )
+        for date_fmt in D1NAMO_DATE_FORMATS:
+            for time_fmt in D1NAMO_TIME_FORMATS:
+                candidate = f"{date_fmt} {time_fmt}"
+                probe = frame.select(
+                    combined.str.strptime(
+                        pl.Datetime("ms"), candidate, strict=False
+                    ).alias("probe")
+                )
+                if probe["probe"].null_count() < len(frame):
+                    return combined.str.strptime(
+                        pl.Datetime("ms"), candidate, strict=False
+                    )
+        raise MalformedDataError(
+            f"No D1NAMO timestamp format parsed {date_col}+{time_col}; "
+            f"tried {D1NAMO_DATE_FORMATS} x {D1NAMO_TIME_FORMATS}"
+        )
+
+    @classmethod
+    def _process_d1namo_subject(
+        cls,
+        subject_dir: Union[str, Path],
+    ) -> UnifiedFormat:
+        """Parse one D1NAMO subject directory — a bundle of modality files.
+
+        Glucose, insulin, meals and annotations are separate files describing
+        one person, merged into one frame. Which files exist identifies the
+        subset: `insulin.csv` only in diabetes, `annotations.csv` only in
+        healthy.
+
+        Fingersticks map to `CALIBRAT`, never `EGV_READ` (D6): only `type ==
+        "cgm"` is a continuous sensor reading, and the healthy subset has no
+        CGM at all.
+
+        `carbs` stays null throughout — D1NAMO records no carbohydrate
+        anywhere, and a zero would assert something the source never said.
+        """
+        directory = Path(subject_dir)
+        glucose_path = directory / "glucose.csv"
+        if not glucose_path.exists():
+            raise MalformedDataError(
+                f"D1NAMO subject directory has no glucose.csv: {directory}"
+            )
+
+        frames: List[pl.DataFrame] = []
+        schema = UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.D1NAMO_DIABETES]
+
+        # --- glucose.csv: readings, mmol/L, sensor vs fingerstick ---
+        raw = pl.read_csv(glucose_path, infer_schema_length=0)
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        gcol = D1namoGlucoseColumn.GLUCOSE.value
+        raw = raw.with_columns(
+            cls._d1namo_timestamp(
+                raw,
+                D1namoGlucoseColumn.DATE.value,
+                D1namoGlucoseColumn.TIME.value,
+            ).alias("datetime"),
+            # Cast from text, non-strict: a value the schema cannot represent
+            # becomes null here and is REPORTED below rather than dropped
+            # silently. Leading zeros ("08.2") parse fine; a colon typed for a
+            # decimal point ("7:0") does not, and that difference is a finding,
+            # not a nuisance.
+            pl.col(gcol).str.strip_chars().cast(pl.Float64, strict=False).alias("_gl"),
+        )
+
+        unrepresentable = raw.filter(
+            pl.col(gcol).str.strip_chars().is_in(D1NAMO_NULL_LITERALS).not_()
+            & pl.col(gcol).is_not_null()
+            & pl.col("_gl").is_null()
+        )
+        if len(unrepresentable) > 0:
+            # "The source said something we cannot represent" is a different
+            # report from "the source did not say" — the empty cells below.
+            offenders = (
+                unrepresentable.get_column(gcol).value_counts().iter_rows()
+            )
+            logger.warning(
+                "%s: %d glucose reading(s) carried a value the schema cannot "
+                "represent and were dropped: %s",
+                directory.name,
+                len(unrepresentable),
+                ", ".join(f"{v!r} x{n}" for v, n in offenders),
+            )
+
+        readings = raw.drop_nulls("datetime").filter(pl.col("_gl").is_not_null())
+        if len(readings) > 0:
+            type_col = pl.col(D1namoGlucoseColumn.TYPE.value).str.strip_chars()
+            frames.append(
+                readings.with_columns(
+                    # Only `cgm` is a sensor trace. Everything else is a
+                    # fingerstick and says so.
+                    pl.when(type_col.is_in(list(D1NAMO_SENSOR_TYPES)))
+                    .then(pl.lit(UnifiedEventType.GLUCOSE.value))
+                    .otherwise(pl.lit(UnifiedEventType.CALIBRATION.value))
+                    .alias("event_type"),
+                    pl.lit(0, dtype=pl.Int64).alias("quality"),
+                    cls._glucose_to_canonical(
+                        D1NAMO_GLUCOSE_SCHEMA, gcol, pl.col("_gl")
+                    ).alias("glucose"),
+                    pl.format(
+                        '{{"reading_type":"{}"}}',
+                        type_col.fill_null(""),
+                    ).alias("annotations"),
+                ).select("datetime", "event_type", "quality", "glucose", "annotations")
+            )
+
+        # --- insulin.csv: diabetes subset only ---
+        insulin_path = directory / "insulin.csv"
+        if insulin_path.exists():
+            ins = pl.read_csv(insulin_path, infer_schema_length=0)
+            ins = ins.rename({c: c.strip() for c in ins.columns})
+            ins = ins.with_columns(
+                cls._d1namo_timestamp(
+                    ins,
+                    D1namoInsulinColumn.DATE.value,
+                    D1namoInsulinColumn.TIME.value,
+                ).alias("datetime"),
+                pl.col(D1namoInsulinColumn.FAST_INSULIN.value)
+                .cast(pl.Float64, strict=False)
+                .alias("insulin_fast"),
+                pl.col(D1namoInsulinColumn.SLOW_INSULIN.value)
+                .cast(pl.Float64, strict=False)
+                .alias("insulin_slow"),
+            ).drop_nulls("datetime")
+
+            fast = ins.filter(pl.col("insulin_fast").is_not_null()).with_columns(
+                pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+                pl.lit(0, dtype=pl.Int64).alias("quality"),
+            )
+            if len(fast) > 0:
+                frames.append(
+                    fast.select("datetime", "event_type", "quality", "insulin_fast")
+                )
+            slow = ins.filter(pl.col("insulin_slow").is_not_null()).with_columns(
+                pl.lit(UnifiedEventType.INSULIN_SLOW.value).alias("event_type"),
+                pl.lit(0, dtype=pl.Int64).alias("quality"),
+            )
+            if len(slow) > 0:
+                frames.append(
+                    slow.select("datetime", "event_type", "quality", "insulin_slow")
+                )
+
+        # --- food.csv: two different headers, one per subset ---
+        food_path = directory / "food.csv"
+        if food_path.exists():
+            frames.extend(cls._d1namo_food_frames(food_path, directory))
+
+        if not frames:
+            raise ZeroValidInputError(
+                f"No usable D1NAMO rows in {directory}"
+            )
+
+        unified = pl.concat(frames, how="diagonal")
+        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+        return cls._postprocess_unified(unified, schema=schema)
+
+    @classmethod
+    def _d1namo_food_frames(
+        cls,
+        food_path: Path,
+        directory: Path,
+    ) -> List[pl.DataFrame]:
+        """Meal rows from either subset's `food.csv`.
+
+        The two headers are a different column set, not a rename: the diabetes
+        subset carries one EXIF-style `datetime`, the healthy subset a split
+        `date` + `time`. Dispatch is on which columns are present.
+
+        Photo references get two distinct reports. A blank cell is "the subject
+        recorded no photograph"; a cell naming a file that is not on disk is
+        "the source said something we cannot resolve". Collapsing them into one
+        message would lose the difference.
+        """
+        food = pl.read_csv(food_path, infer_schema_length=0)
+        food = food.rename({c: c.strip() for c in food.columns})
+
+        if D1namoFoodColumn.DATETIME.value in food.columns:
+            stamp = None
+            for fmt in D1NAMO_FOOD_DATETIME_FORMATS:
+                probe = food.select(
+                    pl.col(D1namoFoodColumn.DATETIME.value)
+                    .str.strip_chars()
+                    .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    .alias("p")
+                )
+                if probe["p"].null_count() < len(food):
+                    stamp = (
+                        pl.col(D1namoFoodColumn.DATETIME.value)
+                        .str.strip_chars()
+                        .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    )
+                    break
+            if stamp is None:
+                # Diabetes subject 005 carries the literal "NA" in `datetime`
+                # on every one of its 9 meal rows — the only subject in the
+                # corpus that does. A meal with no time cannot be placed on a
+                # timeline, so the file yields nothing; but that is a reason to
+                # drop the *meals*, not the subject's glucose and insulin.
+                # Reported prominently, never silently.
+                logger.warning(
+                    "%s: no meal timestamp could be parsed from %s (all values "
+                    "unparseable, e.g. the literal 'NA'). Meals are omitted "
+                    "for this subject; glucose and insulin are unaffected.",
+                    directory.name,
+                    food_path.name,
+                )
+                return []
+        else:
+            stamp = cls._d1namo_timestamp(
+                food,
+                D1namoHealthyFoodColumn.DATE.value,
+                D1namoHealthyFoodColumn.TIME.value,
+            )
+
+        picture = pl.col(D1namoFoodColumn.PICTURE.value).str.strip_chars()
+        balance = pl.col(D1namoFoodColumn.BALANCE.value).str.strip_chars()
+        quality_label = pl.col(D1namoFoodColumn.QUALITY.value).str.strip_chars()
+
+        food = food.with_columns(
+            stamp.alias("datetime"),
+            pl.col(D1namoFoodColumn.CALORIES.value)
+            .str.strip_chars()
+            .cast(pl.Float64, strict=False)
+            .alias("calories"),
+        ).drop_nulls("datetime")
+
+        # Two separate reports, deliberately.
+        photo_dir = directory / "food_pictures"
+        on_disk = (
+            {p.name for p in photo_dir.iterdir() if p.suffix.lower() == ".jpg"}
+            if photo_dir.is_dir()
+            else set()
+        )
+        referenced = [
+            v.strip()
+            for v in food.get_column(D1namoFoodColumn.PICTURE.value).to_list()
+            if v and v.strip()
+        ]
+        absent = len(food) - len(referenced)
+        dangling = sorted({v for v in referenced if v not in on_disk})
+        if dangling:
+            logger.warning(
+                "%s: %d meal row(s) name a photograph that is not on disk: %s. "
+                "The cells hold text where a filename belongs, so the "
+                "reference cannot be resolved (distinct from a blank cell).",
+                directory.name,
+                len(dangling),
+                ", ".join(repr(d) for d in dangling[:8]),
+            )
+        if absent:
+            logger.info(
+                "%s: %d meal row(s) recorded no photograph at all.",
+                directory.name,
+                absent,
+            )
+
+        annotations = pl.format(
+            '{{"balance":{},"description":{},"picture":{},"quality":{}}}',
+            cls._d1namo_json_str(balance),
+            cls._d1namo_json_str(
+                pl.col(D1namoFoodColumn.DESCRIPTION.value)
+                .str.strip_chars()
+                # Free text containing commas is already handled by the CSV
+                # reader; quotes would break the JSON, so they are stripped.
+                .str.replace_all('"', "")
+            ),
+            cls._d1namo_json_str(picture),
+            cls._d1namo_json_str(quality_label),
+        )
+
+        meals = food.with_columns(
+            pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            annotations.alias("annotations"),
+        )
+        if len(meals) == 0:
+            return []
+        # `carbs` is deliberately absent: D1NAMO records no carbohydrate
+        # anywhere, and _postprocess_unified will add it as a typed null. A
+        # zero would assert something the source never said.
+        return [meals.select("datetime", "event_type", "quality", "calories", "annotations")]
+
+    @staticmethod
+    def _d1namo_json_str(expr: pl.Expr) -> pl.Expr:
+        """Render a text column as a JSON string or literal null.
+
+        `No information` and an empty cell both mean the source did not say, so
+        both become JSON `null` rather than the string "No information" — but
+        the corrupt `8 Balance""` is a real value we cannot interpret and is
+        preserved verbatim for a reader to see.
+        """
+        return (
+            pl.when(expr.is_null() | expr.is_in(list(D1NAMO_NULL_LITERALS)))
+            .then(pl.lit("null"))
+            .otherwise(pl.format('"{}"', expr.str.replace_all('"', "")))
+        )
+
+    @classmethod
+    def _parse_d1namo_corpus(cls, root: Path) -> Dict[str, UnifiedFormat]:
+        """Walk a D1NAMO subset directory, one bundle per subject.
+
+        Single-track, so keys are bare subject ids with no `/track` suffix.
+        Subject ids come from the directory names, which is why the separator
+        cannot be `_`: the healthy subset's twelfth subject is literally named
+        `012_diabetes`, and a `_` split would mis-key it.
+        """
+        subject_dirs = sorted(
+            (d for d in root.iterdir() if d.is_dir() and (d / "glucose.csv").exists()),
+            key=lambda d: d.name,
+        )
+
+        results: Dict[str, UnifiedFormat] = {}
+        failures: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            try:
+                results[subject_dir.name] = cls._process_d1namo_subject(subject_dir)
+            except (MalformedDataError, ZeroValidInputError) as e:
+                failures[subject_dir.name] = str(e)[:200]
+
+        if failures:
+            logger.warning(
+                "parse_corpus: %d of %d D1NAMO subject(s) yielded no frame: %s",
+                len(failures),
+                len(subject_dirs),
+                "; ".join(f"{k} ({v})" for k, v in sorted(failures.items())),
+            )
+
+        if not results:
+            raise ZeroValidInputError(f"No parseable D1NAMO subjects under {root}")
 
         return results

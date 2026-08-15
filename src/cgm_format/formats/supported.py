@@ -16,6 +16,13 @@ from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIB
 from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LIBRE_EU_DETECTION_PATTERNS, LIBRE_EU_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
 from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
+from cgm_format.formats.d1namo import (
+    D1NAMO_GLUCOSE_SCHEMA,
+    D1NAMO_DETECTION_PATTERNS,
+    D1NAMO_DATA_START_LINE,
+    D1NAMO_DIABETES_PATH_PROBES,
+    D1NAMO_HEALTHY_PATH_PROBES,
+)
 from cgm_format.formats.cgmacros import (
     CGMACROS_SCHEMA,
     CGMACROS_DETECTION_PATTERNS,
@@ -36,6 +43,8 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
     SupportedCGMFormat.CGMACROS: CGMACROS_SCHEMA,
+    SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_GLUCOSE_SCHEMA,
+    SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_GLUCOSE_SCHEMA,
 }
 
 # Insertion order IS detection priority: detect_format iterates this dict and
@@ -61,6 +70,8 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DETECTION_PATTERNS,
     SupportedCGMFormat.CGMACROS: CGMACROS_DETECTION_PATTERNS,
+    SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DETECTION_PATTERNS,
+    SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_DETECTION_PATTERNS,
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
@@ -73,6 +84,8 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
     SupportedCGMFormat.CGMACROS: CGMACROS_DATA_START_LINE,
+    SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DATA_START_LINE,
+    SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_DATA_START_LINE,
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
@@ -98,6 +111,9 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.NIGHTSCOUT: CGM_SCHEMA,
     # Macronutrients, heart rate and meal photos have no core home.
     SupportedCGMFormat.CGMACROS: CGM_SCHEMA_EXTENDED,
+    # Meals carry calories and annotations; D1NAMO has no carbohydrate column.
+    SupportedCGMFormat.D1NAMO_DIABETES: CGM_SCHEMA_EXTENDED,
+    SupportedCGMFormat.D1NAMO_HEALTHY: CGM_SCHEMA_EXTENDED,
 }
 
 # The source shape each format arrives as. A sidecar dict rather than a field
@@ -128,6 +144,9 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
     SupportedCGMFormat.NIGHTSCOUT: FormatCategory.EXPORT,
     # Many subjects, each a directory. The first non-EXPORT format.
     SupportedCGMFormat.CGMACROS: FormatCategory.CORPUS,
+    # Many subjects, each a BUNDLE of modality files.
+    SupportedCGMFormat.D1NAMO_DIABETES: FormatCategory.CORPUS,
+    SupportedCGMFormat.D1NAMO_HEALTHY: FormatCategory.CORPUS,
 }
 
 # Path-shaped detection, a second mechanism beside the text-prefix one.
@@ -149,6 +168,8 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
 #
 PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_PATH_PROBES,
+    SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DIABETES_PATH_PROBES,
+    SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_HEALTHY_PATH_PROBES,
 }
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)
@@ -186,6 +207,8 @@ KNOWN_ISSUES_TO_SUPPRESS = {
     SupportedCGMFormat.UNIFIED_CGM: [], #this is ours, none should be suppressed
     SupportedCGMFormat.UNIFIED_EXTENDED: [], #also ours, same reason
     SupportedCGMFormat.CGMACROS: [],
+    SupportedCGMFormat.D1NAMO_DIABETES: [],
+    SupportedCGMFormat.D1NAMO_HEALTHY: [],
     SupportedCGMFormat.LIBRE: [],
     SupportedCGMFormat.LIBRE_EU: [],
     SupportedCGMFormat.MEDTRONIC: [
