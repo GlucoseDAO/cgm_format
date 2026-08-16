@@ -21,6 +21,8 @@ else can drift; those two cannot without a test going red.
 """
 
 import csv
+import logging
+import shutil
 from pathlib import Path
 from typing import Callable, List
 
@@ -339,6 +341,11 @@ class TestListSubjects:
         Set equality against the corpus keys' subject halves, computed from the
         parse rather than restated: a helper that lists ids `parse_corpus` does
         not produce would send every caller to a `ValueError`.
+
+        Equality holds when every listed subject parses, which is the case for
+        every committed corpus. It is *not* an identity — a subject on disk
+        that cannot be parsed is listed and not keyed, deliberately, and
+        `test_an_unparseable_subject_is_listed_and_reported` pins that.
         """
         for root in (
             CGMACROS_ROOT,
@@ -352,6 +359,46 @@ class TestListSubjects:
                 key.split("/")[0] for key in FormatParser.parse_corpus(root)
             }
             assert listed == keyed, f"{root.name}: listed {listed}, keyed {keyed}"
+
+    def test_an_unparseable_subject_is_listed_and_reported(
+        self, tmp_path, caplog
+    ) -> None:
+        """A subject the corpus offers but we cannot parse must not vanish.
+
+        BIG IDEAs enumerates subjects from the union of both modalities, so a
+        directory holding only a food log reaches the parser and fails there
+        with a typed error naming the missing file. That is the whole point of
+        the union: listing by glucose alone would make such a subject
+        *invisible* rather than reported.
+
+        The cost is that `list_subjects` and `parse_corpus` no longer return
+        the same ids for that corpus, which is why the equality above is
+        conditional. Both surfaces say what happened, so nothing is silent:
+        the entry carries no coverage and both walkers warn.
+        """
+        _skip_if_missing(BIGIDEAS_ROOT)
+        root = tmp_path / "corpus"
+        complete, partial = root / "001", root / "002"
+        complete.mkdir(parents=True)
+        partial.mkdir(parents=True)
+        for name in ("Dexcom_001.csv", "Food_Log_001.csv"):
+            shutil.copy(BIGIDEAS_ROOT / "001" / name, complete)
+        shutil.copy(
+            BIGIDEAS_ROOT / "003" / "Food_Log_003.csv",
+            partial / "Food_Log_002.csv",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            listed = [e for e in FormatParser.list_subjects(root)]
+            keyed = set(FormatParser.parse_corpus(root))
+
+        assert {e.subject_id for e in listed} == {"001", "002"}
+        assert keyed == {"001"}
+        # Listed with no coverage, not with a zero that would read as "no
+        # readings recorded" — "we could not look" is a different answer.
+        assert next(e for e in listed if e.subject_id == "002").tracks == ()
+        assert "Dexcom_*.csv" in caplog.text
+        assert "yielded no frame" in caplog.text
 
     def test_entries_are_ordered_by_subject_id(self) -> None:
         """Deterministic order, so anything derived from it is deterministic."""

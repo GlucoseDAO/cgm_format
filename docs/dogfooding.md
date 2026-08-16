@@ -162,5 +162,47 @@ to emit" (then it should track the observed maximum, currently 2) or "how much d
 tolerate before demanding a human look" (then 1 is right and these four files *should* report).
 Those are different rules and the comment reads as the first while the value behaves as the second.
 
-Parsing is unaffected either way — the parser drops the rows dynamically and warns for each one.
-This is a reporting-fidelity item only.
+Parsing is unaffected either way — the parser measures the metadata block and skips exactly what the
+file has, warning once per file with the signed drift (and once per corpus walk, aggregated). This is
+a reporting-fidelity item only.
+
+### F10 — `TrackCoverage.rows` cannot express coverage for a Clarity-shaped source
+
+Found while sizing the BIG IDEAs corpus with `list_subjects`, measured on the 16 published subjects
+and the three committed fixtures, 2026-08-16.
+
+`FormatParser._bigideas_track_coverage` filters the raw Dexcom frame down to `Event Type == "EGV"`
+and only then takes `len(raw)` as the `rows` figure. Every EGV row in a Clarity export carries a
+glucose value, so `values == rows` by construction and the ratio can never say anything:
+
+```
+bigideas_synthetic:  001 5/5   003 3/3   007 3/3
+bigideas (16 real subjects):  values == rows on every one
+```
+
+For contrast, `_cgmacros_track_coverage` counts every row of the subject CSV, so the committed
+CGMacros fixture reports 55/60 on `CGMacros-001`'s dexcom track — a ratio that carries information.
+
+`TrackCoverage`'s own docstring in `src/cgm_format/interface/cgm_interface.py` states the meaning
+this violates:
+
+> `rows` is every row of the track's source, so `values / rows` is the fraction of the period the
+> track speaks for.
+
+For BIG IDEAs that fraction is a constant 1.0, so the documented meaning does not hold.
+
+**Surfaced rather than repaired, because every candidate denominator is a design decision and each
+is wrong differently:**
+
+- All rows of the file counts the Clarity metadata and alert rows as period the sensor did not
+  speak for.
+- All non-metadata rows counts insulin, carb and exercise events as glucose opportunities, so a
+  subject who logged more meals would report worse sensor coverage.
+- Elapsed time over the expected interval is the number a caller actually wants, but it is a
+  different measurement from the row ratio the field is defined as. Changing what `rows` means
+  would silently redefine a field two other corpora already populate, and `CLAUDE.md` §8 says add
+  rather than redefine when changing a shape a consumer reads.
+
+What would settle it: whether `TrackCoverage` is meant to report a row ratio, in which case a
+per-format denominator convention needs writing down, or a duty cycle, in which case it needs a new
+field beside `rows` rather than a redefinition of it.

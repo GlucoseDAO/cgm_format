@@ -55,11 +55,37 @@ of the published corpus were affected. Full account in `docs/previous_issues.md`
 now in `docs/NEW_SCHEMA.md` under *Gotchas*, and
 `tests/test_subject_selection.py::TestParsedCorpusInvariants` guards it across every corpus.
 
+### Dexcom fixes the corpus surfaced
+
+Three defects in the shipped Dexcom path, all found by turning the library on the branch's own data
+and all pre-dating it. Full accounts in `docs/previous_issues.md`.
+
+- **`exercise` was null on every Dexcom exercise row** (F11). `.alias("exercise")` bound to the last
+  term of the HH:MM:SS sum rather than the sum, so the result was named `duration_str` and dropped
+  two lines later. Three `Exercise` rows in `data/input/000-14 oct-28 oct 2019.csv` and both of BIG
+  IDEAs subject `014` were affected. A core data column now carries its values.
+- **A short Clarity metadata block silently ate readings** (F12). The static
+  `skip_rows_after_header` handled a block *longer* than expected and lost one reading per row a
+  *shorter* one omitted — realistic, since the block length follows how many alerts a user
+  configured. The block is now measured (`_dexcom_metadata_row_count`) and the static count is what
+  the drift is reported against, signed and with its direction named.
+- **`list_subjects` under-counted a G7 export** (F13). The parser accepts `EGV` and `Fasting
+  Glucose`; the coverage reader accepted only `EGV`. Both now read one
+  `DEXCOM_GLUCOSE_EVENT_TYPES` tuple.
+
+The BIG IDEAs fixtures now carry the real corpus's metadata blocks — 12 rows for `001` and `003`
+(with `PatientIdentifier`), 11 for `007` — instead of a tidy 10-row block that exists in no
+published subject. That is what puts the drift-aggregation path under test on committed data.
+
 ### Reporting and validation
 
+- Meal rows whose timestamp cannot be parsed are reported when *some* of them fail, not only when
+  all of them do (F14): how many of how many, from which file, with a sample of the food names.
+  Losing 5 meals of 300 used to look exactly like losing none. No row of the published corpus is
+  affected — 1,422 in, 1,422 out.
 - The Clarity metadata-drift warning is aggregated by a corpus walk: 16 subjects produced 16 copies
   of "the Clarity export format may have changed" for a condition this corpus is *documented* to
-  have. One grouped line with per-subject counts now.
+  have. One grouped line with signed per-subject drift now.
 - `KNOWN_ISSUES_TO_SUPPRESS[DEXCOM]` gains `('type-error', 'Transmitter Time (Long Integer)', None)`
   — these exports write `11101.0` in a field declared a long integer, on every EGV row of all 16
   subjects. Bounded to one field on a column never mapped to the unified frame.
@@ -73,7 +99,13 @@ now in `docs/NEW_SCHEMA.md` under *Gotchas*, and
 - BIG IDEAs subject enumeration is now the union of `Dexcom_*.csv` and `Food_Log_*.csv`. A subject
   carrying only a food log used to be invisible to both `list_subjects` and `parse_corpus`; it now
   reaches the parser, fails with a typed error naming the missing file, and appears in the walker's
-  failure summary.
+  failure summary. The consequence is that `list_subjects`' ids and `parse_corpus`' keys agree only
+  when every listed subject parses — an amendment to how F5 stated that invariant, written up there
+  and pinned by a test rather than left implicit.
+- `TrackCoverage.rows` cannot express coverage for a Clarity-shaped source, because filtering to EGV
+  before counting makes `values / rows` a constant 1.0. Recorded as F10 in `docs/dogfooding.md`
+  rather than repaired: every candidate denominator is a design decision, and one of them would
+  redefine a field two other corpora already populate.
 
 ## 0.10.0 — 2026-08-15
 

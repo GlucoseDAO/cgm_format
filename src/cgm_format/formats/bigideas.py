@@ -16,9 +16,9 @@ return meals with no glucose.
 Ground truth, read off all 16 published subjects rather than the data
 dictionary:
 
-===========================  ==========  ====================================
+===========================  ==========  ======================================
 Variant                      Subjects    Handling
-===========================  ==========  ====================================
+===========================  ==========  ======================================
 Canonical 14-col food header 11          the schema
 `time` renamed `time_of_day` 4           alias (`007`, `013`, `015`, `016`)
 Headerless 11-col food log   1           `003` — first row is data, and
@@ -28,10 +28,15 @@ Empty `time_begin`           1 row       fall back to `date` + `time`
                                          (`012`, Boost at 07:00)
 Dexcom missing Transmitter   16          already tolerated by `_process_dexcom`
  ID
-Metadata row count drift     12 of 16    no `PatientIdentifier` row; the
-                                         Dexcom parser drops extra
-                                         blank-timestamp rows
-===========================  ==========  ====================================
+Metadata row count drift     16 of 16    all 16 carry extra blank-timestamp
+                                         rows past the static 10-row skip: 12
+                                         carry one and 4 carry two. The four
+                                         with two are `001`, `002`, `003` and
+                                         `006`, the subjects that also carry a
+                                         `PatientIdentifier` row. The Dexcom
+                                         parser measures the block and skips
+                                         exactly what the file has
+===========================  ==========  ======================================
 
 There are no meal photographs. Food items stay one row each — clustering
 items into a sitting is a consumer concern, not a parser one. Macronutrients

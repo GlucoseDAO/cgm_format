@@ -18,7 +18,9 @@ against subject 001:
 
 import csv
 import json
+import logging
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple
@@ -35,6 +37,7 @@ from cgm_format import (
     UnifiedEventType,
     UnknownFormatError,
 )
+from cgm_format.formats.dexcom import DEXCOM_METADATA_LINES
 from cgm_format.formats.supported import (
     FORMAT_CATEGORY,
     PATH_DETECTION_PROBES,
@@ -233,6 +236,139 @@ class TestSyntheticDirt:
             if row["datetime"] == datetime(2020, 2, 13, 18, 0)
         ]
         assert len(at_six) == 2
+
+
+class TestReportsWhatItDropped:
+    """Three conditions that used to be invisible in the returned frame."""
+
+    def test_the_metadata_block_drift_is_reported_per_subject(self, caplog) -> None:
+        """The committed fixtures carry the real corpus's block lengths.
+
+        Every one of the 16 published exports runs over the static 10-row
+        expectation — 12 by one row, 4 by two — so a fixture with a tidy
+        10-row block would leave the aggregation path unexercised. The
+        expected drift is read off each fixture rather than asserted as a
+        literal.
+        """
+        _skip_if_missing(FIXTURE_DIR)
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_corpus(FIXTURE_DIR)
+
+        for subject in (SUBJECT_001, SUBJECT_003, SUBJECT_007):
+            dexcom = next(iter(sorted(subject.glob("Dexcom_*.csv"))))
+            rows = list(csv.reader(dexcom.read_text(encoding="utf-8-sig").splitlines()))
+            stamp = rows[0].index("Timestamp (YYYY-MM-DDThh:mm:ss)")
+            metadata = sum(
+                1
+                for row in rows[1:]
+                if len(row) <= stamp or not row[stamp].strip()
+            )
+            drift = metadata - len(DEXCOM_METADATA_LINES)
+            assert drift != 0, f"{subject.name} no longer carries the real drift"
+            assert f"{subject.name} {drift:+d}" in caplog.text
+
+    def test_one_grouped_line_not_one_per_subject(self, caplog) -> None:
+        """Three subjects drift; a per-file alarm would bury everything else."""
+        _skip_if_missing(FIXTURE_DIR)
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_corpus(FIXTURE_DIR)
+        drift_lines = [
+            record
+            for record in caplog.records
+            if "metadata block" in record.getMessage()
+        ]
+        assert len(drift_lines) == 1
+
+    def test_meal_rows_with_no_parseable_time_are_named_not_dropped_silently(
+        self, tmp_path, caplog
+    ) -> None:
+        """Losing 2 of 3 meals must not look like losing none.
+
+        Only the all-rows-failed case was reported, so a partial loss left a
+        frame that was clean, smaller, and said nothing about the difference.
+        """
+        _skip_if_missing(SUBJECT_001)
+        subject = tmp_path / "001"
+        subject.mkdir()
+        shutil.copy(SUBJECT_001 / "Dexcom_001.csv", subject)
+
+        source = SUBJECT_001 / "Food_Log_001.csv"
+        rows = list(csv.reader(source.read_text(encoding="utf-8-sig").splitlines()))
+        header, first = rows[0], rows[1]
+        blanked = list(first)
+        for column in ("date", "time", "time_begin"):
+            blanked[header.index(column)] = ""
+        blanked[header.index("logged_food")] = "Unplaceable Meal"
+        with (subject / "Food_Log_001.csv").open("w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerows([header, first, blanked])
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            frame = FormatParser.parse_subject_directory(subject)
+
+        meals = frame.filter(
+            pl.col("event_type") == UnifiedEventType.CARBOHYDRATES.value
+        )
+        assert meals.height == 1
+        assert "1 of 2 meal row(s)" in caplog.text
+        # Names the row, because "which meal" is the part a reader can act on.
+        assert "Unplaceable Meal" in caplog.text
+
+    def test_a_food_log_that_fully_parses_says_nothing(self, caplog) -> None:
+        _skip_if_missing(SUBJECT_001)
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_subject_directory(SUBJECT_001)
+        assert "no parseable timestamp" not in caplog.text
+
+
+class TestCoverageCountsWhatTheParserParses:
+    """`TrackCoverage.values` and the parsed glucose rows read one vocabulary.
+
+    They did not: the parser accepts `EGV` and G7's `Fasting Glucose`, the
+    coverage reader accepted only `EGV`, so a G7 export was under-reported by
+    exactly its fasting readings — in the one number a caller uses to size a
+    corpus before parsing it.
+    """
+
+    def test_the_two_agree_on_every_fixture_subject(self) -> None:
+        _skip_if_missing(FIXTURE_DIR)
+        frames = FormatParser.parse_corpus(FIXTURE_DIR)
+        for entry in FormatParser.list_subjects(FIXTURE_DIR):
+            parsed = frames[entry.subject_id].filter(
+                pl.col("event_type") == UnifiedEventType.GLUCOSE.value
+            )
+            assert entry.tracks[0].values == parsed.height
+
+    def test_a_fasting_glucose_row_is_counted_and_parsed(self, tmp_path) -> None:
+        """G7 spells a fasting reading `Fasting Glucose`; both surfaces take it."""
+        _skip_if_missing(SUBJECT_001)
+        root = tmp_path / "corpus"
+        subject = root / "001"
+        subject.mkdir(parents=True)
+        shutil.copy(SUBJECT_001 / "Food_Log_001.csv", subject)
+
+        dexcom = SUBJECT_001 / "Dexcom_001.csv"
+        lines = dexcom.read_text(encoding="utf-8-sig").splitlines()
+        last = lines[-1].split(",")
+        fasting = list(last)
+        fasting[0] = str(int(last[0]) + 1)
+        fasting[1] = "2020-02-13 18:15:00"
+        fasting[2] = "Fasting Glucose"
+        (subject / "Dexcom_001.csv").write_text(
+            "\n".join(lines + [",".join(fasting)]) + "\n"
+        )
+
+        before = FormatParser.parse_subject_directory(SUBJECT_001).filter(
+            pl.col("event_type") == UnifiedEventType.GLUCOSE.value
+        )
+        frames = FormatParser.parse_corpus(root)
+        after = frames["001"].filter(
+            pl.col("event_type") == UnifiedEventType.GLUCOSE.value
+        )
+        assert after.height == before.height + 1
+
+        coverage = FormatParser.list_subjects(root)[0].tracks[0]
+        assert coverage.values == after.height
 
 
 class TestCorpus:

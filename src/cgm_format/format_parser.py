@@ -84,6 +84,7 @@ from cgm_format.formats.unified import (
 from cgm_format.formats.dexcom import (
     DexcomColumn,
     DEXCOM_METADATA_LINES,
+    DEXCOM_GLUCOSE_EVENT_TYPES,
     DEXCOM_TIMESTAMP_FORMATS,
     DEXCOM_HIGH_GLUCOSE_DEFAULT,
     DEXCOM_LOW_GLUCOSE_DEFAULT,
@@ -651,6 +652,53 @@ class FormatParser(CGMParser):
             raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     @classmethod
+    def _dexcom_metadata_row_count(
+        cls,
+        text_data: str,
+        timestamp_column: str,
+        schema: CGMSchemaDefinition,
+    ) -> Optional[int]:
+        """Measure the Clarity metadata block instead of assuming its length.
+
+        Clarity writes the header, then a run of rows with a blank Timestamp
+        (FirstName, LastName, Device, an optional Sensor row, one row per
+        configured Alert), then the data. How many there are depends on the
+        device generation and on how many alerts the user configured, so the
+        static count is an expectation, not a fact.
+
+        Counting the leading blank-timestamp run makes the skip symmetric.
+        The dynamic post-filter in `_dexcom_read_rows` already caught a block
+        that was *longer* than expected; a *shorter* one was silently fatal,
+        because `skip_rows_after_header` would eat that many real readings
+        and nothing downstream could tell they had ever existed.
+
+        Returns None when the header cannot be read or carries no timestamp
+        column, which leaves the caller on the static count — a file that
+        far from the layout fails a few lines later with a typed error anyway.
+        """
+        reader = csv.reader(StringIO(text_data))
+        try:
+            raw_header = next(reader)
+        except StopIteration:
+            return None
+
+        header = [
+            col.strip().replace('“', '').replace('”', '').replace('"', '')
+            for col in raw_header
+        ]
+        names = (timestamp_column, *schema.get_aliases(timestamp_column))
+        index = next((header.index(n) for n in names if n in header), None)
+        if index is None:
+            return None
+
+        count = 0
+        for row in reader:
+            if index < len(row) and row[index].strip():
+                break
+            count += 1
+        return count
+
+    @classmethod
     def _dexcom_read_rows(
         cls,
         text_data: str,
@@ -669,9 +717,10 @@ class FormatParser(CGMParser):
             european: If True, the EU mmol/L layout is assumed
 
         Returns:
-            (data rows, probed timestamp format, extra blank-timestamp rows
-            dropped). The row count is returned as **data** rather than
-            warned about here, so a corpus walk over many subjects can
+            (data rows, probed timestamp format, **signed** metadata drift —
+            how many rows the file's metadata block ran over or under the
+            static expectation). The drift is returned as **data** rather
+            than warned about here, so a corpus walk over many subjects can
             aggregate one warning instead of emitting the same one per file.
         """
         Col = DexcomEUColumn if european else DexcomColumn
@@ -683,12 +732,22 @@ class FormatParser(CGMParser):
         # metadata rows (FirstName, LastName, Device, an optional Sensor
         # row, and one row per configured Alert), then the data rows.
         #
-        # Static minimal skip: skip the known number of metadata rows for
-        # this format variant (10 for standard mg/dL exports, 11 for the EU
-        # mmol/L exports that include a "Sensor" row).
+        # Static floor, dynamic skip: the expectation is 10 for standard
+        # mg/dL exports and 11 for the EU mmol/L exports that carry a
+        # "Sensor" row, but what gets skipped is what the file actually has.
+        # Skipping the static count blind loses one real reading for every
+        # metadata row the export happens to omit.
+        actual_metadata_rows = cls._dexcom_metadata_row_count(
+            text_data, Col.TIMESTAMP.value, eff_schema
+        )
+        skipped_rows = (
+            expected_metadata_rows
+            if actual_metadata_rows is None
+            else actual_metadata_rows
+        )
         df = pl.read_csv(
             StringIO(text_data),
-            skip_rows_after_header=expected_metadata_rows,  # Skip known metadata rows
+            skip_rows_after_header=skipped_rows,  # Skip the measured metadata block
             truncate_ragged_lines=True,  # Handle Dexcom's variable-length rows
             infer_schema_length=None,
             ignore_errors=False
@@ -700,39 +759,46 @@ class FormatParser(CGMParser):
         # Absorb benign header drift (any registered alias -> canonical name)
         df = eff_schema.normalize_headers(df)
 
-        # Dynamic post-handler: these proprietary Clarity exports are not
-        # perfectly stable — newer G6/G7 exports emit an extra metadata row
-        # (e.g. "Sensor") beyond the static count, which then survives the
-        # skip above. Every real data row carries a Timestamp while metadata
-        # rows leave it blank, so drop any blank-timestamp rows that slipped
-        # through and report how many, so the caller can say so.
+        # Safety net for a blank-timestamp row that is not part of the leading
+        # block — the measured skip above accounts for the block itself. Every
+        # real data row carries a Timestamp, so a row without one is metadata
+        # wherever it sits, and dropping it loses nothing.
         rows_before = len(df)
         df = df.filter(
             pl.col(Col.TIMESTAMP).is_not_null()
             & (pl.col(Col.TIMESTAMP).cast(pl.Utf8).str.strip_chars() != "")
         )
-        extra_metadata_rows = rows_before - len(df)
+        metadata_drift = skipped_rows + (rows_before - len(df)) - expected_metadata_rows
 
         # Probe timestamp format once for this file. Supports both the older
         # space form ("2025-05-01 0:01:47") and the newer ISO "T" form
         # ("2026-07-13T00:01:37") emitted by recent Clarity exports.
         timestamp_format = FormatParser._probe_timestamp_format(df, Col.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
 
-        return df, timestamp_format, extra_metadata_rows
+        return df, timestamp_format, metadata_drift
 
     @classmethod
     def _dexcom_metadata_drift_message(
         cls,
         expected_metadata_rows: int,
-        extra_metadata_rows: int,
+        metadata_drift: int,
         european: bool = False,
     ) -> str:
-        """The one wording for "this export carried extra metadata rows"."""
+        """The one wording for "this export's metadata block was not the expected length".
+
+        Says which direction, because the two mean different things: a longer
+        block is Clarity emitting a row we do not model, a shorter one is a
+        user with fewer alerts configured. Neither costs a reading now that
+        the block is measured rather than assumed.
+        """
+        found = expected_metadata_rows + metadata_drift
+        direction = "more" if metadata_drift > 0 else "fewer"
         return (
             f"Dexcom{' EU' if european else ''} export metadata length mismatch: "
-            f"expected {expected_metadata_rows} metadata row(s) after the header "
-            f"but found {extra_metadata_rows} extra blank-timestamp row(s); "
-            "dropped them dynamically. The Clarity export format may have changed."
+            f"expected {expected_metadata_rows} metadata row(s) after the header, "
+            f"measured {found} ({abs(metadata_drift)} {direction}); skipped what "
+            "the file actually has, so no data row was dropped. The Clarity "
+            "export format may have changed."
         )
 
     @classmethod
@@ -762,19 +828,19 @@ class FormatParser(CGMParser):
             low_glucose_value: Value to replace 'Low' readings (default 39 mg/dL)
 
         Returns:
-            (sub-frames in event order, extra blank-timestamp metadata rows
-            dropped by the read).
+            (sub-frames in event order, signed metadata drift from the read —
+            see `_dexcom_read_rows`).
         """
         Col = DexcomEUColumn if european else DexcomColumn
         eff_schema = DEXCOM_EU_SCHEMA if european else DEXCOM_SCHEMA
 
-        df, timestamp_format, extra_metadata_rows = cls._dexcom_read_rows(
+        df, timestamp_format, metadata_drift = cls._dexcom_read_rows(
             text_data, european=european
         )
 
         # Process EGV (glucose) rows — includes "Fasting Glucose" (G7)
         egv_data = (df
-            .filter(pl.col(Col.EVENT_TYPE).str.to_lowercase().is_in(["egv", "fasting glucose"]))
+            .filter(pl.col(Col.EVENT_TYPE).str.to_lowercase().is_in(list(DEXCOM_GLUCOSE_EVENT_TYPES)))
             .select([
                 pl.col(Col.TIMESTAMP).alias("datetime"),
                 pl.col(Col.GLUCOSE_VALUE).alias("glucose"),
@@ -882,11 +948,17 @@ class FormatParser(CGMParser):
             ])
             .with_columns([
                 pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                # Convert duration HH:MM:SS to seconds
-                pl.col("duration_str").str.split(":").list.get(0).cast(pl.Int64) * 3600 +
-                pl.col("duration_str").str.split(":").list.get(1).cast(pl.Int64) * 60 +
-                pl.col("duration_str").str.split(":").list.get(2).cast(pl.Int64)
-                .alias("exercise"),
+                # Convert duration HH:MM:SS to seconds. The alias wraps the
+                # WHOLE sum, and the parentheses are load-bearing: `.alias()`
+                # binds to the last term only, and a binary op inherits the
+                # name of its left operand, so aliasing just the seconds part
+                # named the result `duration_str` — which the `.drop()` below
+                # then removed, leaving `exercise` null on every exercise row.
+                (
+                    pl.col("duration_str").str.split(":").list.get(0, null_on_oob=True).cast(pl.Int64) * 3600
+                    + pl.col("duration_str").str.split(":").list.get(1, null_on_oob=True).cast(pl.Int64) * 60
+                    + pl.col("duration_str").str.split(":").list.get(2, null_on_oob=True).cast(pl.Int64)
+                ).alias("exercise"),
                 pl.when(pl.col("subtype") == "Light")
                 .then(pl.lit(UnifiedEventType.EXERCISE_LIGHT.value))
                 .when(pl.col("subtype") == "Medium")
@@ -909,7 +981,7 @@ class FormatParser(CGMParser):
         if len(exercise_data) > 0:
             all_data.append(exercise_data)
 
-        return all_data, extra_metadata_rows
+        return all_data, metadata_drift
 
     @classmethod
     def _process_dexcom(
@@ -939,18 +1011,18 @@ class FormatParser(CGMParser):
         """
         metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
         try:
-            all_data, extra_metadata_rows = cls._dexcom_event_frames(
+            all_data, metadata_drift = cls._dexcom_event_frames(
                 text_data,
                 european=european,
                 high_glucose_value=high_glucose_value,
                 low_glucose_value=low_glucose_value,
             )
-            if extra_metadata_rows > 0:
+            if metadata_drift != 0:
                 # One file, so warn per file. The corpus walkers aggregate.
                 logger.warning(
                     "%s",
                     cls._dexcom_metadata_drift_message(
-                        len(metadata_lines), extra_metadata_rows, european
+                        len(metadata_lines), metadata_drift, european
                     ),
                 )
 
@@ -3229,7 +3301,7 @@ class FormatParser(CGMParser):
         # and a meal with no anchor is never assigned to a sequence.
         text_data = cls.decode_raw_data(dexcom_paths[0].read_bytes())
         try:
-            frames, extra_metadata_rows = cls._dexcom_event_frames(text_data)
+            frames, metadata_drift = cls._dexcom_event_frames(text_data)
         except pl.exceptions.PolarsError as e:
             raise MalformedDataError(
                 cls._truncate_error_message(
@@ -3267,19 +3339,19 @@ class FormatParser(CGMParser):
                 )
             )
 
-        # A dropped metadata row is never silent, but a corpus walk should say
-        # it once rather than once per subject: with a sink the count is
-        # collected and reported by the walker, without one it is warned here.
-        if extra_metadata_rows > 0:
+        # Metadata drift is never silent, but a corpus walk should say it once
+        # rather than once per subject: with a sink the count is collected and
+        # reported by the walker, without one it is warned here.
+        if metadata_drift != 0:
             if drift_sink is None:
                 logger.warning(
                     "%s",
                     cls._dexcom_metadata_drift_message(
-                        len(DEXCOM_METADATA_LINES), extra_metadata_rows
+                        len(DEXCOM_METADATA_LINES), metadata_drift
                     ),
                 )
             else:
-                drift_sink[directory.name] = extra_metadata_rows
+                drift_sink[directory.name] = metadata_drift
         return frame
 
     @classmethod
@@ -3306,8 +3378,9 @@ class FormatParser(CGMParser):
             return []
 
         stamp = cls._bigideas_food_timestamp(food)
-        food = food.with_columns(stamp.alias("datetime")).drop_nulls("datetime")
-        if len(food) == 0:
+        food = food.with_columns(stamp.alias("datetime"))
+        placed = food.drop_nulls("datetime")
+        if len(placed) == 0:
             logger.warning(
                 "%s: no meal timestamp could be parsed from %s. Meals are "
                 "omitted for this subject; glucose is unaffected.",
@@ -3315,6 +3388,27 @@ class FormatParser(CGMParser):
                 food_path.name,
             )
             return []
+
+        # A meal the source described but did not place in time cannot go on a
+        # timeline, so it is dropped — but saying so is the point. The branch
+        # above reports the all-rows-failed case; without this one, losing 5 of
+        # 300 meals looked exactly like losing none. Grouped by reason with a
+        # count and a sample of the food names, never one line per row.
+        if len(placed) < len(food):
+            unplaced = food.filter(pl.col("datetime").is_null())
+            names = cls._bigideas_meal_names(unplaced)
+            logger.warning(
+                "%s: %d of %d meal row(s) in %s carry no parseable timestamp "
+                "(neither time_begin nor date + time) and were dropped: %s. "
+                "The remaining %d meal(s) and all glucose are unaffected.",
+                directory.name,
+                len(unplaced),
+                len(food),
+                food_path.name,
+                ", ".join(names[:8]) if names else "no food name recorded",
+                len(placed),
+            )
+        food = placed
 
         carbs_col = BigIdeasFoodColumn.TOTAL_CARB.value
         calorie_col = BigIdeasFoodColumn.CALORIE.value
@@ -3493,6 +3587,36 @@ class FormatParser(CGMParser):
             mapping[key] = text if text else None
         return mapping or None
 
+    @staticmethod
+    def _bigideas_meal_names(food: pl.DataFrame) -> List[str]:
+        """Distinct food names in a food frame, for naming rows in a warning.
+
+        A count alone says how much was dropped but not what, and "which
+        meals" is the part a reader can act on. Falls back to the matched
+        database name when the participant typed nothing, and returns an
+        empty list when neither column is present — no placeholder.
+        """
+        for column in (
+            BigIdeasFoodColumn.LOGGED_FOOD.value,
+            BigIdeasFoodColumn.SEARCHED_FOOD.value,
+        ):
+            if column not in food.columns:
+                continue
+            names = [
+                text
+                for text in (
+                    str(value).strip()
+                    for value in food.get_column(column).to_list()
+                    if value is not None
+                )
+                if text
+            ]
+            if names:
+                # First-occurrence dedup, not `set`: emitted text must not
+                # depend on hash order (CLAUDE.md, deterministic ordering).
+                return list(dict.fromkeys(names))
+        return []
+
     @classmethod
     def _bigideas_track_coverage(cls, subject_dir: Path) -> Tuple[TrackCoverage, ...]:
         """Coverage for one BIG IDEAs subject — EGV cells in the Dexcom file.
@@ -3529,8 +3653,10 @@ class FormatParser(CGMParser):
         )
         if type_col in raw.columns:
             raw = raw.filter(
-                pl.col(type_col).cast(pl.Utf8, strict=False).str.to_lowercase()
-                == "egv"
+                pl.col(type_col)
+                .cast(pl.Utf8, strict=False)
+                .str.to_lowercase()
+                .is_in(list(DEXCOM_GLUCOSE_EVENT_TYPES))
             )
         return (
             cls._coverage_from(
@@ -3549,9 +3675,16 @@ class FormatParser(CGMParser):
     ) -> Dict[str, UnifiedFormat]:
         """Walk a BIG IDEAs corpus, one bundle per subject.
 
-        Subjects are enumerated from `*/Dexcom_*.csv`, not from a numeric
-        range, so a partial extract still lists what is on disk. Single-track,
-        so keys are bare directory names.
+        Subjects are enumerated from what is on disk rather than from a
+        numeric range, so a partial extract still lists what it has — and
+        from the *union* of both modalities (see `_bigideas_subject_dirs`),
+        so a subject carrying only a food log is reported as a failure
+        rather than being invisible. Single-track, so keys are bare
+        directory names.
+
+        That union is why the returned keys are the subjects that **parsed**,
+        which can be a strict subset of what `list_subjects` enumerates. The
+        two agree whenever every subject parses.
         """
         subject_dirs = cls._select_subject_dirs(
             cls._bigideas_subject_dirs(root),
@@ -3571,17 +3704,21 @@ class FormatParser(CGMParser):
                 failures[subject_dir.name] = str(e)[:200]
 
         if drift:
-            # Grouped by reason with a count, not one line per subject: this is
-            # an expected property of the published corpus (12 of 16 subjects
-            # ship no PatientIdentifier row), and a per-file alarm buries every
-            # other finding a corpus run produces.
+            # Grouped by reason with a per-subject count, not one line per
+            # subject: every one of the 16 published exports drifts (12 by one
+            # row, 4 by two — the four carrying a PatientIdentifier row), so a
+            # per-file alarm would bury every other finding a corpus run
+            # produces. Signed, because the two directions mean different
+            # things and only one of them used to be visible.
             logger.warning(
-                "parse_corpus: %d of %d BIG IDEAs subject(s) carried extra "
-                "blank-timestamp Clarity metadata row(s), dropped dynamically "
-                "(expected for this corpus): %s",
+                "parse_corpus: %d of %d BIG IDEAs subject(s) have a Clarity "
+                "metadata block that is not the expected %d row(s) "
+                "(expected for this corpus; the measured block is skipped, so "
+                "no reading is lost): %s",
                 len(drift),
                 len(subject_dirs),
-                ", ".join(f"{k} x{n}" for k, n in sorted(drift.items())),
+                len(DEXCOM_METADATA_LINES),
+                ", ".join(f"{k} {n:+d}" for k, n in sorted(drift.items())),
             )
 
         if failures:

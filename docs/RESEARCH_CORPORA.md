@@ -473,7 +473,7 @@ The food log is where the dirt lives. Three header variants in one release:
 
 `time_begin` is the preferred timestamp (`YYYY-MM-DD HH:MM:SS`). Subject `012` ships one Boost
 row with a blank `time_begin` and a populated `date` + `time` — the fallback, not a silent drop.
-1,421 food rows in total; `total_carb` is populated on every one of them. There are no meal
+1,422 food rows in total; `total_carb` is populated on every one of them. There are no meal
 photographs.
 
 A lone `Dexcom_*.csv` detects as DEXCOM, which is correct: it is a Clarity export. The corpus
@@ -497,7 +497,11 @@ of having them:
   directory name; the EXIF-colon timestamp in `food.csv`; a `food_pictures/` directory that is empty;
   and a `picture` reference with no corresponding file.
 - **BIG IDEAs**: the canonical 14-col food header; the `time_of_day` rename; the headerless 11-col
-  food log from subject `003`; and a blank `time_begin` that still has `date` + `time`.
+  food log from subject `003`; a blank `time_begin` that still has `date` + `time`; and the Clarity
+  metadata blocks as published — 12 rows for `001` and `003` (both carry `PatientIdentifier`), 11
+  for `007`, against a static expectation of 10. That last one was missing at first, and it is the
+  condition **every** published subject exhibits: with a tidy 10-row block the drift-reporting path
+  ran on no committed data at all.
 
 Real data stays local behind the skip-if-absent pattern (`tests/test_libre_eu.py:41-55`). Tests must
 not hardcode the `../sugar-sugar/` path where CGMacros currently happens to live, nor assume any
