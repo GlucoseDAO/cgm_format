@@ -155,6 +155,31 @@ cgm-cli process data/unified.csv -o processed.csv \
 
 ---
 
+## download_bigideas.py
+
+Fetch the public BIG IDEAs Dexcom + food-log subset from PhysioNet. Empatica
+ACC/BVP streams are never downloaded. This is a `dev`-extra setup chore, not a
+package feature — people without a local extract run it and point
+`CGM_FORMAT_BIGIDEAS_DIR` at the destination.
+
+```bash
+uv run python scripts/download_bigideas.py --dest data/input/bigideas
+uv run python scripts/download_bigideas.py --dest data/input/bigideas --subjects 1,3
+```
+
+Source: https://physionet.org/content/big-ideas-glycemic-wearable/1.1.3/
+
+## download_d1namo.py
+
+Fetch the two D1NAMO annotation archives from Zenodo (glucose / food / insulin /
+meal photos). The Zephyr waveform zips are not downloaded.
+
+```bash
+uv run python scripts/download_d1namo.py --dest data/input/d1namo
+```
+
+Then point `CGM_FORMAT_D1NAMO_DIR` at the extract.
+
 ## regenerate_all_schemas.py
 
 Automatically regenerates all JSON schema files from their Python schema definitions.

@@ -1,5 +1,6 @@
 """Format converter for CGM vendor formats working on text data."""
 
+import csv
 import logging
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Union, ClassVar, Optional
@@ -11,6 +12,15 @@ from base64 import b64decode
 
 logger = logging.getLogger(__name__)
 
+from cgm_format.formats.bigideas import (
+    BIGIDEAS_DATE_FORMATS,
+    BIGIDEAS_FOOD_HEADERLESS_11,
+    BIGIDEAS_FOOD_SCHEMA,
+    BIGIDEAS_FOOD_TIMESTAMP_FORMATS,
+    BIGIDEAS_TIME_FORMATS,
+    BIGIDEAS_TRACK,
+    BigIdeasFoodColumn,
+)
 from cgm_format.formats.d1namo import (
     D1NAMO_DATE_FORMATS,
     D1NAMO_FOOD_DATETIME_FORMATS,
@@ -69,6 +79,7 @@ from cgm_format.formats.unified import (
     CGM_SCHEMA_EXTENDED,
     UNIT_CONVERSIONS,
     CANONICAL_GLUCOSE_UNIT,
+    annotations_to_json,
 )
 from cgm_format.formats.dexcom import (
     DexcomColumn,
@@ -427,6 +438,22 @@ class FormatParser(CGMParser):
                 "silently. Pass the subject *directory* — the folder this file "
                 "sits in — to FormatParser.parse_bundle([subject_dir]), or the "
                 "subset root to FormatParser.parse_corpus(root) for one frame "
+                "per subject. FormatParser.list_subjects(root) names the "
+                "subject directories."
+            )
+        elif format_type == SupportedCGMFormat.BIGIDEAS:
+            # A Food_Log_*.csv is one modality of a subject bundle. The Dexcom
+            # file sitting beside it is the glucose; parsing the food log
+            # alone would return meals with no readings. The Dexcom file
+            # itself detects as DEXCOM (it is a Clarity export) and is not
+            # refused here.
+            raise MalformedDataError(
+                "A BIG IDEAs Food_Log_*.csv is one modality of a subject "
+                "bundle, not a complete record: glucose lives in the sibling "
+                "Dexcom_*.csv, and parsing this file alone would drop it "
+                "silently. Pass the subject *directory* — the folder this file "
+                "sits in — to FormatParser.parse_bundle([subject_dir]), or the "
+                "corpus root to FormatParser.parse_corpus(root) for one frame "
                 "per subject. FormatParser.list_subjects(root) names the "
                 "subject directories."
             )
@@ -2256,6 +2283,9 @@ class FormatParser(CGMParser):
         ):
             return cls._process_d1namo_subject(directory)
 
+        if format_type == SupportedCGMFormat.BIGIDEAS:
+            return cls._process_bigideas_subject(directory)
+
         if format_type == SupportedCGMFormat.CGMACROS:
             # A CGMacros subject is not a bundle: it is one file carrying two
             # concurrent sensors. Name the file, not just the function — the
@@ -2332,6 +2362,14 @@ class FormatParser(CGMParser):
                     f"{track!r} selects nothing. Omit the argument."
                 )
             return cls._parse_d1namo_corpus(root_path, subjects=subjects)
+
+        if format_type == SupportedCGMFormat.BIGIDEAS:
+            if track is not None:
+                raise ValueError(
+                    f"{format_type.value} is a single-track corpus, so track="
+                    f"{track!r} selects nothing. Omit the argument."
+                )
+            return cls._parse_bigideas_corpus(root_path, subjects=subjects)
 
         if format_type != SupportedCGMFormat.CGMACROS:
             raise NotImplementedError(
@@ -2430,6 +2468,11 @@ class FormatParser(CGMParser):
                 ),
                 key=lambda d: d.name,
             )
+        elif format_type == SupportedCGMFormat.BIGIDEAS:
+            subject_dirs = sorted(
+                {p.parent for p in root_path.glob("*/Dexcom_*.csv") if p.is_file()},
+                key=lambda d: d.name,
+            )
         else:
             raise NotImplementedError(
                 f"No corpus walker registered for {format_type.value}"
@@ -2499,7 +2542,16 @@ class FormatParser(CGMParser):
         """
         if format_type == SupportedCGMFormat.CGMACROS:
             return cls._cgmacros_track_coverage(subject_dir)
-        return cls._d1namo_track_coverage(subject_dir)
+        if format_type in (
+            SupportedCGMFormat.D1NAMO_DIABETES,
+            SupportedCGMFormat.D1NAMO_HEALTHY,
+        ):
+            return cls._d1namo_track_coverage(subject_dir)
+        if format_type == SupportedCGMFormat.BIGIDEAS:
+            return cls._bigideas_track_coverage(subject_dir)
+        raise NotImplementedError(
+            f"No coverage reader registered for {format_type.value}"
+        )
 
     @classmethod
     def _cgmacros_track_coverage(cls, subject_dir: Path) -> Tuple[TrackCoverage, ...]:
@@ -3028,5 +3080,345 @@ class FormatParser(CGMParser):
 
         if not results:
             raise ZeroValidInputError(f"No parseable D1NAMO subjects under {root}")
+
+        return results
+
+    # ===== BIG IDEAs: a Dexcom + food-log bundle per subject =====
+
+    @classmethod
+    def _process_bigideas_subject(
+        cls,
+        subject_dir: Union[str, Path],
+    ) -> UnifiedFormat:
+        """Parse one BIG IDEAs subject directory — Dexcom plus food log.
+
+        Glucose is the sibling Clarity export, reused through `_process_dexcom`
+        because the file *is* a Dexcom export (stable 13-column header, no
+        Transmitter ID). Meals come from `Food_Log_*.csv` and target the
+        extended schema. A missing food log is reported and the glucose is
+        still returned — "the source did not say" about meals, not a reason
+        to drop the readings.
+        """
+        directory = Path(subject_dir)
+        dexcom_paths = sorted(directory.glob("Dexcom_*.csv"))
+        if not dexcom_paths:
+            raise MalformedDataError(
+                f"BIG IDEAs subject directory has no Dexcom_*.csv: {directory}"
+            )
+
+        text_data = cls.decode_raw_data(dexcom_paths[0].read_bytes())
+        glucose_frame = cls._process_dexcom(text_data)
+
+        frames: List[pl.DataFrame] = [glucose_frame]
+        food_paths = sorted(directory.glob("Food_Log_*.csv"))
+        if food_paths:
+            frames.extend(cls._bigideas_food_frames(food_paths[0], directory))
+        else:
+            logger.warning(
+                "%s: no Food_Log_*.csv; meals are omitted for this subject "
+                "and glucose is unaffected.",
+                directory.name,
+            )
+
+        unified = pl.concat(frames, how="diagonal")
+        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+        return cls._postprocess_unified(
+            unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.BIGIDEAS]
+        )
+
+    @classmethod
+    def _bigideas_food_frames(
+        cls,
+        food_path: Path,
+        directory: Path,
+    ) -> List[pl.DataFrame]:
+        """Meal rows from a BIG IDEAs food log.
+
+        Three on-disk layouts, all verified against the published 16 subjects:
+
+        - 14-column header (11 subjects), `time` as the clock column
+        - 14-column header with `time_of_day` (4 subjects) — absorbed by alias
+        - headerless 11-column (subject `003`) — first row is data, and
+          `time_end` / `sugar` / `total_fat` are absent
+
+        `time_begin` is the preferred timestamp. One published row leaves it
+        blank and still has `date` + `time`; that pair is the fallback, never
+        a silent drop.
+        """
+        food = cls._read_bigideas_food_log(food_path)
+        if len(food) == 0:
+            return []
+
+        stamp = cls._bigideas_food_timestamp(food)
+        food = food.with_columns(stamp.alias("datetime")).drop_nulls("datetime")
+        if len(food) == 0:
+            logger.warning(
+                "%s: no meal timestamp could be parsed from %s. Meals are "
+                "omitted for this subject; glucose is unaffected.",
+                directory.name,
+                food_path.name,
+            )
+            return []
+
+        carbs_col = BigIdeasFoodColumn.TOTAL_CARB.value
+        calorie_col = BigIdeasFoodColumn.CALORIE.value
+        protein_col = BigIdeasFoodColumn.PROTEIN.value
+        fat_col = BigIdeasFoodColumn.TOTAL_FAT.value
+        fiber_col = BigIdeasFoodColumn.DIETARY_FIBER.value
+
+        def _numeric(column: str) -> pl.Expr:
+            if column not in food.columns:
+                return pl.lit(None, dtype=pl.Float64)
+            return (
+                pl.col(column)
+                .cast(pl.Utf8, strict=False)
+                .str.strip_chars()
+                .replace({"": None})
+                .cast(pl.Float64, strict=False)
+            )
+
+        annotations = [
+            annotations_to_json(cls._bigideas_food_annotation(row))
+            for row in food.iter_rows(named=True)
+        ]
+
+        meals = food.with_columns(
+            pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            _numeric(carbs_col).alias("carbs"),
+            _numeric(calorie_col).alias("calories"),
+            _numeric(protein_col).alias("protein"),
+            _numeric(fat_col).alias("fat"),
+            _numeric(fiber_col).alias("fiber"),
+            pl.Series("annotations", annotations, dtype=pl.Utf8),
+        )
+        return [
+            meals.select(
+                "datetime",
+                "event_type",
+                "quality",
+                "carbs",
+                "calories",
+                "protein",
+                "fat",
+                "fiber",
+                "annotations",
+            )
+        ]
+
+    @classmethod
+    def _read_bigideas_food_log(cls, food_path: Path) -> pl.DataFrame:
+        """Read a food log, including the headerless 11-column variant.
+
+        Header detection is on the first line containing `logged_food` — a
+        data row never does, because that token is a column name, not a food.
+        """
+        text = food_path.read_text(encoding="utf-8-sig")
+        first_line = text.splitlines()[0] if text else ""
+        if "logged_food" in first_line.lower():
+            food = pl.read_csv(food_path, infer_schema_length=0)
+            food = food.rename({c: c.strip() for c in food.columns})
+            return BIGIDEAS_FOOD_SCHEMA.normalize_headers(food)
+
+        field_count = len(next(csv.reader([first_line]), []))
+        if field_count != len(BIGIDEAS_FOOD_HEADERLESS_11):
+            raise MalformedDataError(
+                f"{food_path.name} has no header and {field_count} fields; "
+                f"the published headerless variant has "
+                f"{len(BIGIDEAS_FOOD_HEADERLESS_11)} "
+                f"(date, time, time_begin, logged_food, amount, unit, "
+                f"searched_food, calorie, total_carb, dietary_fiber, protein)."
+            )
+        return pl.read_csv(
+            food_path,
+            has_header=False,
+            new_columns=list(BIGIDEAS_FOOD_HEADERLESS_11),
+            infer_schema_length=0,
+        )
+
+    @classmethod
+    def _bigideas_food_timestamp(cls, food: pl.DataFrame) -> pl.Expr:
+        """Prefer `time_begin`; fall back to `date` + `time` per row.
+
+        Subject `012` ships one Boost row with a blank `time_begin` and a
+        populated `date`/`time`. Dropping it would assert the source said
+        nothing about that meal.
+        """
+        begin_col = BigIdeasFoodColumn.TIME_BEGIN.value
+        if begin_col in food.columns:
+            begin = None
+            for fmt in BIGIDEAS_FOOD_TIMESTAMP_FORMATS:
+                probe = food.select(
+                    pl.col(begin_col)
+                    .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
+                    .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    .alias("p")
+                )
+                if probe["p"].null_count() < len(food):
+                    begin = (
+                        pl.col(begin_col)
+                        .cast(pl.Utf8, strict=False)
+                        .str.strip_chars()
+                        .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+                    )
+                    break
+            if begin is None:
+                begin = pl.lit(None, dtype=pl.Datetime("ms"))
+        else:
+            begin = pl.lit(None, dtype=pl.Datetime("ms"))
+
+        date_col = BigIdeasFoodColumn.DATE.value
+        time_col = BigIdeasFoodColumn.TIME.value
+        if date_col in food.columns and time_col in food.columns:
+            fallback = cls._combine_date_time(
+                food, date_col, time_col, BIGIDEAS_DATE_FORMATS, BIGIDEAS_TIME_FORMATS
+            )
+            return (
+                pl.when(begin.is_not_null()).then(begin).otherwise(fallback)
+            )
+        return begin
+
+    @classmethod
+    def _combine_date_time(
+        cls,
+        frame: pl.DataFrame,
+        date_col: str,
+        time_col: str,
+        date_formats: Tuple[str, ...],
+        time_formats: Tuple[str, ...],
+    ) -> pl.Expr:
+        """Probe date+time format pairs and return the first that parses."""
+        combined = (
+            pl.col(date_col).cast(pl.Utf8, strict=False).str.strip_chars()
+            + " "
+            + pl.col(time_col).cast(pl.Utf8, strict=False).str.strip_chars()
+        )
+        for date_fmt in date_formats:
+            for time_fmt in time_formats:
+                fmt = f"{date_fmt} {time_fmt}"
+                probe = frame.select(
+                    combined.str.strptime(pl.Datetime("ms"), fmt, strict=False).alias("p")
+                )
+                if probe["p"].null_count() < len(frame):
+                    return combined.str.strptime(pl.Datetime("ms"), fmt, strict=False)
+        return pl.lit(None, dtype=pl.Datetime("ms"))
+
+    @staticmethod
+    def _bigideas_food_annotation(row: dict[str, object]) -> dict[str, object] | None:
+        """Raw food-name fields with no typed home, for `annotations_to_json`.
+
+        A key is included when the source named the column. An empty cell
+        becomes `None` — "the source named this field and gave us nothing" —
+        which is a different statement from the key being absent (the
+        headerless variant has no `sugar` column at all).
+        """
+        keys = (
+            BigIdeasFoodColumn.LOGGED_FOOD.value,
+            BigIdeasFoodColumn.SEARCHED_FOOD.value,
+            BigIdeasFoodColumn.AMOUNT.value,
+            BigIdeasFoodColumn.UNIT.value,
+            BigIdeasFoodColumn.SUGAR.value,
+            BigIdeasFoodColumn.TIME_END.value,
+        )
+        mapping: dict[str, object] = {}
+        for key in keys:
+            if key not in row:
+                continue
+            raw = row[key]
+            if raw is None:
+                mapping[key] = None
+                continue
+            text = str(raw).strip()
+            mapping[key] = text if text else None
+        return mapping or None
+
+    @classmethod
+    def _bigideas_track_coverage(cls, subject_dir: Path) -> Tuple[TrackCoverage, ...]:
+        """Coverage for one BIG IDEAs subject — EGV cells in the Dexcom file.
+
+        Counted from the source, not the parser: metadata rows have a blank
+        timestamp and a blank glucose, so they do not count, and a High/Low
+        marker still counts because the source said something.
+        """
+        dexcom_paths = sorted(subject_dir.glob("Dexcom_*.csv"))
+        if not dexcom_paths:
+            raise MalformedDataError(
+                f"BIG IDEAs subject directory has no Dexcom_*.csv: {subject_dir}"
+            )
+
+        raw = pl.read_csv(
+            dexcom_paths[0], infer_schema_length=0, truncate_ragged_lines=True
+        )
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        ts_col = DexcomColumn.TIMESTAMP.value
+        gl_col = DexcomColumn.GLUCOSE_VALUE.value
+        type_col = DexcomColumn.EVENT_TYPE.value
+        if ts_col not in raw.columns or gl_col not in raw.columns:
+            raise MalformedDataError(
+                f"{dexcom_paths[0].name} is missing Timestamp / glucose columns"
+            )
+
+        ts_format = cls._probe_timestamp_format(raw, ts_col, DEXCOM_TIMESTAMP_FORMATS)
+        raw = raw.with_columns(
+            pl.col(ts_col)
+            .cast(pl.Utf8, strict=False)
+            .str.strip_chars()
+            .str.strptime(pl.Datetime("ms"), ts_format, strict=False)
+            .alias("_ts")
+        )
+        if type_col in raw.columns:
+            raw = raw.filter(
+                pl.col(type_col).cast(pl.Utf8, strict=False).str.to_lowercase()
+                == "egv"
+            )
+        return (
+            cls._coverage_from(
+                BIGIDEAS_TRACK,
+                raw,
+                gl_col,
+                len(raw),
+            ),
+        )
+
+    @classmethod
+    def _parse_bigideas_corpus(
+        cls,
+        root: Path,
+        subjects: Optional[Sequence[str]] = None,
+    ) -> Dict[str, UnifiedFormat]:
+        """Walk a BIG IDEAs corpus, one bundle per subject.
+
+        Subjects are enumerated from `*/Dexcom_*.csv`, not from a numeric
+        range, so a partial extract still lists what is on disk. Single-track,
+        so keys are bare directory names.
+        """
+        subject_dirs = cls._select_subject_dirs(
+            sorted(
+                {p.parent for p in root.glob("*/Dexcom_*.csv") if p.is_file()},
+                key=lambda d: d.name,
+            ),
+            subjects,
+            root,
+        )
+
+        results: Dict[str, UnifiedFormat] = {}
+        failures: Dict[str, str] = {}
+        for subject_dir in subject_dirs:
+            try:
+                results[subject_dir.name] = cls._process_bigideas_subject(subject_dir)
+            except (MalformedDataError, ZeroValidInputError) as e:
+                failures[subject_dir.name] = str(e)[:200]
+
+        if failures:
+            logger.warning(
+                "parse_corpus: %d of %d BIG IDEAs subject(s) yielded no frame: %s",
+                len(failures),
+                len(subject_dirs),
+                "; ".join(f"{k} ({v})" for k, v in sorted(failures.items())),
+            )
+
+        if not results:
+            raise ZeroValidInputError(f"No parseable BIG IDEAs subjects under {root}")
 
         return results

@@ -32,6 +32,13 @@ from cgm_format.formats.cgmacros import (
     CGMACROS_PATH_PROBES,
     CGMACROS_SUBJECT_PROBES,
 )
+from cgm_format.formats.bigideas import (
+    BIGIDEAS_FOOD_SCHEMA,
+    BIGIDEAS_DETECTION_PATTERNS,
+    BIGIDEAS_DATA_START_LINE,
+    BIGIDEAS_PATH_PROBES,
+    BIGIDEAS_SUBJECT_PROBES,
+)
 
 
 
@@ -48,6 +55,8 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_SCHEMA,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_GLUCOSE_SCHEMA,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_GLUCOSE_SCHEMA,
+    # The food log is the text-detectable half; a Dexcom_*.csv detects as DEXCOM.
+    SupportedCGMFormat.BIGIDEAS: BIGIDEAS_FOOD_SCHEMA,
 }
 
 # Insertion order IS detection priority: detect_format iterates this dict and
@@ -75,6 +84,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_DETECTION_PATTERNS,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DETECTION_PATTERNS,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_DETECTION_PATTERNS,
+    SupportedCGMFormat.BIGIDEAS: BIGIDEAS_DETECTION_PATTERNS,
 }
 
 FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
@@ -89,6 +99,7 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_DATA_START_LINE,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DATA_START_LINE,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_DATA_START_LINE,
+    SupportedCGMFormat.BIGIDEAS: BIGIDEAS_DATA_START_LINE,
 }
 
 DETECTION_LINE_COUNT: int = max(FORMAT_DETECTION_LINE_COUNT.values())*2
@@ -117,6 +128,8 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     # Meals carry calories and annotations; D1NAMO has no carbohydrate column.
     SupportedCGMFormat.D1NAMO_DIABETES: CGM_SCHEMA_EXTENDED,
     SupportedCGMFormat.D1NAMO_HEALTHY: CGM_SCHEMA_EXTENDED,
+    # Food log carries calories, protein, fat, fiber and a food-name annotation.
+    SupportedCGMFormat.BIGIDEAS: CGM_SCHEMA_EXTENDED,
 }
 
 # The source shape each format arrives as. A sidecar dict rather than a field
@@ -150,6 +163,8 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
     # Many subjects, each a BUNDLE of modality files.
     SupportedCGMFormat.D1NAMO_DIABETES: FormatCategory.CORPUS,
     SupportedCGMFormat.D1NAMO_HEALTHY: FormatCategory.CORPUS,
+    # Many subjects, each a BUNDLE of Dexcom + food log.
+    SupportedCGMFormat.BIGIDEAS: FormatCategory.CORPUS,
 }
 
 # Path-shaped detection, a second mechanism beside the text-prefix one.
@@ -173,6 +188,7 @@ PATH_DETECTION_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_PATH_PROBES,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DIABETES_PATH_PROBES,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_HEALTHY_PATH_PROBES,
+    SupportedCGMFormat.BIGIDEAS: BIGIDEAS_PATH_PROBES,
 }
 
 # The same mechanism one level down: which format a single *subject* directory
@@ -188,6 +204,7 @@ SUBJECT_PATH_PROBES: Dict[SupportedCGMFormat, Tuple[str, ...]] = {
     SupportedCGMFormat.CGMACROS: CGMACROS_SUBJECT_PROBES,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DIABETES_SUBJECT_PROBES,
     SupportedCGMFormat.D1NAMO_HEALTHY: D1NAMO_HEALTHY_SUBJECT_PROBES,
+    SupportedCGMFormat.BIGIDEAS: BIGIDEAS_SUBJECT_PROBES,
 }
 
 # Known issues to suppress per format (can't fix vendor CSV format issues)
@@ -227,6 +244,7 @@ KNOWN_ISSUES_TO_SUPPRESS = {
     SupportedCGMFormat.CGMACROS: [],
     SupportedCGMFormat.D1NAMO_DIABETES: [],
     SupportedCGMFormat.D1NAMO_HEALTHY: [],
+    SupportedCGMFormat.BIGIDEAS: [],
     SupportedCGMFormat.LIBRE: [],
     SupportedCGMFormat.LIBRE_EU: [],
     SupportedCGMFormat.MEDTRONIC: [

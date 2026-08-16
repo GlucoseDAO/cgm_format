@@ -49,6 +49,7 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 CGMACROS_ROOT = DATA_DIR / "cgmacros_synthetic"
 D1NAMO_DIABETES_ROOT = DATA_DIR / "d1namo_synthetic" / "diabetes_subset"
 D1NAMO_HEALTHY_ROOT = DATA_DIR / "d1namo_synthetic" / "healthy_subset"
+BIGIDEAS_ROOT = DATA_DIR / "bigideas_synthetic"
 
 
 def _skip_if_missing(path: Path) -> None:
@@ -98,7 +99,12 @@ class TestSubjectProbeRegistry:
         collision to guard: a root answering "yes, I am a subject" would parse
         the entire corpus as one person.
         """
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             with pytest.raises(UnknownFormatError) as excinfo:
                 FormatParser.detect_subject_format(root)
@@ -108,9 +114,19 @@ class TestSubjectProbeRegistry:
 
     def test_a_subject_directory_never_detects_as_a_corpus_root(self) -> None:
         """The mirror direction: one subject must not look like a whole corpus."""
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             for subject_dir in _subject_dirs(root):
+                if not subject_dir.is_dir():
+                    continue
+                # Demographics.csv sits at the BIG IDEAs root; skip non-subject files.
+                if not any(subject_dir.iterdir()):
+                    continue
                 with pytest.raises(UnknownFormatError):
                     FormatParser.detect_path_format(subject_dir)
 
@@ -225,9 +241,11 @@ class TestDirectoryBundles:
         assert "parse_tracks" in message
         for track in CGMACROS_TRACKS:
             assert track in message
-        # The path it names must be the file that actually exists.
+        # The path it names must be the file that actually exists. The
+        # message quotes it with !r, so Windows backslashes are doubled.
         named_csv = subject_dir / f"{subject_dir.name}.csv"
-        assert str(named_csv) in message
+        assert named_csv.name in message
+        assert str(named_csv) in message or repr(str(named_csv)) in message
         assert named_csv.exists()
 
     def test_a_single_path_is_still_rejected(self) -> None:
@@ -247,7 +265,12 @@ class TestListSubjects:
         parse rather than restated: a helper that lists ids `parse_corpus` does
         not produce would send every caller to a `ValueError`.
         """
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             listed = {e.subject_id for e in FormatParser.list_subjects(root)}
             keyed = {

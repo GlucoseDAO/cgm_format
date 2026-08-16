@@ -599,12 +599,13 @@ df = FormatParser.parse_file("nightscout-data-with-treatments.csv")
 - Service columns + data columns
 - Validates existing unified format files
 
-### Research corpora (0.10.0)
+### Research corpora (0.10.0, BIG IDEAs in 0.11.0)
 
 | Corpus | Shape | Entry point |
 |---|---|---|
 | **CGMacros** | 45 subjects, **two concurrent sensors** each | `parse_corpus()` → `"CGMacros-001/libre"` |
 | **D1NAMO** | 29 subjects, each a directory of modality files | `parse_corpus()` → `"012_diabetes"` |
+| **BIG IDEAs** | 16 subjects, Dexcom + food log per directory | `parse_corpus()` → `"001"` |
 
 `list_subjects(root)` enumerates a corpus without parsing it — subject ids, which modality files each
 has, and how much glucose each track carries — and `parse_corpus(root, subjects=[...])` parses only
@@ -614,10 +615,20 @@ the ones you pick. A D1NAMO subject can also be parsed on its own with
 These carry channels the six core data columns cannot hold — macronutrients, heart rate, meal
 photographs — so they target `CGM_SCHEMA_EXTENDED` and are processed by `ExtendedFormatProcessor`.
 
-Neither corpus travels with the repo: CGMacros is CC BY-NC-SA and D1NAMO is CC BY-**SA**, whose
-share-alike carries onward to an excerpt. Synthetic fixtures reproducing their real defects are
-committed instead, and tests locate the real data by environment variable
-(`CGM_FORMAT_CGMACROS_DIR`, `CGM_FORMAT_D1NAMO_DIR`), skipping when it is absent.
+These corpora do not travel with the repo: CGMacros is CC BY-NC-SA, D1NAMO is CC BY-**SA**
+(share-alike carries onward to an excerpt), and BIG IDEAs is ODC-By 1.0 but still too large to
+vendor. Synthetic fixtures reproducing their real defects are committed instead. Tests locate
+the real data by environment variable (`CGM_FORMAT_CGMACROS_DIR`, `CGM_FORMAT_D1NAMO_DIR`,
+`CGM_FORMAT_BIGIDEAS_DIR`), skipping when it is absent.
+
+BIG IDEAs Dexcom + food logs (~3 MB, no Empatica) come from PhysioNet:
+
+```bash
+uv run python scripts/download_bigideas.py --dest data/input/bigideas
+```
+
+Then point `CGM_FORMAT_BIGIDEAS_DIR` at that directory. D1NAMO has the same shape:
+`scripts/download_d1namo.py`.
 
 **Tracks are alternatives, never shards.** A CGMacros subject yields a `libre` frame and a `dexcom`
 frame, each a complete view of those ten days through one sensor, with meals and annotations

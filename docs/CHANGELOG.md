@@ -11,6 +11,34 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.11.0 — 2026-08-16
+
+**Minor.** A new `SupportedCGMFormat.BIGIDEAS` member plus registry entries. Nothing a consumer
+already reads changed. `parse_file` on a BIG IDEAs `Dexcom_*.csv` is still DEXCOM — that file is a
+Clarity export.
+
+### BIG IDEAs corpus (PhysioNet `big-ideas-glycemic-wearable`)
+
+16 subjects, each a directory of `Dexcom_NNN.csv` + `Food_Log_NNN.csv`. Identified by directory
+shape (`PATH_DETECTION_PROBES` / `SUBJECT_PATH_PROBES`); a bare food log text-detects as BIGIDEAS
+and `parse_to_unified` refuses it, naming `parse_bundle` / `parse_corpus`. Glucose reuses
+`_process_dexcom`. Meals target `CGM_SCHEMA_EXTENDED` (carbs, calories, protein, fat, fiber;
+food name / amount / unit / sugar in `annotations`). Items are not clustered.
+
+Header drift absorbed, all read off the published 16 subjects:
+
+- `time` → `time_of_day` on 4 subjects (`aliases`)
+- headerless 11-column food log on subject `003` (no `time_end` / `sugar` / `total_fat`)
+- one blank `time_begin` (subject `012`) falls back to `date` + `time`
+
+Also: `_subject_track_coverage` no longer assumes every non-CGMacros corpus is D1NAMO — it
+dispatches explicitly and raises `NotImplementedError` for an unregistered format.
+
+`scripts/download_bigideas.py` fetches Dexcom + food logs from PhysioNet (S3, then
+`files.physionet.org`). Empatica streams are never requested. The script is a `dev`-extra
+setup chore, never imported by the package; people without a local extract run it and
+point `CGM_FORMAT_BIGIDEAS_DIR` at the destination.
+
 ## 0.10.0 — 2026-08-15
 
 **Minor.** Everything is additive: no column was removed, renamed or retyped, every existing entry
