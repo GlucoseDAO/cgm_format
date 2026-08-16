@@ -69,6 +69,7 @@ class SupportedCGMFormat(Enum):
     # different column set.
     D1NAMO_DIABETES = "d1namo_diabetes"  # glucose + insulin + meals, CGM present
     D1NAMO_HEALTHY = "d1namo_healthy"  # glucose + meals + annotations, fingersticks only
+    BIGIDEAS = "bigideas"  # PhysioNet BIG IDEAs: Dexcom Clarity + food log, one subject per directory
 
 class FormatCategory(Enum):
     """How many files a source arrives as, and how many subjects are in them.

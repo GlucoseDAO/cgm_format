@@ -364,6 +364,19 @@ step 3 that your format actually appears in `report`, `detect` and `info`.
   `ColumnNotFound` even in a file that has none of the affected records (this is exactly how the newer
   LibreView export used to crash the insulin sub-frame). Absorb the rename with a column `alias` +
   `normalize_headers` rather than guarding every select. See *Handling format drift*.
+- **A bundle parser must reuse a vendor's *pre-unified* helper, never its finished frame.** Every
+  `_process_<vendor>` ends at `_postprocess_unified`, which creates `original_datetime` and
+  `sequence_id` **only if absent** — write-once, by design. Concatenate a second modality onto that
+  finished frame and the outer `_postprocess_unified` sees both columns already present and fills
+  neither, so every added row carries a null anchor. Nothing raises: the frame is schema-clean, the
+  rows are all there, and the total ordering quietly sorts the anchorless modality to the head of the
+  frame. What breaks is downstream — `detect_and_assign_sequences` computes from `original_datetime`,
+  so those rows stay at `sequence_id == 0` (unassigned) forever and vanish from every
+  sequence-scoped consumer including `prepare_for_inference`. Split the vendor path instead:
+  `_dexcom_read_rows` → `_dexcom_event_frames` → `_process_dexcom`, and have the bundle parser call
+  the sub-frame helper and postprocess exactly once. This is what BIG IDEAs shipped wrong (F6 in
+  `docs/previous_issues.md`) while its own tests passed; the guard now lives in
+  `tests/test_subject_selection.py::TestParsedCorpusInvariants` and covers every corpus.
 - **Drift has declarative knobs — use them before adding code.** Column renames → `aliases`; timestamp
   layouts → the `*_TIMESTAMP_FORMATS` tuple; units → the column `unit` + `UNIT_CONVERSIONS`; metadata
   rows → `derive_schema`. New per-format *code* belongs only in `_process_*`, never on the schema.

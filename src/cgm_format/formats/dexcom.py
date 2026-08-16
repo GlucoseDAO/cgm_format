@@ -37,6 +37,16 @@ DEXCOM_HEADER_LINE = 1
 DEXCOM_DATA_START_LINE = 12
 DEXCOM_METADATA_LINES = tuple(range(DEXCOM_HEADER_LINE+1, DEXCOM_DATA_START_LINE))  # Rows 2-11 are metadata to skip
 
+# Event Type values whose row carries a glucose reading, lowercased for
+# case-insensitive matching. "Fasting Glucose" is the G7 spelling.
+#
+# One tuple because two places read it: the parser, which turns these rows
+# into GLUCOSE events, and `_bigideas_track_coverage`, which counts what the
+# source offered. Restating the vocabulary beside the parser is how the two
+# came to disagree — coverage counted only "egv" and under-reported every
+# G7 export by its fasting readings.
+DEXCOM_GLUCOSE_EVENT_TYPES: Tuple[str, ...] = ("egv", "fasting glucose")
+
 # Multiple timestamp formats across Clarity versions (tuple for probing)
 DEXCOM_TIMESTAMP_FORMATS = (
     "%Y-%m-%dT%H:%M:%S",  # Older Clarity exports: 2019-10-14T16:42:37

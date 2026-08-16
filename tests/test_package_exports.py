@@ -163,6 +163,18 @@ class TestMainPackageExports:
         assert LibreRecordType is not None
         assert LibreColumn is not None
 
+    def test_bigideas_format_imports(self) -> None:
+        """Test that BIG IDEAs format schema and enums are available."""
+        from cgm_format import (
+            BIGIDEAS_FOOD_SCHEMA,
+            BIGIDEAS_TRACK,
+            BigIdeasFoodColumn,
+        )
+
+        assert BIGIDEAS_FOOD_SCHEMA is not None
+        assert BIGIDEAS_TRACK == "dexcom"
+        assert BigIdeasFoodColumn.LOGGED_FOOD == "logged_food"
+
     def test_libre_eu_format_imports(self) -> None:
         """Test that Libre EU format schema and enums are available."""
         from cgm_format import (

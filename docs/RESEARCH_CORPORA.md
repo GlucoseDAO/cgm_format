@@ -8,9 +8,10 @@ writes down the design, and records what it must not cost us. The work itself wa
 
 **Shipped in 0.10.0:** the source categories (RM12), faceted output (RM9), the extended schema
 (RM8), CGMacros (RM10) and D1NAMO (RM13). Their entries are in
-[ROADMAP_HISTORY.md](ROADMAP_HISTORY.md). Still open: the lazy `scan_csv` ingest path (RM7) and
-Loop (RM11), which needs an iterator form of `parse_corpus` rather than the eager mapping that fits
-CGMacros and D1NAMO.
+[ROADMAP_HISTORY.md](ROADMAP_HISTORY.md). **Shipped in 0.11.0:** BIG IDEAs (Appendix D) — the
+same bundle-per-subject corpus shape as D1NAMO, with a Dexcom Clarity export plus a food log.
+Still open: the lazy `scan_csv` ingest path (RM7) and Loop (RM11), which needs an iterator form of
+`parse_corpus` rather than the eager mapping that fits CGMacros, D1NAMO and BIG IDEAs.
 
 Appendix C was written before the archives were read end to end, and implementing D1NAMO falsified
 three of its claims. They are corrected in place below and marked **[corrected 0.10.0]**.
@@ -108,6 +109,10 @@ Fetching a static research dataset once is a setup chore for a developer, not a 
 consuming app — and the archives are large enough (CGMacros 627 MB, Loop 1.63 GB) that shipping the
 capability invites a library user to pull them by accident. `sugar-sugar` already does this correctly:
 `download-cgmacros` is a script in the *consuming app*, not in this library.
+
+D1NAMO and BIG IDEAs already have `scripts/download_*.py` helpers in this repo (Zenodo /
+PhysioNet). They stay behind the `dev` extra and are never imported by the package. CGMacros
+stays in the consuming app because the archive is 627 MB.
 
 The existing `nightscout_downloader.py` is not a counterexample. It fetches **the user's own live
 data** from their own server, which is a genuine runtime feature; a corpus fetch is a one-time
@@ -434,6 +439,46 @@ join), and `PSI-TAMU/D1NAMO` (`preprocess.py`, CGM-window alignment of the Zephy
 
 ---
 
+## Appendix D — BIG IDEAs ground truth
+
+PhysioNet `big-ideas-glycemic-wearable/1.1.3`. Paper: Bent et al., *npj Digital Medicine*, 2021.
+Open access. Downloaded from PhysioNet by `scripts/download_bigideas.py` (`files.physionet.org`;
+the open S3 mirror carries this dataset only through 1.1.2, so it cannot serve the pinned 1.1.3.
+Empatica streams are never requested):
+
+```bash
+uv run python scripts/download_bigideas.py --dest data/input/bigideas
+```
+
+Point `CGM_FORMAT_BIGIDEAS_DIR` at that directory. The importer (`parse_corpus` /
+`parse_subject_directory`) takes the extract path you give it — it does not look at a sibling
+checkout. Every figure below was read off the 16 published subject directories, not the data
+dictionary.
+
+16 subjects in directories `001` … `016`, each holding `Dexcom_NNN.csv` and `Food_Log_NNN.csv`,
+plus a root `Demographics.csv` (per-subject attributes — gender, HbA1c — with no home in a
+timestamp-keyed frame). Dexcom headers are **stable** across all 16: 13 columns, Clarity layout,
+no `Transmitter ID`. Glucose is mg/dL. Event types observed: metadata (`FirstName`, `LastName`,
+`DateOfBirth`, `Device`, `Alert`), `EGV` (36,898 rows), `Exercise` (2), and `PatientIdentifier`
+on only 4 subjects — so the metadata-row count drifts and the Dexcom parser's blank-timestamp
+drop is load-bearing.
+
+The food log is where the dirt lives. Three header variants in one release:
+
+| Variant | Subjects | Handling |
+|---|---|---|
+| Canonical 14-col (`date,time,time_begin,…`) | 11 | the schema |
+| `time` renamed `time_of_day`; `date` is `MM/DD/YYYY` | 4 (`007`, `013`, `015`, `016`) | `aliases` |
+| **No header row**, 11 columns | 1 (`003`) | first row is data; `time_end` / `sugar` / `total_fat` absent |
+
+`time_begin` is the preferred timestamp (`YYYY-MM-DD HH:MM:SS`). Subject `012` ships one Boost
+row with a blank `time_begin` and a populated `date` + `time` — the fallback, not a silent drop.
+1,422 food rows in total; `total_carb` is populated on every one of them. There are no meal
+photographs.
+
+A lone `Dexcom_*.csv` detects as DEXCOM, which is correct: it is a Clarity export. The corpus
+identity is directory shape (`*/Dexcom_*.csv` ∧ `*/Food_Log_*.csv`).
+
 ## Fixtures
 
 `data/.gitignore` ignores `input/` outright (finding F2 in [dogfooding.md](dogfooding.md)), so any
@@ -451,6 +496,12 @@ of having them:
 - **D1NAMO**: a subject directory per subset, since the subsets differ in schema; a `012_diabetes`-style
   directory name; the EXIF-colon timestamp in `food.csv`; a `food_pictures/` directory that is empty;
   and a `picture` reference with no corresponding file.
+- **BIG IDEAs**: the canonical 14-col food header; the `time_of_day` rename; the headerless 11-col
+  food log from subject `003`; a blank `time_begin` that still has `date` + `time`; and the Clarity
+  metadata blocks as published — 12 rows for `001` and `003` (both carry `PatientIdentifier`), 11
+  for `007`, against a static expectation of 10. That last one was missing at first, and it is the
+  condition **every** published subject exhibits: with a tidy 10-row block the drift-reporting path
+  ran on no committed data at all.
 
 Real data stays local behind the skip-if-absent pattern (`tests/test_libre_eu.py:41-55`). Tests must
 not hardcode the `../sugar-sugar/` path where CGMacros currently happens to live, nor assume any

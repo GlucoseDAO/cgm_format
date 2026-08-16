@@ -21,6 +21,8 @@ else can drift; those two cannot without a test going red.
 """
 
 import csv
+import logging
+import shutil
 from pathlib import Path
 from typing import Callable, List
 
@@ -30,9 +32,11 @@ import pytest
 from cgm_format import (
     CGMACROS_TRACKS,
     D1NAMO_TRACK,
+    ExtendedFormatProcessor,
     FormatParser,
     SubjectEntry,
     TrackCoverage,
+    UnifiedEventType,
 )
 from cgm_format.formats.supported import (
     PATH_DETECTION_PROBES,
@@ -49,6 +53,7 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 CGMACROS_ROOT = DATA_DIR / "cgmacros_synthetic"
 D1NAMO_DIABETES_ROOT = DATA_DIR / "d1namo_synthetic" / "diabetes_subset"
 D1NAMO_HEALTHY_ROOT = DATA_DIR / "d1namo_synthetic" / "healthy_subset"
+BIGIDEAS_ROOT = DATA_DIR / "bigideas_synthetic"
 
 
 def _skip_if_missing(path: Path) -> None:
@@ -98,7 +103,12 @@ class TestSubjectProbeRegistry:
         collision to guard: a root answering "yes, I am a subject" would parse
         the entire corpus as one person.
         """
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             with pytest.raises(UnknownFormatError) as excinfo:
                 FormatParser.detect_subject_format(root)
@@ -108,7 +118,12 @@ class TestSubjectProbeRegistry:
 
     def test_a_subject_directory_never_detects_as_a_corpus_root(self) -> None:
         """The mirror direction: one subject must not look like a whole corpus."""
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             for subject_dir in _subject_dirs(root):
                 with pytest.raises(UnknownFormatError):
@@ -146,6 +161,84 @@ class TestSubjectProbeRegistry:
             for d in _subject_dirs(CGMACROS_ROOT)
         }
         assert d1namo.isdisjoint(cgmacros)
+
+
+class TestParsedCorpusInvariants:
+    """The unified contract, asserted on every corpus the library walks.
+
+    Generic on purpose. A bundle parser assembles a frame from several
+    sources, and the way that goes wrong is per-source rather than
+    per-format: one modality arrives already postprocessed, the rest join it
+    afterwards, and the write-once guards in `_postprocess_unified` no-op on
+    the second pass. BIG IDEAs shipped exactly that bug and its own tests all
+    passed, so the guard belongs here, where it covers every corpus at once.
+    """
+
+    def _corpora(self) -> List[Path]:
+        return [
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ]
+
+    def test_every_parsed_row_has_an_anchor(self) -> None:
+        """`original_datetime` is created during parsing, for every row.
+
+        `docs/PHILOSOPHY.md`: "Created during parsing, never overwritten."
+        Every downstream operation computes from it, so a null anchor is a row
+        that no grid alignment, gap detection or sequence assignment can see.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                assert frame.get_column("original_datetime").null_count() == 0, (
+                    f"{root.name}/{key} has rows with no original_datetime; "
+                    "they will never be assigned to a sequence"
+                )
+
+    def test_every_parsed_frame_is_in_time_order(self) -> None:
+        """Rows come out chronological, not grouped by which file they came from.
+
+        The same defect shows here first: the schema's total ordering leads
+        with `original_datetime`, so null anchors sort a whole modality to the
+        head of the frame instead of interleaving it with the readings.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                assert frame.get_column("datetime").is_sorted(), (
+                    f"{root.name}/{key} is not in datetime order"
+                )
+
+    def test_non_glucose_events_are_assigned_to_a_sequence(self) -> None:
+        """A meal inside a glucose sequence must land in that sequence.
+
+        `sequence_id == 0` means unassigned. An event the readings cover but
+        which stays at 0 is dropped by every sequence-scoped consumer,
+        `prepare_for_inference` included — silently, since the row is still
+        present in the frame.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                sequenced = ExtendedFormatProcessor.detect_and_assign_sequences(frame)
+                glucose = sequenced.filter(
+                    (pl.col("event_type") == UnifiedEventType.GLUCOSE.value)
+                    & (pl.col("sequence_id") > 0)
+                )
+                if glucose.height == 0:
+                    continue
+                covered = sequenced.filter(
+                    (pl.col("event_type") != UnifiedEventType.GLUCOSE.value)
+                    & (pl.col("datetime") >= glucose.get_column("datetime").min())
+                    & (pl.col("datetime") <= glucose.get_column("datetime").max())
+                )
+                stranded = covered.filter(pl.col("sequence_id") == 0)
+                assert stranded.height == 0, (
+                    f"{root.name}/{key}: {stranded.height} event(s) inside the "
+                    "glucose span were left unassigned"
+                )
 
 
 class TestDirectoryBundles:
@@ -225,9 +318,11 @@ class TestDirectoryBundles:
         assert "parse_tracks" in message
         for track in CGMACROS_TRACKS:
             assert track in message
-        # The path it names must be the file that actually exists.
+        # The path it names must be the file that actually exists. The
+        # message quotes it with !r, so Windows backslashes are doubled.
         named_csv = subject_dir / f"{subject_dir.name}.csv"
-        assert str(named_csv) in message
+        assert named_csv.name in message
+        assert str(named_csv) in message or repr(str(named_csv)) in message
         assert named_csv.exists()
 
     def test_a_single_path_is_still_rejected(self) -> None:
@@ -246,14 +341,64 @@ class TestListSubjects:
         Set equality against the corpus keys' subject halves, computed from the
         parse rather than restated: a helper that lists ids `parse_corpus` does
         not produce would send every caller to a `ValueError`.
+
+        Equality holds when every listed subject parses, which is the case for
+        every committed corpus. It is *not* an identity — a subject on disk
+        that cannot be parsed is listed and not keyed, deliberately, and
+        `test_an_unparseable_subject_is_listed_and_reported` pins that.
         """
-        for root in (CGMACROS_ROOT, D1NAMO_DIABETES_ROOT, D1NAMO_HEALTHY_ROOT):
+        for root in (
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ):
             _skip_if_missing(root)
             listed = {e.subject_id for e in FormatParser.list_subjects(root)}
             keyed = {
                 key.split("/")[0] for key in FormatParser.parse_corpus(root)
             }
             assert listed == keyed, f"{root.name}: listed {listed}, keyed {keyed}"
+
+    def test_an_unparseable_subject_is_listed_and_reported(
+        self, tmp_path, caplog
+    ) -> None:
+        """A subject the corpus offers but we cannot parse must not vanish.
+
+        BIG IDEAs enumerates subjects from the union of both modalities, so a
+        directory holding only a food log reaches the parser and fails there
+        with a typed error naming the missing file. That is the whole point of
+        the union: listing by glucose alone would make such a subject
+        *invisible* rather than reported.
+
+        The cost is that `list_subjects` and `parse_corpus` no longer return
+        the same ids for that corpus, which is why the equality above is
+        conditional. Both surfaces say what happened, so nothing is silent:
+        the entry carries no coverage and both walkers warn.
+        """
+        _skip_if_missing(BIGIDEAS_ROOT)
+        root = tmp_path / "corpus"
+        complete, partial = root / "001", root / "002"
+        complete.mkdir(parents=True)
+        partial.mkdir(parents=True)
+        for name in ("Dexcom_001.csv", "Food_Log_001.csv"):
+            shutil.copy(BIGIDEAS_ROOT / "001" / name, complete)
+        shutil.copy(
+            BIGIDEAS_ROOT / "003" / "Food_Log_003.csv",
+            partial / "Food_Log_002.csv",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            listed = [e for e in FormatParser.list_subjects(root)]
+            keyed = set(FormatParser.parse_corpus(root))
+
+        assert {e.subject_id for e in listed} == {"001", "002"}
+        assert keyed == {"001"}
+        # Listed with no coverage, not with a zero that would read as "no
+        # readings recorded" — "we could not look" is a different answer.
+        assert next(e for e in listed if e.subject_id == "002").tracks == ()
+        assert "Dexcom_*.csv" in caplog.text
+        assert "yielded no frame" in caplog.text
 
     def test_entries_are_ordered_by_subject_id(self) -> None:
         """Deterministic order, so anything derived from it is deterministic."""

@@ -11,6 +11,102 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.11.0 — 2026-08-16
+
+**Minor.** A new `SupportedCGMFormat.BIGIDEAS` member plus registry entries. Nothing a consumer
+already reads changed. `parse_file` on a BIG IDEAs `Dexcom_*.csv` is still DEXCOM — that file is a
+Clarity export.
+
+### BIG IDEAs corpus (PhysioNet `big-ideas-glycemic-wearable`)
+
+16 subjects, each a directory of `Dexcom_NNN.csv` + `Food_Log_NNN.csv`. Identified by directory
+shape (`PATH_DETECTION_PROBES` / `SUBJECT_PATH_PROBES`); a bare food log text-detects as BIGIDEAS
+and `parse_to_unified` refuses it, naming `parse_bundle` / `parse_corpus`. Glucose reuses
+`_process_dexcom`. Meals target `CGM_SCHEMA_EXTENDED` (carbs, calories, protein, fat, fiber;
+food name / amount / unit / sugar in `annotations`). Items are not clustered.
+
+Header drift absorbed, all read off the published 16 subjects:
+
+- `time` → `time_of_day` on 4 subjects (`aliases`)
+- headerless 11-column food log on subject `003` (no `time_end` / `sugar` / `total_fat`)
+- one blank `time_begin` (subject `012`) falls back to `date` + `time`
+
+Also: `_subject_track_coverage` no longer assumes every non-CGMacros corpus is D1NAMO — it
+dispatches explicitly and raises `NotImplementedError` for an unregistered format.
+
+`scripts/download_bigideas.py` fetches Dexcom + food logs from `files.physionet.org`. Empatica
+streams are never requested. The script is a `dev`-extra setup chore, never imported by the
+package; people without a local extract run it and point `CGM_FORMAT_BIGIDEAS_DIR` at the
+destination.
+
+### The Dexcom path is split, so a bundle can reuse it correctly
+
+`_process_dexcom` is now three: `_dexcom_read_rows` (decode, clean, drop blank-timestamp metadata
+rows, probe the timestamp), `_dexcom_event_frames` (per-event sub-frames, stopping **before** the
+unified contract is enforced), and `_process_dexcom` itself (concat → `_postprocess_unified`).
+Public behaviour is unchanged — every committed Dexcom fixture parses to identical `hash_rows()`
+across the refactor.
+
+The split is what makes the BIG IDEAs bundle correct. Building the glucose half with
+`_process_dexcom` and concatenating meals onto that finished frame left **every meal row with a
+null `original_datetime`** — the write-once guards in `_postprocess_unified` no-op on a second pass
+— so no meal was ever assigned to a sequence or reached `prepare_for_inference`. All 1,422 meal rows
+of the published corpus were affected. Full account in `docs/previous_issues.md` (F6); the rule is
+now in `docs/NEW_SCHEMA.md` under *Gotchas*, and
+`tests/test_subject_selection.py::TestParsedCorpusInvariants` guards it across every corpus.
+
+### Dexcom fixes the corpus surfaced
+
+Three defects in the shipped Dexcom path, all found by turning the library on the branch's own data
+and all pre-dating it. Full accounts in `docs/previous_issues.md`.
+
+- **`exercise` was null on every Dexcom exercise row** (F11). `.alias("exercise")` bound to the last
+  term of the HH:MM:SS sum rather than the sum, so the result was named `duration_str` and dropped
+  two lines later. Three `Exercise` rows in `data/input/000-14 oct-28 oct 2019.csv` and both of BIG
+  IDEAs subject `014` were affected. A core data column now carries its values.
+- **A short Clarity metadata block silently ate readings** (F12). The static
+  `skip_rows_after_header` handled a block *longer* than expected and lost one reading per row a
+  *shorter* one omitted — realistic, since the block length follows how many alerts a user
+  configured. The block is now measured (`_dexcom_metadata_row_count`) and the static count is what
+  the drift is reported against, signed and with its direction named.
+- **`list_subjects` under-counted a G7 export** (F13). The parser accepts `EGV` and `Fasting
+  Glucose`; the coverage reader accepted only `EGV`. Both now read one
+  `DEXCOM_GLUCOSE_EVENT_TYPES` tuple.
+
+The BIG IDEAs fixtures now carry the real corpus's metadata blocks — 12 rows for `001` and `003`
+(with `PatientIdentifier`), 11 for `007` — instead of a tidy 10-row block that exists in no
+published subject. That is what puts the drift-aggregation path under test on committed data.
+
+### Reporting and validation
+
+- Meal rows whose timestamp cannot be parsed are reported when *some* of them fail, not only when
+  all of them do (F14): how many of how many, from which file, with a sample of the food names.
+  Losing 5 meals of 300 used to look exactly like losing none. No row of the published corpus is
+  affected — 1,422 in, 1,422 out.
+- The Clarity metadata-drift warning is aggregated by a corpus walk: 16 subjects produced 16 copies
+  of "the Clarity export format may have changed" for a condition this corpus is *documented* to
+  have. One grouped line with signed per-subject drift now.
+- `KNOWN_ISSUES_TO_SUPPRESS[DEXCOM]` gains `('type-error', 'Transmitter Time (Long Integer)', None)`
+  — these exports write `11101.0` in a field declared a long integer, on every EGV row of all 16
+  subjects. Bounded to one field on a column never mapped to the unified frame.
+- That takes a real subject's Dexcom file from 500 residual Frictionless errors to 1 (2 on the four
+  subjects noted below). What remains is documented rather than suppressed: F7 in
+  `docs/dogfooding.md` (a `missing-label` error carries no `fieldName`, so no bounded rule can name
+  the absent `Transmitter ID` column), F8 (the headerless food log cannot be validated against a
+  header schema at all), and F9 (the blank-timestamp cap stays at **1**, though 4 of the 16 published
+  exports carry two such rows — raising it weakens the guard for every Dexcom file and is a
+  threshold decision, not a corpus fix).
+- BIG IDEAs subject enumeration is now the union of `Dexcom_*.csv` and `Food_Log_*.csv`. A subject
+  carrying only a food log used to be invisible to both `list_subjects` and `parse_corpus`; it now
+  reaches the parser, fails with a typed error naming the missing file, and appears in the walker's
+  failure summary. The consequence is that `list_subjects`' ids and `parse_corpus`' keys agree only
+  when every listed subject parses — an amendment to how F5 stated that invariant, written up there
+  and pinned by a test rather than left implicit.
+- `TrackCoverage.rows` cannot express coverage for a Clarity-shaped source, because filtering to EGV
+  before counting makes `values / rows` a constant 1.0. Recorded as F10 in `docs/dogfooding.md`
+  rather than repaired: every candidate denominator is a design decision, and one of them would
+  redefine a field two other corpora already populate.
+
 ## 0.10.0 — 2026-08-15
 
 **Minor.** Everything is additive: no column was removed, renamed or retyped, every existing entry

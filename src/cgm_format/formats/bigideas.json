@@ -1,0 +1,80 @@
+{
+  "fields": [
+    {
+      "name": "date",
+      "type": "string",
+      "description": "Meal date; ISO on most subjects, US MM/DD/YYYY on the time_of_day variant"
+    },
+    {
+      "name": "time",
+      "type": "string",
+      "description": "Clock time; aliased from time_of_day on 4 subjects"
+    },
+    {
+      "name": "time_begin",
+      "type": "string",
+      "description": "Preferred meal timestamp (YYYY-MM-DD HH:MM:SS)"
+    },
+    {
+      "name": "time_end",
+      "type": "string",
+      "description": "Optional meal-end clock; absent on the headerless 11-col variant"
+    },
+    {
+      "name": "logged_food",
+      "type": "string",
+      "description": "Food name as the participant typed it"
+    },
+    {
+      "name": "amount",
+      "type": "string",
+      "description": "Amount, kept as text (mix of numbers and words such as 'quarter')"
+    },
+    {
+      "name": "unit",
+      "type": "string",
+      "description": "Unit of amount (fluid ounce, cup, gram, \u2026)"
+    },
+    {
+      "name": "searched_food",
+      "type": "string",
+      "description": "Matched database name, when the log found one"
+    },
+    {
+      "name": "calorie",
+      "type": "string",
+      "description": "Calories (kcal)",
+      "unit": "kcal"
+    },
+    {
+      "name": "total_carb",
+      "type": "string",
+      "description": "Carbohydrates in grams",
+      "unit": "g"
+    },
+    {
+      "name": "dietary_fiber",
+      "type": "string",
+      "description": "Fiber in grams",
+      "unit": "g"
+    },
+    {
+      "name": "sugar",
+      "type": "string",
+      "description": "Sugar in grams; no unified column, recorded in annotations",
+      "unit": "g"
+    },
+    {
+      "name": "protein",
+      "type": "string",
+      "description": "Protein in grams",
+      "unit": "g"
+    },
+    {
+      "name": "total_fat",
+      "type": "string",
+      "description": "Fat in grams",
+      "unit": "g"
+    }
+  ]
+}

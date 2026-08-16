@@ -699,6 +699,124 @@ class TestUnitConversion:
         assert out == 7.0
 
 
+class TestDexcomExerciseDuration:
+    """An Exercise row's `Duration (hh:mm:ss)` must reach the `exercise` column.
+
+    It did not: `.alias("exercise")` bound to the last term of the HH:MM:SS
+    sum, a binary op takes the name of its left operand, so the result was
+    named `duration_str` and dropped. Every exercise row carried a null in a
+    core data column, silently, on real committed exports.
+    """
+
+    EXPORT = DATA_DIR / "000-14 oct-28 oct 2019.csv"
+
+    def _rows(self) -> pl.DataFrame:
+        if not self.EXPORT.exists():
+            pytest.skip(f"Fixture not found: {self.EXPORT}")
+        df = FormatParser.parse_file(self.EXPORT)
+        return df.filter(pl.col("event_type").str.starts_with("XRCS"))
+
+    def test_every_exercise_row_carries_its_duration(self):
+        exercise = self._rows()
+        assert exercise.height > 0, "fixture has no Exercise rows to check"
+        assert exercise.get_column("exercise").null_count() == 0
+
+    def test_durations_match_the_source_seconds(self):
+        """Expected values come from the file's own Duration cells, converted
+        here rather than copied — a literal would drift with the fixture."""
+        exercise = self._rows()
+        raw = pl.read_csv(
+            self.EXPORT,
+            skip_rows_after_header=10,
+            truncate_ragged_lines=True,
+            infer_schema_length=0,
+        )
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        durations = (
+            raw.filter(pl.col("Event Type").is_in(["Exercise", "Activity"]))
+            .get_column("Duration (hh:mm:ss)")
+            .to_list()
+        )
+        expected = []
+        for text in durations:
+            hours, minutes, seconds = (int(part) for part in text.split(":"))
+            expected.append(hours * 3600 + minutes * 60 + seconds)
+        assert sorted(exercise.get_column("exercise").to_list()) == sorted(expected)
+
+
+class TestDexcomMetadataBlockIsMeasured:
+    """The Clarity metadata block is measured, not assumed.
+
+    A block *longer* than the static count was already handled. A *shorter*
+    one — a user with fewer alerts configured — made
+    `skip_rows_after_header` eat that many real readings, with nothing
+    downstream able to tell they had existed.
+    """
+
+    HEADER = (
+        "Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,"
+        "Patient Info,Device Info,Source Device ID,Glucose Value (mg/dL),"
+        "Insulin Value (u),Carb Value (grams),Duration (hh:mm:ss),"
+        "Glucose Rate of Change (mg/dL/min),Transmitter Time (Long Integer)"
+    )
+    ALERTS = ("Fall", "High", "Low", "Signal Loss", "Rise", "Urgent Low", "Urgent Low Soon")
+
+    def _export(self, alert_count: int, readings: int = 6) -> str:
+        rows = [self.HEADER]
+        meta = ["FirstName,,2019", "LastName,,000", "DateOfBirth,,1990-01-01"]
+        meta.append("Device,,,Dexcom G6 Mobile App,iPhone G6")
+        for alert in self.ALERTS[:alert_count]:
+            meta.append(f"Alert,{alert},,,iPhone G6")
+        for index, row in enumerate(meta, start=1):
+            rows.append(f"{index},,{row}" + "," * (12 - row.count(",") - 1))
+        for offset in range(readings):
+            index = len(meta) + 1 + offset
+            minute = f"{offset * 5:02d}"
+            rows.append(
+                f"{index},2020-02-13 17:{minute}:00,EGV,,,,iPhone G6,"
+                f"{100 + offset}.0,,,,,11101.0"
+            )
+        return "\n".join(rows) + "\n"
+
+    @pytest.mark.parametrize("alert_count", [3, 6, 7, 9])
+    def test_no_reading_is_lost_at_any_block_length(self, alert_count):
+        """Six readings in, six readings out, whatever the block length.
+
+        The static expectation is 10 rows (4 info + 6 alerts), so this walks
+        both sides of it: shorter blocks used to eat readings, longer ones
+        were already dropped by the post-filter.
+        """
+        text = self._export(alert_count)
+        df = FormatParser.parse_to_unified(text, SupportedCGMFormat.DEXCOM)
+        glucose = df.filter(pl.col("event_type") == "EGV_READ")
+        assert glucose.height == 6
+        assert glucose.get_column("glucose").to_list() == [
+            float(100 + offset) for offset in range(6)
+        ]
+
+    def test_the_drift_is_reported_with_its_direction(self, caplog):
+        """A short block is a different report from a long one, and both are
+        different from silence."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_to_unified(self._export(3), SupportedCGMFormat.DEXCOM)
+        assert "fewer" in caplog.text
+        assert "metadata length mismatch" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_to_unified(self._export(7), SupportedCGMFormat.DEXCOM)
+        assert "more" in caplog.text
+
+    def test_an_exactly_expected_block_says_nothing(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            FormatParser.parse_to_unified(self._export(6), SupportedCGMFormat.DEXCOM)
+        assert "metadata length mismatch" not in caplog.text
+
+
 if __name__ == "__main__":
     # Allow running as script for quick testing
     pytest.main([__file__, "-v", "-s"])
