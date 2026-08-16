@@ -227,7 +227,21 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         # error on that single blank cell. The optional 4th element caps how many
         # times the rule may suppress per file — a second blank timestamp would
         # be a real data issue and must still fail.
+        #
+        # Measuring the published BIG IDEAs corpus puts that premise in doubt:
+        # 12 of its 16 Clarity exports carry one such row and 4 carry two, so
+        # those 4 keep one residual error each. Deliberately left at 1 — raising
+        # it weakens the guard for every Dexcom file, and the threshold is
+        # pinned by a test. See F9 in docs/dogfooding.md.
         ('constraint-error', 'Timestamp (YYYY-MM-DDThh:mm:ss)', None, 1),
+        # Some Clarity exports write the transmitter time as a float ("11101.0")
+        # in a field the schema declares a long integer — every EGV row of all
+        # 16 BIG IDEAs subjects does this. Uncapped, because it is a field-wide
+        # property of such an export rather than a one-row drift, but bounded to
+        # this one field: the column is never mapped to the unified frame, so a
+        # float there costs no data. Widening the declared dtype instead would
+        # erase the fact that the vendor drifted.
+        ('type-error', 'Transmitter Time (Long Integer)', None),
     ],
     SupportedCGMFormat.DEXCOM_EU: [
         ('missing-cell', 'Transmitter ID', None),

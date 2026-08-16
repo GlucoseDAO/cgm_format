@@ -62,3 +62,56 @@ missing capability, and fixing only the sentence would have left the category un
 Covered by `tests/test_subject_selection.py`. The two assertions that carry the most weight are that
 `parse_bundle([subject_dir])` and `parse_corpus(root, subjects=[id])[id]` return equal frames, and
 that `list_subjects`' ids are exactly the subject halves of `parse_corpus`' keys.
+
+---
+
+## F6 — every BIG IDEAs meal row was parsed without an anchor
+
+**Found:** 2026-08-16, reviewing the BIG IDEAs corpus branch against the 16 published subjects.
+**Severity:** the corpus's own reason for existing. **Legality:** a bug fix, nothing a consumer
+reads changed shape.
+
+`_process_bigideas_subject` built its glucose half by calling `_process_dexcom`, which is a complete
+parse: it ends at `_postprocess_unified`, which creates `original_datetime` on the rows it is given.
+The meal frames were then concatenated onto that finished frame, and the outer `_postprocess_unified`
+skipped anchor creation because of its write-once guard — `if 'original_datetime' not in
+unified_df.columns`. The column was present, so the meal rows kept their nulls.
+
+Nothing raised, and the frame passed `CGM_SCHEMA_EXTENDED.validate_dataframe(enforce=False)`. On the
+published corpus **all 1,422 meal rows across all 16 subjects** had a null anchor.
+
+`docs/PHILOSOPHY.md` says it plainly: *"`original_datetime` is write-once. Created during parsing,
+never overwritten."* These were parsed rows whose anchor was never created at all.
+
+The damage was downstream and total. Everything computes from `original_datetime`, so
+`detect_and_assign_sequences` could not place a meal, and `sequence_id = 0` means unassigned:
+
+```
+as shipped     meals_in_seq0= 61/61   inference_rows=  97   carb_rows=0
+anchor filled  meals_in_seq0=  0/61   inference_rows=  98   carb_rows=1
+```
+
+Second symptom, same cause: the emitted frame was not chronological. The schema's total ordering
+leads with `original_datetime`, so nulls sorted every meal to the head of the frame instead of
+interleaving them with the readings.
+
+**Why the suite did not see it.** `TestPipeline` asserted `interpolated.height >= frame.height`,
+which holds whether or not a single meal is ever placed.
+
+**Resolution.** Structural rather than a null-fill, so the shape cannot recur:
+
+- `_process_dexcom` split into `_dexcom_read_rows` (decode, clean, drop blank-timestamp metadata
+  rows, probe the timestamp) → `_dexcom_event_frames` (per-event sub-frames, stopping **before** the
+  unified contract) → `_process_dexcom` (concat, postprocess, unchanged public behaviour — verified
+  by identical `hash_rows()` on every committed Dexcom fixture across the refactor).
+- `_process_bigideas_subject` now extends `_dexcom_event_frames`' sub-frame list with the meal frames
+  and calls `_postprocess_unified` **once**, so the anchor is created for every row in one place.
+- The split surfaced a dtype conflict the double-postprocess had been hiding: meal `quality` was
+  `Int64` where the Dexcom sub-frames use `pl.lit(0)` (`Int32`). Now both use the plain literal and
+  the schema cast happens once, afterwards.
+
+**Guarded by** `tests/test_subject_selection.py::TestParsedCorpusInvariants` — anchors non-null,
+frames in time order, and no non-glucose event inside the glucose span left unassigned. Generic over
+CGMacros, both D1NAMO subsets and BIG IDEAs, because the defect is per-bundle-parser rather than
+per-vendor. All three assertions were demonstrated failing against the pre-fix parser before being
+claimed as a guard. The rule is written up in `docs/NEW_SCHEMA.md` under *Gotchas*.

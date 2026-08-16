@@ -30,9 +30,11 @@ import pytest
 from cgm_format import (
     CGMACROS_TRACKS,
     D1NAMO_TRACK,
+    ExtendedFormatProcessor,
     FormatParser,
     SubjectEntry,
     TrackCoverage,
+    UnifiedEventType,
 )
 from cgm_format.formats.supported import (
     PATH_DETECTION_PROBES,
@@ -122,11 +124,6 @@ class TestSubjectProbeRegistry:
         ):
             _skip_if_missing(root)
             for subject_dir in _subject_dirs(root):
-                if not subject_dir.is_dir():
-                    continue
-                # Demographics.csv sits at the BIG IDEAs root; skip non-subject files.
-                if not any(subject_dir.iterdir()):
-                    continue
                 with pytest.raises(UnknownFormatError):
                     FormatParser.detect_path_format(subject_dir)
 
@@ -162,6 +159,84 @@ class TestSubjectProbeRegistry:
             for d in _subject_dirs(CGMACROS_ROOT)
         }
         assert d1namo.isdisjoint(cgmacros)
+
+
+class TestParsedCorpusInvariants:
+    """The unified contract, asserted on every corpus the library walks.
+
+    Generic on purpose. A bundle parser assembles a frame from several
+    sources, and the way that goes wrong is per-source rather than
+    per-format: one modality arrives already postprocessed, the rest join it
+    afterwards, and the write-once guards in `_postprocess_unified` no-op on
+    the second pass. BIG IDEAs shipped exactly that bug and its own tests all
+    passed, so the guard belongs here, where it covers every corpus at once.
+    """
+
+    def _corpora(self) -> List[Path]:
+        return [
+            CGMACROS_ROOT,
+            D1NAMO_DIABETES_ROOT,
+            D1NAMO_HEALTHY_ROOT,
+            BIGIDEAS_ROOT,
+        ]
+
+    def test_every_parsed_row_has_an_anchor(self) -> None:
+        """`original_datetime` is created during parsing, for every row.
+
+        `docs/PHILOSOPHY.md`: "Created during parsing, never overwritten."
+        Every downstream operation computes from it, so a null anchor is a row
+        that no grid alignment, gap detection or sequence assignment can see.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                assert frame.get_column("original_datetime").null_count() == 0, (
+                    f"{root.name}/{key} has rows with no original_datetime; "
+                    "they will never be assigned to a sequence"
+                )
+
+    def test_every_parsed_frame_is_in_time_order(self) -> None:
+        """Rows come out chronological, not grouped by which file they came from.
+
+        The same defect shows here first: the schema's total ordering leads
+        with `original_datetime`, so null anchors sort a whole modality to the
+        head of the frame instead of interleaving it with the readings.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                assert frame.get_column("datetime").is_sorted(), (
+                    f"{root.name}/{key} is not in datetime order"
+                )
+
+    def test_non_glucose_events_are_assigned_to_a_sequence(self) -> None:
+        """A meal inside a glucose sequence must land in that sequence.
+
+        `sequence_id == 0` means unassigned. An event the readings cover but
+        which stays at 0 is dropped by every sequence-scoped consumer,
+        `prepare_for_inference` included — silently, since the row is still
+        present in the frame.
+        """
+        for root in self._corpora():
+            _skip_if_missing(root)
+            for key, frame in FormatParser.parse_corpus(root).items():
+                sequenced = ExtendedFormatProcessor.detect_and_assign_sequences(frame)
+                glucose = sequenced.filter(
+                    (pl.col("event_type") == UnifiedEventType.GLUCOSE.value)
+                    & (pl.col("sequence_id") > 0)
+                )
+                if glucose.height == 0:
+                    continue
+                covered = sequenced.filter(
+                    (pl.col("event_type") != UnifiedEventType.GLUCOSE.value)
+                    & (pl.col("datetime") >= glucose.get_column("datetime").min())
+                    & (pl.col("datetime") <= glucose.get_column("datetime").max())
+                )
+                stranded = covered.filter(pl.col("sequence_id") == 0)
+                assert stranded.height == 0, (
+                    f"{root.name}/{key}: {stranded.height} event(s) inside the "
+                    "glucose span were left unassigned"
+                )
 
 
 class TestDirectoryBundles:

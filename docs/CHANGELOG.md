@@ -34,10 +34,46 @@ Header drift absorbed, all read off the published 16 subjects:
 Also: `_subject_track_coverage` no longer assumes every non-CGMacros corpus is D1NAMO — it
 dispatches explicitly and raises `NotImplementedError` for an unregistered format.
 
-`scripts/download_bigideas.py` fetches Dexcom + food logs from PhysioNet (S3, then
-`files.physionet.org`). Empatica streams are never requested. The script is a `dev`-extra
-setup chore, never imported by the package; people without a local extract run it and
-point `CGM_FORMAT_BIGIDEAS_DIR` at the destination.
+`scripts/download_bigideas.py` fetches Dexcom + food logs from `files.physionet.org`. Empatica
+streams are never requested. The script is a `dev`-extra setup chore, never imported by the
+package; people without a local extract run it and point `CGM_FORMAT_BIGIDEAS_DIR` at the
+destination.
+
+### The Dexcom path is split, so a bundle can reuse it correctly
+
+`_process_dexcom` is now three: `_dexcom_read_rows` (decode, clean, drop blank-timestamp metadata
+rows, probe the timestamp), `_dexcom_event_frames` (per-event sub-frames, stopping **before** the
+unified contract is enforced), and `_process_dexcom` itself (concat → `_postprocess_unified`).
+Public behaviour is unchanged — every committed Dexcom fixture parses to identical `hash_rows()`
+across the refactor.
+
+The split is what makes the BIG IDEAs bundle correct. Building the glucose half with
+`_process_dexcom` and concatenating meals onto that finished frame left **every meal row with a
+null `original_datetime`** — the write-once guards in `_postprocess_unified` no-op on a second pass
+— so no meal was ever assigned to a sequence or reached `prepare_for_inference`. All 1,422 meal rows
+of the published corpus were affected. Full account in `docs/previous_issues.md` (F6); the rule is
+now in `docs/NEW_SCHEMA.md` under *Gotchas*, and
+`tests/test_subject_selection.py::TestParsedCorpusInvariants` guards it across every corpus.
+
+### Reporting and validation
+
+- The Clarity metadata-drift warning is aggregated by a corpus walk: 16 subjects produced 16 copies
+  of "the Clarity export format may have changed" for a condition this corpus is *documented* to
+  have. One grouped line with per-subject counts now.
+- `KNOWN_ISSUES_TO_SUPPRESS[DEXCOM]` gains `('type-error', 'Transmitter Time (Long Integer)', None)`
+  — these exports write `11101.0` in a field declared a long integer, on every EGV row of all 16
+  subjects. Bounded to one field on a column never mapped to the unified frame.
+- That takes a real subject's Dexcom file from 500 residual Frictionless errors to 1 (2 on the four
+  subjects noted below). What remains is documented rather than suppressed: F7 in
+  `docs/dogfooding.md` (a `missing-label` error carries no `fieldName`, so no bounded rule can name
+  the absent `Transmitter ID` column), F8 (the headerless food log cannot be validated against a
+  header schema at all), and F9 (the blank-timestamp cap stays at **1**, though 4 of the 16 published
+  exports carry two such rows — raising it weakens the guard for every Dexcom file and is a
+  threshold decision, not a corpus fix).
+- BIG IDEAs subject enumeration is now the union of `Dexcom_*.csv` and `Food_Log_*.csv`. A subject
+  carrying only a food log used to be invisible to both `list_subjects` and `parse_corpus`; it now
+  reaches the parser, fails with a typed error naming the missing file, and appears in the walker's
+  failure summary.
 
 ## 0.10.0 — 2026-08-15
 

@@ -442,8 +442,9 @@ join), and `PSI-TAMU/D1NAMO` (`preprocess.py`, CGM-window alignment of the Zephy
 ## Appendix D — BIG IDEAs ground truth
 
 PhysioNet `big-ideas-glycemic-wearable/1.1.3`. Paper: Bent et al., *npj Digital Medicine*, 2021.
-Open access. Downloaded from PhysioNet by `scripts/download_bigideas.py` (S3, then
-`files.physionet.org`; Empatica streams are never requested):
+Open access. Downloaded from PhysioNet by `scripts/download_bigideas.py` (`files.physionet.org`;
+the open S3 mirror carries this dataset only through 1.1.2, so it cannot serve the pinned 1.1.3.
+Empatica streams are never requested):
 
 ```bash
 uv run python scripts/download_bigideas.py --dest data/input/bigideas

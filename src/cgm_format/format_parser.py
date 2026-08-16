@@ -651,6 +651,267 @@ class FormatParser(CGMParser):
             raise MalformedDataError(cls._truncate_error_message(error_msg))
     
     @classmethod
+    def _dexcom_read_rows(
+        cls,
+        text_data: str,
+        european: bool = False,
+    ) -> Tuple[pl.DataFrame, str, int]:
+        """Decode a Clarity export to cleaned data rows, ready for event mapping.
+
+        No PolarsError guard here by convention: this helper is only ever
+        called inside a caller's PolarsError -> MalformedDataError guard,
+        which spans the concat and _postprocess_unified this helper does not
+        reach. A guard here would re-type the same error one frame earlier
+        and cover strictly less.
+
+        Args:
+            text_data: Dexcom CSV string
+            european: If True, the EU mmol/L layout is assumed
+
+        Returns:
+            (data rows, probed timestamp format, extra blank-timestamp rows
+            dropped). The row count is returned as **data** rather than
+            warned about here, so a corpus walk over many subjects can
+            aggregate one warning instead of emitting the same one per file.
+        """
+        Col = DexcomEUColumn if european else DexcomColumn
+        eff_schema = DEXCOM_EU_SCHEMA if european else DEXCOM_SCHEMA
+        metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
+        expected_metadata_rows = len(metadata_lines)
+
+        # Dexcom/Clarity layout: Row 1 = column headers, then a number of
+        # metadata rows (FirstName, LastName, Device, an optional Sensor
+        # row, and one row per configured Alert), then the data rows.
+        #
+        # Static minimal skip: skip the known number of metadata rows for
+        # this format variant (10 for standard mg/dL exports, 11 for the EU
+        # mmol/L exports that include a "Sensor" row).
+        df = pl.read_csv(
+            StringIO(text_data),
+            skip_rows_after_header=expected_metadata_rows,  # Skip known metadata rows
+            truncate_ragged_lines=True,  # Handle Dexcom's variable-length rows
+            infer_schema_length=None,
+            ignore_errors=False
+        )
+
+        # Clean column names
+        df = df.rename({col: col.strip().replace('“', '').replace('”', '').replace('"', '') for col in df.columns})
+
+        # Absorb benign header drift (any registered alias -> canonical name)
+        df = eff_schema.normalize_headers(df)
+
+        # Dynamic post-handler: these proprietary Clarity exports are not
+        # perfectly stable — newer G6/G7 exports emit an extra metadata row
+        # (e.g. "Sensor") beyond the static count, which then survives the
+        # skip above. Every real data row carries a Timestamp while metadata
+        # rows leave it blank, so drop any blank-timestamp rows that slipped
+        # through and report how many, so the caller can say so.
+        rows_before = len(df)
+        df = df.filter(
+            pl.col(Col.TIMESTAMP).is_not_null()
+            & (pl.col(Col.TIMESTAMP).cast(pl.Utf8).str.strip_chars() != "")
+        )
+        extra_metadata_rows = rows_before - len(df)
+
+        # Probe timestamp format once for this file. Supports both the older
+        # space form ("2025-05-01 0:01:47") and the newer ISO "T" form
+        # ("2026-07-13T00:01:37") emitted by recent Clarity exports.
+        timestamp_format = FormatParser._probe_timestamp_format(df, Col.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
+
+        return df, timestamp_format, extra_metadata_rows
+
+    @classmethod
+    def _dexcom_metadata_drift_message(
+        cls,
+        expected_metadata_rows: int,
+        extra_metadata_rows: int,
+        european: bool = False,
+    ) -> str:
+        """The one wording for "this export carried extra metadata rows"."""
+        return (
+            f"Dexcom{' EU' if european else ''} export metadata length mismatch: "
+            f"expected {expected_metadata_rows} metadata row(s) after the header "
+            f"but found {extra_metadata_rows} extra blank-timestamp row(s); "
+            "dropped them dynamically. The Clarity export format may have changed."
+        )
+
+    @classmethod
+    def _dexcom_event_frames(
+        cls,
+        text_data: str,
+        european: bool = False,
+        high_glucose_value: int = DEXCOM_HIGH_GLUCOSE_DEFAULT,
+        low_glucose_value: int = DEXCOM_LOW_GLUCOSE_DEFAULT
+    ) -> Tuple[List[pl.DataFrame], int]:
+        """Map a Clarity export to per-event sub-frames, one kind per frame.
+
+        Stops **before** the unified contract is enforced. A caller merging
+        Dexcom with another modality — a BIG IDEAs food log, say — extends
+        this list and calls `_postprocess_unified` exactly once, so
+        `original_datetime` is created for every row in one place. Calling
+        `_process_dexcom` and concatenating onto its finished frame instead
+        leaves the added rows with a null anchor, because the write-once
+        guards in `_postprocess_unified` no-op on a second pass.
+
+        No PolarsError guard here by convention — see `_dexcom_read_rows`.
+
+        Args:
+            text_data: Dexcom CSV string
+            european: If True, glucose is in mmol/L and will be converted to mg/dL
+            high_glucose_value: Value to replace 'High' readings (default 401 mg/dL)
+            low_glucose_value: Value to replace 'Low' readings (default 39 mg/dL)
+
+        Returns:
+            (sub-frames in event order, extra blank-timestamp metadata rows
+            dropped by the read).
+        """
+        Col = DexcomEUColumn if european else DexcomColumn
+        eff_schema = DEXCOM_EU_SCHEMA if european else DEXCOM_SCHEMA
+
+        df, timestamp_format, extra_metadata_rows = cls._dexcom_read_rows(
+            text_data, european=european
+        )
+
+        # Process EGV (glucose) rows — includes "Fasting Glucose" (G7)
+        egv_data = (df
+            .filter(pl.col(Col.EVENT_TYPE).str.to_lowercase().is_in(["egv", "fasting glucose"]))
+            .select([
+                pl.col(Col.TIMESTAMP).alias("datetime"),
+                pl.col(Col.GLUCOSE_VALUE).alias("glucose"),
+                pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
+            ])
+            .with_columns([
+                # Track if glucose was High/Low BEFORE replacement (sensor out-of-range error)
+                # These are NOT real measurements - sensor couldn't measure the actual value
+                pl.col("glucose")
+                .cast(pl.Utf8)
+                .str.to_lowercase()
+                .is_in(["high", "low"])
+                .alias("is_out_of_range"),
+            ])
+            .with_columns([
+                # Replace High/Low with numeric placeholders (mg/dL) for processing
+                # High = >400 mg/dL (sensor max), Low = <50 mg/dL (sensor min)
+                pl.col("glucose")
+                .cast(pl.Utf8)
+                .str.replace("High", str(high_glucose_value))
+                .str.replace("Low", str(low_glucose_value))
+                .cast(pl.Float64, strict=False)
+                .alias("glucose"),
+                # Mark out-of-range readings with OUT_OF_RANGE flag (sensor error, not real data)
+                pl.when(pl.col("is_out_of_range"))
+                .then(pl.lit(Quality.OUT_OF_RANGE.value))
+                .otherwise(pl.lit(0))  # 0 = GOOD (no flags)
+                .alias("quality"),
+                pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+            ])
+        )
+
+        # Convert glucose to the canonical unit (mg/dL) based on the column's
+        # declared unit in the effective schema — mmol/L exports are scaled,
+        # mg/dL pass through, with no format-specific branch. High/Low markers
+        # are already substituted with mg/dL placeholders, so leave them as-is.
+        egv_data = egv_data.with_columns([
+            pl.when(pl.col("is_out_of_range"))
+            .then(pl.col("glucose"))
+            .otherwise(cls._glucose_to_canonical(
+                eff_schema, Col.GLUCOSE_VALUE, pl.col("glucose")
+            ))
+            .alias("glucose"),
+        ])
+
+        egv_data = (egv_data
+            .with_columns([
+                pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+            ])
+            .drop(["subtype", "is_out_of_range"])
+        )
+
+        # Process insulin events
+        insulin_data = (df
+            .filter(pl.col(Col.EVENT_TYPE) == "Insulin")
+            .select([
+                pl.col(Col.TIMESTAMP).alias("datetime"),
+                pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
+                pl.col(Col.INSULIN_VALUE).alias("insulin_value"),
+            ])
+            .with_columns([
+                pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+                pl.when(pl.col("subtype") == "Fast-Acting")
+                .then(pl.lit(UnifiedEventType.INSULIN_FAST.value))
+                .when(pl.col("subtype") == "Long-Acting")
+                .then(pl.lit(UnifiedEventType.INSULIN_SLOW.value))
+                .otherwise(pl.lit(UnifiedEventType.INSULIN_FAST.value))
+                .alias("event_type"),
+                pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+            ])
+            .with_columns([
+                pl.when(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value)
+                .then(pl.col("insulin_value"))
+                .otherwise(pl.lit(None))
+                .alias("insulin_fast"),
+                pl.when(pl.col("event_type") == UnifiedEventType.INSULIN_SLOW.value)
+                .then(pl.col("insulin_value"))
+                .otherwise(pl.lit(None))
+                .alias("insulin_slow"),
+            ])
+            .drop(["subtype", "insulin_value"])
+        )
+
+        # Process carbohydrate events
+        carb_data = (df
+            .filter(pl.col(Col.EVENT_TYPE) == "Carbs")
+            .select([
+                pl.col(Col.TIMESTAMP).alias("datetime"),
+                pl.col(Col.CARB_VALUE).alias("carbs"),
+            ])
+            .with_columns([
+                pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+                pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
+                pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+            ])
+        )
+
+        # Process exercise events — includes "Activity" (G7)
+        exercise_data = (df
+            .filter(pl.col(Col.EVENT_TYPE).is_in(["Exercise", "Activity"]))
+            .select([
+                pl.col(Col.TIMESTAMP).alias("datetime"),
+                pl.col(Col.DURATION).alias("duration_str"),
+                pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
+            ])
+            .with_columns([
+                pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
+                # Convert duration HH:MM:SS to seconds
+                pl.col("duration_str").str.split(":").list.get(0).cast(pl.Int64) * 3600 +
+                pl.col("duration_str").str.split(":").list.get(1).cast(pl.Int64) * 60 +
+                pl.col("duration_str").str.split(":").list.get(2).cast(pl.Int64)
+                .alias("exercise"),
+                pl.when(pl.col("subtype") == "Light")
+                .then(pl.lit(UnifiedEventType.EXERCISE_LIGHT.value))
+                .when(pl.col("subtype") == "Medium")
+                .then(pl.lit(UnifiedEventType.EXERCISE_MEDIUM.value))
+                .when(pl.col("subtype") == "Heavy")
+                .then(pl.lit(UnifiedEventType.EXERCISE_HEAVY.value))
+                .otherwise(pl.lit(UnifiedEventType.EXERCISE_MEDIUM.value))
+                .alias("event_type"),
+                pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
+            ])
+            .drop(["duration_str", "subtype"])
+        )
+
+        # Combine all data types
+        all_data = [egv_data]
+        if len(insulin_data) > 0:
+            all_data.append(insulin_data)
+        if len(carb_data) > 0:
+            all_data.append(carb_data)
+        if len(exercise_data) > 0:
+            all_data.append(exercise_data)
+
+        return all_data, extra_metadata_rows
+
+    @classmethod
     def _process_dexcom(
         cls,
         text_data: str,
@@ -659,6 +920,10 @@ class FormatParser(CGMParser):
         low_glucose_value: int = DEXCOM_LOW_GLUCOSE_DEFAULT
     ) -> UnifiedFormat:
         """Process Dexcom CSV to unified format.
+
+        One export, one subject, one frame. A caller that needs to merge these
+        rows with another modality wants `_dexcom_event_frames` instead — see
+        its docstring for why concatenating onto this finished frame is wrong.
 
         Args:
             text_data: Dexcom CSV string
@@ -672,196 +937,22 @@ class FormatParser(CGMParser):
         Raises:
             MalformedDataError: If parsing fails
         """
-        Col = DexcomEUColumn if european else DexcomColumn
-        eff_schema = DEXCOM_EU_SCHEMA if european else DEXCOM_SCHEMA
         metadata_lines = DEXCOM_EU_METADATA_LINES if european else DEXCOM_METADATA_LINES
-        expected_metadata_rows = len(metadata_lines)
         try:
-            # Dexcom/Clarity layout: Row 1 = column headers, then a number of
-            # metadata rows (FirstName, LastName, Device, an optional Sensor
-            # row, and one row per configured Alert), then the data rows.
-            #
-            # Static minimal skip: skip the known number of metadata rows for
-            # this format variant (10 for standard mg/dL exports, 11 for the EU
-            # mmol/L exports that include a "Sensor" row).
-            df = pl.read_csv(
-                StringIO(text_data),
-                skip_rows_after_header=expected_metadata_rows,  # Skip known metadata rows
-                truncate_ragged_lines=True,  # Handle Dexcom's variable-length rows
-                infer_schema_length=None,
-                ignore_errors=False
+            all_data, extra_metadata_rows = cls._dexcom_event_frames(
+                text_data,
+                european=european,
+                high_glucose_value=high_glucose_value,
+                low_glucose_value=low_glucose_value,
             )
-
-            # Clean column names
-            df = df.rename({col: col.strip().replace('“', '').replace('”', '').replace('"', '') for col in df.columns})
-
-            # Absorb benign header drift (any registered alias -> canonical name)
-            df = eff_schema.normalize_headers(df)
-
-            # Dynamic post-handler: these proprietary Clarity exports are not
-            # perfectly stable — newer G6/G7 exports emit an extra metadata row
-            # (e.g. "Sensor") beyond the static count, which then survives the
-            # skip above. Every real data row carries a Timestamp while metadata
-            # rows leave it blank, so drop any blank-timestamp rows that slipped
-            # through and warn if the real metadata length differs from expected.
-            rows_before = len(df)
-            df = df.filter(
-                pl.col(Col.TIMESTAMP).is_not_null()
-                & (pl.col(Col.TIMESTAMP).cast(pl.Utf8).str.strip_chars() != "")
-            )
-            extra_metadata_rows = rows_before - len(df)
             if extra_metadata_rows > 0:
+                # One file, so warn per file. The corpus walkers aggregate.
                 logger.warning(
-                    "Dexcom%s export metadata length mismatch: expected %d metadata "
-                    "row(s) after the header but found %d extra blank-timestamp "
-                    "row(s); dropped them dynamically. The Clarity export format may "
-                    "have changed.",
-                    " EU" if european else "",
-                    expected_metadata_rows,
-                    extra_metadata_rows,
+                    "%s",
+                    cls._dexcom_metadata_drift_message(
+                        len(metadata_lines), extra_metadata_rows, european
+                    ),
                 )
-
-            # Probe timestamp format once for this file. Supports both the older
-            # space form ("2025-05-01 0:01:47") and the newer ISO "T" form
-            # ("2026-07-13T00:01:37") emitted by recent Clarity exports.
-            timestamp_format = FormatParser._probe_timestamp_format(df, Col.TIMESTAMP, DEXCOM_TIMESTAMP_FORMATS)
-
-            # Process EGV (glucose) rows — includes "Fasting Glucose" (G7)
-            egv_data = (df
-                .filter(pl.col(Col.EVENT_TYPE).str.to_lowercase().is_in(["egv", "fasting glucose"]))
-                .select([
-                    pl.col(Col.TIMESTAMP).alias("datetime"),
-                    pl.col(Col.GLUCOSE_VALUE).alias("glucose"),
-                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
-                ])
-                .with_columns([
-                    # Track if glucose was High/Low BEFORE replacement (sensor out-of-range error)
-                    # These are NOT real measurements - sensor couldn't measure the actual value
-                    pl.col("glucose")
-                    .cast(pl.Utf8)
-                    .str.to_lowercase()
-                    .is_in(["high", "low"])
-                    .alias("is_out_of_range"),
-                ])
-                .with_columns([
-                    # Replace High/Low with numeric placeholders (mg/dL) for processing
-                    # High = >400 mg/dL (sensor max), Low = <50 mg/dL (sensor min)
-                    pl.col("glucose")
-                    .cast(pl.Utf8)
-                    .str.replace("High", str(high_glucose_value))
-                    .str.replace("Low", str(low_glucose_value))
-                    .cast(pl.Float64, strict=False)
-                    .alias("glucose"),
-                    # Mark out-of-range readings with OUT_OF_RANGE flag (sensor error, not real data)
-                    pl.when(pl.col("is_out_of_range"))
-                    .then(pl.lit(Quality.OUT_OF_RANGE.value))
-                    .otherwise(pl.lit(0))  # 0 = GOOD (no flags)
-                    .alias("quality"),
-                    pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
-                ])
-            )
-
-            # Convert glucose to the canonical unit (mg/dL) based on the column's
-            # declared unit in the effective schema — mmol/L exports are scaled,
-            # mg/dL pass through, with no format-specific branch. High/Low markers
-            # are already substituted with mg/dL placeholders, so leave them as-is.
-            egv_data = egv_data.with_columns([
-                pl.when(pl.col("is_out_of_range"))
-                .then(pl.col("glucose"))
-                .otherwise(cls._glucose_to_canonical(
-                    eff_schema, Col.GLUCOSE_VALUE, pl.col("glucose")
-                ))
-                .alias("glucose"),
-            ])
-
-            egv_data = (egv_data
-                .with_columns([
-                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                ])
-                .drop(["subtype", "is_out_of_range"])
-            )
-
-            # Process insulin events
-            insulin_data = (df
-                .filter(pl.col(Col.EVENT_TYPE) == "Insulin")
-                .select([
-                    pl.col(Col.TIMESTAMP).alias("datetime"),
-                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
-                    pl.col(Col.INSULIN_VALUE).alias("insulin_value"),
-                ])
-                .with_columns([
-                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                    pl.when(pl.col("subtype") == "Fast-Acting")
-                    .then(pl.lit(UnifiedEventType.INSULIN_FAST.value))
-                    .when(pl.col("subtype") == "Long-Acting")
-                    .then(pl.lit(UnifiedEventType.INSULIN_SLOW.value))
-                    .otherwise(pl.lit(UnifiedEventType.INSULIN_FAST.value))
-                    .alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
-                ])
-                .with_columns([
-                    pl.when(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value)
-                    .then(pl.col("insulin_value"))
-                    .otherwise(pl.lit(None))
-                    .alias("insulin_fast"),
-                    pl.when(pl.col("event_type") == UnifiedEventType.INSULIN_SLOW.value)
-                    .then(pl.col("insulin_value"))
-                    .otherwise(pl.lit(None))
-                    .alias("insulin_slow"),
-                ])
-                .drop(["subtype", "insulin_value"])
-            )
-
-            # Process carbohydrate events
-            carb_data = (df
-                .filter(pl.col(Col.EVENT_TYPE) == "Carbs")
-                .select([
-                    pl.col(Col.TIMESTAMP).alias("datetime"),
-                    pl.col(Col.CARB_VALUE).alias("carbs"),
-                ])
-                .with_columns([
-                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                    pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
-                ])
-            )
-
-            # Process exercise events — includes "Activity" (G7)
-            exercise_data = (df
-                .filter(pl.col(Col.EVENT_TYPE).is_in(["Exercise", "Activity"]))
-                .select([
-                    pl.col(Col.TIMESTAMP).alias("datetime"),
-                    pl.col(Col.DURATION).alias("duration_str"),
-                    pl.col(Col.EVENT_SUBTYPE).alias("subtype"),
-                ])
-                .with_columns([
-                    pl.col("datetime").str.strptime(pl.Datetime("ms"), timestamp_format),
-                    # Convert duration HH:MM:SS to seconds
-                    pl.col("duration_str").str.split(":").list.get(0).cast(pl.Int64) * 3600 +
-                    pl.col("duration_str").str.split(":").list.get(1).cast(pl.Int64) * 60 +
-                    pl.col("duration_str").str.split(":").list.get(2).cast(pl.Int64)
-                    .alias("exercise"),
-                    pl.when(pl.col("subtype") == "Light")
-                    .then(pl.lit(UnifiedEventType.EXERCISE_LIGHT.value))
-                    .when(pl.col("subtype") == "Medium")
-                    .then(pl.lit(UnifiedEventType.EXERCISE_MEDIUM.value))
-                    .when(pl.col("subtype") == "Heavy")
-                    .then(pl.lit(UnifiedEventType.EXERCISE_HEAVY.value))
-                    .otherwise(pl.lit(UnifiedEventType.EXERCISE_MEDIUM.value))
-                    .alias("event_type"),
-                    pl.lit(0).alias("quality"),  # 0 = GOOD (no flags)
-                ])
-                .drop(["duration_str", "subtype"])
-            )
-
-            # Combine all data types
-            all_data = [egv_data]
-            if len(insulin_data) > 0:
-                all_data.append(insulin_data)
-            if len(carb_data) > 0:
-                all_data.append(carb_data)
-            if len(exercise_data) > 0:
-                all_data.append(exercise_data)
 
             # Concatenate with alignment
             unified = pl.concat(all_data, how="diagonal")
@@ -876,7 +967,7 @@ class FormatParser(CGMParser):
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse Dexcom CSV: {e}"
             raise MalformedDataError(cls._truncate_error_message(error_msg))
-    
+
     @classmethod
     def _process_libre(cls, text_data: str, european: bool = False) -> UnifiedFormat:
         """Process FreeStyle Libre CSV to unified format.
@@ -2469,10 +2560,7 @@ class FormatParser(CGMParser):
                 key=lambda d: d.name,
             )
         elif format_type == SupportedCGMFormat.BIGIDEAS:
-            subject_dirs = sorted(
-                {p.parent for p in root_path.glob("*/Dexcom_*.csv") if p.is_file()},
-                key=lambda d: d.name,
-            )
+            subject_dirs = cls._bigideas_subject_dirs(root_path)
         else:
             raise NotImplementedError(
                 f"No corpus walker registered for {format_type.value}"
@@ -3086,18 +3174,45 @@ class FormatParser(CGMParser):
     # ===== BIG IDEAs: a Dexcom + food-log bundle per subject =====
 
     @classmethod
+    def _bigideas_subject_dirs(cls, root: Path) -> List[Path]:
+        """Every directory under `root` holding either modality.
+
+        The union, not just `Dexcom_*.csv`: a subject carrying only a food log
+        is a subject the corpus offered and we cannot parse, and enumerating
+        by glucose alone would make it *invisible* rather than reported. It
+        reaches `_process_bigideas_subject`, fails with a typed error naming
+        the missing file, and lands in the walker's failure summary.
+        """
+        return sorted(
+            {
+                p.parent
+                for pattern in ("*/Dexcom_*.csv", "*/Food_Log_*.csv")
+                for p in root.glob(pattern)
+                if p.is_file()
+            },
+            key=lambda d: d.name,
+        )
+
+    @classmethod
     def _process_bigideas_subject(
         cls,
         subject_dir: Union[str, Path],
+        drift_sink: Optional[Dict[str, int]] = None,
     ) -> UnifiedFormat:
         """Parse one BIG IDEAs subject directory — Dexcom plus food log.
 
-        Glucose is the sibling Clarity export, reused through `_process_dexcom`
-        because the file *is* a Dexcom export (stable 13-column header, no
-        Transmitter ID). Meals come from `Food_Log_*.csv` and target the
-        extended schema. A missing food log is reported and the glucose is
-        still returned — "the source did not say" about meals, not a reason
-        to drop the readings.
+        Glucose is the sibling Clarity export, decoded through
+        `_dexcom_event_frames` because the file *is* a Dexcom export (stable
+        13-column header, no Transmitter ID). Meals come from
+        `Food_Log_*.csv` and target the extended schema. A missing food log
+        is reported and the glucose is still returned — "the source did not
+        say" about meals, not a reason to drop the readings.
+
+        Args:
+            subject_dir: One subject's directory.
+            drift_sink: Optional mapping a corpus walker passes in to collect
+                per-subject Clarity metadata drift, so 16 subjects produce one
+                warning rather than 16. Omitted, the drift is warned here.
         """
         directory = Path(subject_dir)
         dexcom_paths = sorted(directory.glob("Dexcom_*.csv"))
@@ -3106,13 +3221,32 @@ class FormatParser(CGMParser):
                 f"BIG IDEAs subject directory has no Dexcom_*.csv: {directory}"
             )
 
+        # Sub-frames, not a finished frame: the food rows below join these
+        # before anything is postprocessed, so `original_datetime` is created
+        # once for every row. Concatenating onto `_process_dexcom`'s output
+        # instead would leave every meal row with a null anchor — the
+        # write-once guards in `_postprocess_unified` no-op on a second pass,
+        # and a meal with no anchor is never assigned to a sequence.
         text_data = cls.decode_raw_data(dexcom_paths[0].read_bytes())
-        glucose_frame = cls._process_dexcom(text_data)
+        try:
+            frames, extra_metadata_rows = cls._dexcom_event_frames(text_data)
+        except pl.exceptions.PolarsError as e:
+            raise MalformedDataError(
+                cls._truncate_error_message(
+                    f"{directory.name}: failed to parse {dexcom_paths[0].name}: {e}"
+                )
+            )
 
-        frames: List[pl.DataFrame] = [glucose_frame]
         food_paths = sorted(directory.glob("Food_Log_*.csv"))
         if food_paths:
-            frames.extend(cls._bigideas_food_frames(food_paths[0], directory))
+            try:
+                frames.extend(cls._bigideas_food_frames(food_paths[0], directory))
+            except pl.exceptions.PolarsError as e:
+                raise MalformedDataError(
+                    cls._truncate_error_message(
+                        f"{directory.name}: failed to parse {food_paths[0].name}: {e}"
+                    )
+                )
         else:
             logger.warning(
                 "%s: no Food_Log_*.csv; meals are omitted for this subject "
@@ -3120,11 +3254,33 @@ class FormatParser(CGMParser):
                 directory.name,
             )
 
-        unified = pl.concat(frames, how="diagonal")
-        unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
-        return cls._postprocess_unified(
-            unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.BIGIDEAS]
-        )
+        try:
+            unified = pl.concat(frames, how="diagonal")
+            unified = unified.with_columns(pl.lit(0).alias("sequence_id"))
+            frame = cls._postprocess_unified(
+                unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.BIGIDEAS]
+            )
+        except pl.exceptions.PolarsError as e:
+            raise MalformedDataError(
+                cls._truncate_error_message(
+                    f"{directory.name}: failed to merge glucose and meals: {e}"
+                )
+            )
+
+        # A dropped metadata row is never silent, but a corpus walk should say
+        # it once rather than once per subject: with a sink the count is
+        # collected and reported by the walker, without one it is warned here.
+        if extra_metadata_rows > 0:
+            if drift_sink is None:
+                logger.warning(
+                    "%s",
+                    cls._dexcom_metadata_drift_message(
+                        len(DEXCOM_METADATA_LINES), extra_metadata_rows
+                    ),
+                )
+            else:
+                drift_sink[directory.name] = extra_metadata_rows
+        return frame
 
     @classmethod
     def _bigideas_food_frames(
@@ -3184,7 +3340,11 @@ class FormatParser(CGMParser):
 
         meals = food.with_columns(
             pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"),
-            pl.lit(0, dtype=pl.Int64).alias("quality"),
+            # Plain `pl.lit(0)` like every other sub-frame builder: the sub-frames
+            # are concatenated before anything casts them, so quality must carry
+            # the same dtype on both sides. `_postprocess_unified` casts to the
+            # schema's Int64 afterwards.
+            pl.lit(0).alias("quality"),
             _numeric(carbs_col).alias("carbs"),
             _numeric(calorie_col).alias("calories"),
             _numeric(protein_col).alias("protein"),
@@ -3394,21 +3554,35 @@ class FormatParser(CGMParser):
         so keys are bare directory names.
         """
         subject_dirs = cls._select_subject_dirs(
-            sorted(
-                {p.parent for p in root.glob("*/Dexcom_*.csv") if p.is_file()},
-                key=lambda d: d.name,
-            ),
+            cls._bigideas_subject_dirs(root),
             subjects,
             root,
         )
 
         results: Dict[str, UnifiedFormat] = {}
         failures: Dict[str, str] = {}
+        drift: Dict[str, int] = {}
         for subject_dir in subject_dirs:
             try:
-                results[subject_dir.name] = cls._process_bigideas_subject(subject_dir)
+                results[subject_dir.name] = cls._process_bigideas_subject(
+                    subject_dir, drift_sink=drift
+                )
             except (MalformedDataError, ZeroValidInputError) as e:
                 failures[subject_dir.name] = str(e)[:200]
+
+        if drift:
+            # Grouped by reason with a count, not one line per subject: this is
+            # an expected property of the published corpus (12 of 16 subjects
+            # ship no PatientIdentifier row), and a per-file alarm buries every
+            # other finding a corpus run produces.
+            logger.warning(
+                "parse_corpus: %d of %d BIG IDEAs subject(s) carried extra "
+                "blank-timestamp Clarity metadata row(s), dropped dynamically "
+                "(expected for this corpus): %s",
+                len(drift),
+                len(subject_dirs),
+                ", ".join(f"{k} x{n}" for k, n in sorted(drift.items())),
+            )
 
         if failures:
             logger.warning(

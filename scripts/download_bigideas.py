@@ -31,18 +31,17 @@ from typing import Iterable, Optional, Sequence
 logger = logging.getLogger("download_bigideas")
 
 PHYSIONET_PAGE: str = "https://physionet.org/content/big-ideas-glycemic-wearable/1.1.3/"
-S3_BASE: str = (
-    "https://physionet-open.s3.amazonaws.com/big-ideas-glycemic-wearable/1.1.3"
-)
+# Single source, deliberately. The `physionet-open` S3 mirror carries this
+# dataset only up to 1.1.2 (listing the bucket shows 1.0.0, 1.1.0, 1.1.1,
+# 1.1.2 and no 1.1.3), so an S3-first tier pinned to 1.1.3 404s on every file
+# and merely doubles the request count before falling back here. 1.1.3 is the
+# version the ground truth in `formats/bigideas.py` was read against, so the
+# version stays and the dead tier goes.
 FILES_BASE: str = "https://physionet.org/files/big-ideas-glycemic-wearable/1.1.3"
 USER_AGENT: str = "cgm-format-bigideas-downloader"
 SUBJECT_IDS: tuple[int, ...] = tuple(range(1, 17))
 _CHUNK_BYTES: int = 64 * 1024
 _TIMEOUT_SECONDS: int = 60
-
-
-def s3_url(rel_path: str) -> str:
-    return f"{S3_BASE}/{rel_path}"
 
 
 def files_url(rel_path: str) -> str:
@@ -71,21 +70,17 @@ def _retrieve(url: str, dest: Path) -> None:
 
 
 def _download_one(rel_path: str, dest: Path) -> None:
-    last_error: Optional[BaseException] = None
-    for url in (s3_url(rel_path), files_url(rel_path)):
-        logger.info("fetching %s", url)
-        try:
-            _retrieve(url, dest)
-            logger.info("wrote %s (%.1f KB)", dest, dest.stat().st_size / 1024)
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last_error = exc
-            dest.unlink(missing_ok=True)
-            dest.with_name(dest.name + ".part").unlink(missing_ok=True)
-            logger.info("missed %s: %s", url, exc)
-    raise last_error if last_error is not None else RuntimeError(
-        f"no URL attempted for {rel_path}"
-    )
+    url = files_url(rel_path)
+    logger.info("fetching %s", url)
+    try:
+        _retrieve(url, dest)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Leave nothing half-written behind, then let the caller see the real
+        # error: there is no second source to fall back to.
+        dest.unlink(missing_ok=True)
+        dest.with_name(dest.name + ".part").unlink(missing_ok=True)
+        raise
+    logger.info("wrote %s (%.1f KB)", dest, dest.stat().st_size / 1024)
 
 
 def _parse_subjects(raw: Optional[str]) -> tuple[int, ...]:

@@ -2,7 +2,8 @@
 
 People using this library will not have a sibling sugar-sugar checkout. The
 script therefore fetches the published Dexcom + food-log files from PhysioNet
-(S3, then files.physionet.org). Empatica streams are never requested.
+(`files.physionet.org`; the open S3 mirror stops at 1.1.2 and cannot serve
+the pinned 1.1.3). Empatica streams are never requested.
 
 This file hits the live URLs. It does not mock the HTTP layer and it does
 not read a local sugar-sugar `data/bigideas/` tree.
@@ -37,15 +38,26 @@ DOWNLOADER = _load_downloader()
 class TestPublicUrls:
     def test_the_script_points_at_physionet_not_a_local_path(self) -> None:
         assert DOWNLOADER.PHYSIONET_PAGE.startswith("https://physionet.org/content/")
-        assert DOWNLOADER.S3_BASE.startswith("https://physionet-open.s3.amazonaws.com/")
         assert DOWNLOADER.FILES_BASE.startswith("https://physionet.org/files/")
-        assert "sugar-sugar" not in DOWNLOADER.S3_BASE
         assert "sugar-sugar" not in DOWNLOADER.FILES_BASE
 
-    def test_s3_and_files_urls_are_https_paths_under_the_release(self) -> None:
+    def test_file_urls_are_https_paths_under_the_pinned_release(self) -> None:
         rel = "001/Dexcom_001.csv"
-        assert DOWNLOADER.s3_url(rel) == f"{DOWNLOADER.S3_BASE}/{rel}"
         assert DOWNLOADER.files_url(rel) == f"{DOWNLOADER.FILES_BASE}/{rel}"
+        # The page and the file base must name the same release, or the script
+        # documents one version and downloads another.
+        assert DOWNLOADER.PHYSIONET_PAGE.rstrip("/").endswith(
+            DOWNLOADER.FILES_BASE.rsplit("/", 1)[-1]
+        )
+
+    def test_there_is_exactly_one_source(self) -> None:
+        """The S3 mirror was removed, not merely deprioritized.
+
+        It carries this dataset only through 1.1.2, so a tier pinned to 1.1.3
+        404s on every file and doubles the request count for nothing.
+        """
+        assert not hasattr(DOWNLOADER, "S3_BASE")
+        assert not hasattr(DOWNLOADER, "s3_url")
 
 
 class TestOnlineDownloadAndImport:

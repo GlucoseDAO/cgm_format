@@ -83,3 +83,84 @@ uv run python -c "from importlib.metadata import distributions; \
 ```
 
 Two entries means the shadow is back.
+
+### F7 — a missing header column cannot be suppressed by field name
+
+Found while bringing BIG IDEAs' Clarity exports to a clean Frictionless report (2026-08-16).
+
+All 16 published BIG IDEAs Dexcom files omit the `Transmitter ID` column entirely. Frictionless
+reports that as `missing-label`, and a `missing-label` error carries **no** `fieldName` — its `label`
+is the empty string. `_should_suppress_error` matches on `(type, fieldName, cell)`, so no rule can
+name the absent column:
+
+```
+RESIDUAL: missing-label | - | There is a missing label in the header's field "Transmitter ID" at position "14"
+```
+
+Every other error type on these files is now suppressed (500 residual → 1, or 2 on the four
+subjects in F9), so this is the main thing standing between BIG IDEAs and a clean `cgm-cli report`.
+
+**Not fixed here, because every obvious repair is a design decision:**
+
+- `('missing-label', None, None)` blanket-suppresses *any* missing column for all Dexcom files.
+  `docs/NEW_SCHEMA.md` forbids exactly this — a genuinely truncated export would then pass.
+- Matching on the error *message* text is fragile across Frictionless versions.
+- Matching on `fieldNumber` would need a fourth positional meaning in the rule tuple, which
+  currently means "count cap".
+- Giving `ColumnSchema` an `optional` flag is the principled fix — it is a schema-vocabulary change
+  affecting every format, and belongs to whoever owns that decision.
+
+Reported rather than repaired, per the "fix it vs surface it" line: the residual is one, it is
+honest, and it names the real condition.
+
+### F8 — the headerless food log cannot be Frictionless-validated at all
+
+Same session. BIG IDEAs subject `003` ships a food log with **no header row** and three columns
+dropped. The parser handles it (`BIGIDEAS_FOOD_HEADERLESS_11`, sniffed on the absence of
+`logged_food` in line 1), but Frictionless validates against `BIGIDEAS_FOOD_SCHEMA`, which declares a
+14-column header — so it reads row 1 as the header and reports 185 errors: every label wrong, every
+row mistyped.
+
+This is **not** a suppression candidate. Silencing 185 errors across many types would make a
+genuinely broken file indistinguishable from this one. `CLAUDE.md` §5: a check that could not run is
+not a check that passed.
+
+The honest options, none free: a second `CGMSchemaDefinition` for the headerless variant plus a
+dialect carrying `header: false` (Frictionless supports it; `CGMSchemaDefinition` does not model it
+today), or teaching the CLI to report "not validatable — headerless variant" as a third state beside
+valid/invalid. The second is more truthful and needs the three-valued reporting the charter already
+argues for elsewhere.
+
+Pinned by `tests/test_bigideas.py::TestFrictionless::test_the_headerless_variant_is_reported_unvalidatable_not_clean`,
+which asserts the current state rather than a hoped-for one.
+
+### F9 — the blank-timestamp cap of 1 is falsified by published exports
+
+Measured on the 16 published BIG IDEAs Clarity exports, 2026-08-16.
+
+`KNOWN_ISSUES_TO_SUPPRESS[DEXCOM]` tolerates exactly **one** blank-timestamp metadata row per file,
+and its comment states the reason: "a second blank timestamp would be a real data issue and must
+still fail." Counting the real corpus:
+
+```
+blank-timestamp rows per file across 16 published subjects: {1: 12, 2: 4}
+```
+
+Four published, valid exports carry two. The premise is wrong as stated — a second row is not
+evidence of breakage — so those four files keep one unsuppressed `constraint-error` each and report
+as invalid under `cgm-cli report`.
+
+**Deliberately not changed.** Raising the cap to 2 is a one-character edit, and it was tried: it
+weakens the guard for *every* Dexcom file, not only this corpus, and the threshold is pinned by
+`tests/test_cli_integration.py::TestSuppressionCap::test_cap_enforced_across_a_file`, which asserts
+the value directly. A test that exists purely to hold a number is evidence someone chose it. Editing
+both the number and the test that guards it would leave nothing checking the decision, so the value
+stands and the finding is recorded instead.
+
+What would settle it: whether the cap is meant to express "how many metadata rows Clarity is known
+to emit" (then it should track the observed maximum, currently 2) or "how much drift we will
+tolerate before demanding a human look" (then 1 is right and these four files *should* report).
+Those are different rules and the comment reads as the first while the value behaves as the second.
+
+Parsing is unaffected either way — the parser drops the rows dynamically and warns for each one.
+This is a reporting-fidelity item only.
