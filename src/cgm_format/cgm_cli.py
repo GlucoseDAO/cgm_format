@@ -271,7 +271,8 @@ def pipeline(
     min_duration: int = typer.Option(15, "--min-duration", help="Minimum sequence duration (minutes)"),
     max_duration: int = typer.Option(1440, "--max-duration", help="Maximum sequence duration (minutes)"),
     glucose_only: bool = typer.Option(False, "--glucose-only", help="Keep only glucose events"),
-    drop_duplicates: bool = typer.Option(True, "--drop-duplicates/--keep-duplicates", help="Drop duplicate timestamps"),
+    drop_duplicates: bool = typer.Option(True, "--drop-duplicates/--keep-duplicates", help="Merge events sharing a timestamp into one row"),
+    ml_ready: bool = typer.Option(False, "--ml-ready", help="Emit the SugarOne model input shape (display column names)"),
     show_warnings: bool = typer.Option(True, "--warnings/--no-warnings", help="Show processing warnings"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
 ) -> None:
@@ -348,12 +349,15 @@ def pipeline(
         
         # Stage 6: Convert to data-only format
         with console.status("[bold green]Stage 6/6: Converting to final format..."):
-            final_df = processor.to_data_only_df(
-                inference_df,
-                drop_service_columns=True,
-                drop_duplicates=drop_duplicates,
-                glucose_only=glucose_only
-            )
+            if ml_ready:
+                final_df = processor.to_ml_ready_df(inference_df)
+            else:
+                final_df = processor.to_data_only_df(
+                    inference_df,
+                    drop_service_columns=True,
+                    drop_duplicates=drop_duplicates,
+                    glucose_only=glucose_only
+                )
         final_rows = len(final_df)
         console.print(f"[green]✓[/green] Stage 6: Generated {final_rows} final rows")
         

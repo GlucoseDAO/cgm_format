@@ -1174,6 +1174,103 @@ class FormatProcessor(CGMProcessor):
         return CGM_SCHEMA.validate_dataframe(unified_df, enforce=True)
 
     @classmethod
+    def to_ml_ready_df(
+            cls,
+            unified_df: UnifiedFormat,
+            user_id: str = "Subject 000",
+            round_precision: int = 3,
+            basal_rate_from_insulin_slow: bool = False,
+            validation_mode: Optional[ValidationMethod] = None
+        ) -> pl.DataFrame:
+        """Render a processed frame in the SugarOne model's input shape.
+
+        SugarOne (`GlucoseDAO/glucose-forecasting`) consumes a fixed-frequency wide grid
+        with display column names, one row per (sequence_id, timestamp):
+
+            sequence_id, Timestamp, Event Type, User ID, Glucose (mg/dL),
+            Basal Rate (U/h), Bolus Insulin (U), Carbohydrates (g),
+            Recommended Split, Study Group
+
+        `Recommended Split` and `Study Group` are training-time split bookkeeping; they are
+        emitted empty because inference has no split to recommend.
+
+        **`Basal Rate (U/h)` is left empty by default.** SugarOne's basal is a continuous pump
+        rate in units per hour; `insulin_slow` is a discrete long-acting injection in units.
+        They are not the same quantity, and writing one into the other would feed a 26 U
+        injection to the model as a 26 U/h infusion rate. Pass
+        `basal_rate_from_insulin_slow=True` only if the deployment has established that its
+        `insulin_slow` really is a rate. `evaluate_model.py` fills missing covariates with 0.0,
+        so an empty column degrades to a covariate-free prediction rather than an error.
+
+        Args:
+            unified_df: Processed DataFrame in unified format (post-`prepare_for_inference`)
+            user_id: Value for the `User ID` column
+            round_precision: Decimal places for glucose, matching training's `round_precision`
+            basal_rate_from_insulin_slow: Map `insulin_slow` into `Basal Rate (U/h)` despite
+                the unit mismatch described above
+            validation_mode: Validation mode (defaults to cls.validation_mode_default)
+
+        Returns:
+            DataFrame with SugarOne display columns, one row per grid timestamp
+        """
+        if validation_mode is None:
+            validation_mode = cls.validation_mode_default
+
+        if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
+            cls.schema.validate_dataframe(unified_df, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
+
+        # One row per grid point, covariates merged onto it.
+        collapsed = cls._coalesce_duplicate_timestamps(unified_df)
+
+        basal = (
+            pl.col('insulin_slow') if basal_rate_from_insulin_slow
+            else pl.lit(None, dtype=pl.Float64)
+        )
+
+        return collapsed.select([
+            pl.col('sequence_id'),
+            pl.col('datetime').dt.strftime('%Y-%m-%dT%H:%M:%S').alias('Timestamp'),
+            cls._ml_event_type_expr().alias('Event Type'),
+            pl.lit(user_id).alias('User ID'),
+            pl.col('glucose').round(round_precision).alias('Glucose (mg/dL)'),
+            basal.alias('Basal Rate (U/h)'),
+            pl.col('insulin_fast').alias('Bolus Insulin (U)'),
+            pl.col('carbs').alias('Carbohydrates (g)'),
+            pl.lit('').alias('Recommended Split'),
+            pl.lit('').alias('Study Group'),
+        ])
+
+    # Unified event codes -> the Event Type labels the training exports carry.
+    ML_EVENT_TYPE_LABELS: ClassVar[Dict[str, str]] = {
+        UnifiedEventType.GLUCOSE.value: 'EGV',
+        UnifiedEventType.INSULIN_FAST.value: 'Insulin',
+        UnifiedEventType.INSULIN_SLOW.value: 'Insulin',
+        UnifiedEventType.CARBOHYDRATES.value: 'Carbs',
+        UnifiedEventType.CALIBRATION.value: 'Calibration',
+        UnifiedEventType.IMPUTATION.value: 'Interpolated',
+        UnifiedEventType.HEALTH_ILLNESS.value: 'Health',
+        UnifiedEventType.HEALTH_STRESS.value: 'Health',
+        UnifiedEventType.HEALTH_LOW_SYMPTOMS.value: 'Health',
+        UnifiedEventType.HEALTH_CYCLE.value: 'Health',
+        UnifiedEventType.HEALTH_ALCOHOL.value: 'Health',
+        UnifiedEventType.EXERCISE_LIGHT.value: 'Exercise',
+        UnifiedEventType.EXERCISE_MEDIUM.value: 'Exercise',
+        UnifiedEventType.EXERCISE_HEAVY.value: 'Exercise',
+    }
+
+    @classmethod
+    def _ml_event_type_expr(cls) -> pl.Expr:
+        """Translate unified event codes to training-export Event Type labels."""
+        expr = pl.col('event_type')
+        mapped = pl.when(expr == UnifiedEventType.GLUCOSE.value).then(pl.lit('EGV'))
+        for code, label in cls.ML_EVENT_TYPE_LABELS.items():
+            if code == UnifiedEventType.GLUCOSE.value:
+                continue
+            mapped = mapped.when(expr == code).then(pl.lit(label))
+        # Anything else keeps its unified code rather than being silently blanked.
+        return mapped.otherwise(expr)
+
+    @classmethod
     def split_glucose_events(
         cls,
         unified_df: UnifiedFormat,

@@ -2266,6 +2266,72 @@ def test_to_data_only_df_merges_covariates_sharing_a_timestamp():
     ).equals(FormatProcessor._coalesce_duplicate_timestamps(unified_df))
 
 
+SUGAR_ONE_COLUMNS = [
+    'sequence_id', 'Timestamp', 'Event Type', 'User ID', 'Glucose (mg/dL)',
+    'Basal Rate (U/h)', 'Bolus Insulin (U)', 'Carbohydrates (g)',
+    'Recommended Split', 'Study Group',
+]
+
+
+def _sugar_one_source_frame(base_time):
+    def row(event_type, **values):
+        record = {
+            'sequence_id': 0,
+            'event_type': event_type,
+            'quality': GOOD_QUALITY.value,
+            'datetime': base_time,
+            'glucose': None,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        }
+        record.update(values)
+        return record
+
+    return create_test_dataframe([
+        row(UnifiedEventType.GLUCOSE.value, glucose=120.4567),
+        row(UnifiedEventType.INSULIN_FAST.value, insulin_fast=4.0),
+        row(UnifiedEventType.INSULIN_SLOW.value,
+            datetime=base_time + timedelta(minutes=5), insulin_slow=26.0),
+        row(UnifiedEventType.IMPUTATION.value,
+            datetime=base_time + timedelta(minutes=10), glucose=130.0),
+    ])
+
+
+def test_to_ml_ready_df_emits_the_sugar_one_shape():
+    """SugarOne consumes display names on a one-row-per-grid-point wide frame."""
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    result = FormatProcessor.to_ml_ready_df(_sugar_one_source_frame(base_time))
+
+    assert result.columns == SUGAR_ONE_COLUMNS
+    assert result.height == 3
+    assert result['Timestamp'].to_list() == [
+        '2024-01-01T12:00:00', '2024-01-01T12:05:00', '2024-01-01T12:10:00',
+    ]
+    # Glucose is rounded to training's round_precision.
+    assert result['Glucose (mg/dL)'].to_list() == [120.457, None, 130.0]
+    # The dose sharing a grid point with a reading survives alongside it.
+    assert result['Bolus Insulin (U)'].to_list() == [4.0, None, None]
+    # Imputed rows carry the label the training exports filter on.
+    assert result['Event Type'].to_list()[2] == 'Interpolated'
+    # Split bookkeeping is training-only.
+    assert set(result['Recommended Split'].to_list()) == {''}
+    assert set(result['Study Group'].to_list()) == {''}
+
+
+def test_to_ml_ready_df_leaves_basal_empty_unless_asked():
+    """insulin_slow is a discrete dose (U); basal is a rate (U/h). Not interchangeable."""
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    source = _sugar_one_source_frame(base_time)
+
+    default = FormatProcessor.to_ml_ready_df(source)
+    assert default['Basal Rate (U/h)'].null_count() == default.height
+
+    opted_in = FormatProcessor.to_ml_ready_df(source, basal_rate_from_insulin_slow=True)
+    assert opted_in['Basal Rate (U/h)'].to_list() == [None, 26.0, None]
+
+
 if __name__ == "__main__":
     # Allow running as script for quick testing
     pytest.main([__file__, "-v", "-s"])
