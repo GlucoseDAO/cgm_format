@@ -2,10 +2,285 @@
 
 Persistent reference for aligning **inference-time** data processing in `cgm_format` with **training-time** processing in `glucose_data_processing`, so ML model predictions stay consistent.
 
-**Last updated:** 2026-06-17  
-**Status:** Investigation complete; implementation not started  
+**Last updated:** 2026-08-17 (re-validated after rebase onto `main` @ 0.11.0)  
+**Status:** Rungs 1–2 landed on `main`; rung 3 approved for its own run; rung 5 blocked (§0.8)  
 **Related test:** `tests/test_livia_gdp_cgm_comparison.py`  
 **Sample report:** `data/comparison/livia_gdp_cgm_comparison_report.txt` (local, gitignored)
+
+> **Read §0 first.** Sections 4–9 were written on 2026-06-17 against cgm_format 0.8.2 and a
+> *refactored* glucose_data_processing tree. Both premises have since changed. §0 records what
+> was re-measured on 2026-08-17 and supersedes the stale parts inline.
+
+---
+
+## 0. Re-validation, 2026-08-17 (post-rebase onto 0.11.0)
+
+Measured by running `tests/test_livia_reference_alignment.py` and the pipeline directly against
+the committed fixtures, on branch `logic-synchronization` rebased onto `main` (0.11.0).
+
+### 0.1 The headline blocker in §8.2 was never real against the committed fixture
+
+The 2026-06-17 baseline reported **zero timestamp overlap** — GDP grid on a `:02/:07/:12` phase
+vs cgm sync on `:01/:06/:11` (`GRID_PHASE_OFFSET`). Measured against the fixture actually in git,
+there is no offset:
+
+| Metric | §8.2 note | measured 2026-08-17 |
+|--------|-----------|---------------------|
+| Overlapping timestamps (289-point window) | **0** | **289 / 289** |
+| Time range agreement | mismatched phase | identical (`2024-06-12 07:16` → `2024-06-13 07:16`) |
+| Row-count ratio | 1.0 | 1.0 |
+
+The rebase did not cause this. Running the same gate at the **pre-rebase** tip (322953d) yields
+byte-identical metrics — overlap 289, MAE 0.7867, max 3.3, exact-match 8.3%. Two conclusions:
+
+1. The §8.2 "baseline failure" was recorded against a *preliminary* reference CSV that was
+   regenerated before `livia_reference.csv` was committed in 322953d. The note was stale the
+   moment the fixture landed in the same commit.
+2. **The 0.11.0 schema overhaul is numerically neutral for the Dexcom inference path.** Parse
+   output is unchanged (25,717 rows / 25,340 EGV — exactly the §8.4 figures), and no commit
+   between 7d072cd and `origin/main` touched `get_sequence_grid_start` or the sync grid logic.
+
+**Phase 1 does not need to solve grid phase.** What remains is value-level, not timestamp-level.
+
+### 0.2 The GDP port target named in §4.1 / §11 does not exist
+
+`GlucoseDAO/glucose_data_processing` @ `origin/main` (4a1aa3f) is a **monolith**, not the modular
+`processing/steps/` tree this document describes. The real port target is:
+
+| Doc says | Actually is |
+|----------|-------------|
+| `processing/steps/fixed_frequency.py` → `FixedFreqGenerator` | `glucose_ml_preprocessor.py:675` → `GlucoseMLPreprocessor.create_fixed_frequency_data()` |
+| `processing/steps/gap_detection.py` | `glucose_ml_preprocessor.py:268` `detect_gaps_and_sequences()` |
+| `processing/steps/interpolation.py` | `glucose_ml_preprocessor.py:389` `interpolate_missing_values()` |
+| `processing/steps/ml_prep.py` | `glucose_ml_preprocessor.py:894` `prepare_ml_data()` |
+
+The modular layout exists only on the Windows box (`D:\dev\glucose_data_processing`) and is not
+on origin. **Confirm which tree trained the deployed model before porting anything.**
+
+Partially de-risking that question: the committed `livia_reference.csv` reproduces the
+**monolith's** two-nearest-point formula exactly (worked example in §0.4 lands on 131.3 to the
+digit). So either the reference was generated from the monolith, or the two trees share
+interpolation math. Either way, porting §0.4 against the monolith is unlikely to be wasted work.
+
+### 0.3 Covariates are not lost by the pipeline — they are lost by the export flag
+
+§8.2's report line "insulin_fast: ref=5, actual=2" reads like a pipeline gap. It is not. Traced
+stage by stage, all 6 insulin events in the window survive to `prepare_for_inference`, **at the
+same grid timestamps GDP assigns them**:
+
+```
+parsed → sequences → interpolate → synchronize → prepare_for_inference : 5 fast + 1 slow  ✔
+to_data_only_df(drop_duplicates=False) : 295 rows, 5 fast + 1 slow, 289 glucose  ✔
+to_data_only_df(drop_duplicates=True)  : 289 rows, 2 fast + 0 slow, 287 glucose  ✘
+```
+
+`to_data_only_df` implements de-duplication as `unique(subset=['datetime'], keep='first')`
+(`format_processor.py:1116`). When an insulin row and a glucose row land on the same grid
+timestamp, **one of them is discarded outright** — and which one depends on row order, so it
+destroys glucose readings too (289 → 287).
+
+This is live in production: `cgm_cli.py:274` defaults `--drop-duplicates/--keep-duplicates` to
+**True**. The library default is `False`, so the CLI is the lossy surface.
+
+The correct operation is **coalesce, not drop**: collapse rows sharing a grid timestamp into one
+wide row, merging their non-null data columns. That is simultaneously the bug fix *and* the
+one-row-per-grid-point shape Phase 1/2 want.
+
+### 0.4 The residual glucose delta is a re-timing choice, and it is small
+
+MAE **0.78 mg/dL**, max **3.3 mg/dL**, exact-match rate 8.3% across all 289 points. Mechanism,
+worked through at the worst point (grid `14:11:00`):
+
+```
+raw EGV:  14:06:45 → 150      14:11:45 → 128      14:16:46 → 110
+cgm_format : snaps 14:11:45 onto grid 14:11, keeps the measured value   → 128.0
+GDP        : linearly interpolates back 45 s to the exact grid instant  → 131.3
+             128 + (45/300) × (150 − 128) = 131.3   ✔ matches reference exactly
+```
+
+So GDP re-times each value to the exact grid instant; cgm_format keeps the measured value and
+relabels its timestamp. GDP's interpolation is arithmetically sound here (the two nearest
+readings do bracket the grid point in steady state). Neither is "wrong" — but they differ
+**systematically**, always leaning toward the previous reading, and the model saw GDP's version.
+
+Scale check: 0.78 mg/dL is far below Dexcom sensor error (MARD ≈ 9%, i.e. ~10–15 mg/dL at these
+levels). It is a systematic bias rather than noise, so it may still matter to a model reading
+rate-of-change — but it is not obviously worth bug-for-bug compatibility on its own. **Needs the
+model team's call (see §10).**
+
+### 0.5 §10 answered from the model repo (`GlucoseDAO/glucose-forecasting`)
+
+Cloned 2026-08-17. This resolves open decisions §10.1–§10.3 and reframes §10.2 entirely.
+
+**There is no single model.** Two families ship, with different covariates:
+
+| Model | Covariates | Context (`input_steps`) | Horizon |
+|-------|-----------|------------------------|---------|
+| **GluMind** | glucose + **heart rate + step count** | 80 → **400 min** | 12 → 60 min |
+| **SugarOne** | glucose + **basal rate, bolus insulin, carbs** | 128 → **640 min** | 12 → 60 min |
+
+Exact input schemas, from the shipped demo CSVs in `test_data/`:
+
+```
+GluMind:   sequence_id, Timestamp (YYYY-MM-DDThh:mm:ss), Event Type, User ID,
+           Glucose Value (mg/dL), Heart Rate, Step Count,
+           Recommended Split, Study Group, Glucose Observed, Steps Observed, HR Observed
+SugarOne:  sequence_id, Timestamp, Event Type, User ID,
+           Glucose (mg/dL), Basal Rate (U/h), Bolus Insulin (U), Carbohydrates (g),
+           Recommended Split, Study Group
+```
+
+So **yes**, `sequence_id` and `Event Type` are part of the frame (§10.1 answered).
+
+**The committed reference is a faithful proxy for what the model actually consumed.** Joining
+`test_data/livia_glumind_ready.csv` (139,613 rows, 86 sequences, 2024-03-16 → 2025-09-12) against
+`data/comparison/livia_reference.csv` on timestamp: **22,094 of 22,097 overlapping points match
+within 0.01 mg/dL** (MAE 1.6e-05, max 0.26). This retires most of §0.2's worry — whichever GDP
+tree produced the model-ready CSV, it agrees numerically with our reference. Rung 4 is aimed at
+the right target.
+
+**Two mapping problems cgm_format cannot currently solve:**
+
+1. **GluMind's covariates do not exist in the unified schema.** There is no heart-rate or
+   step-count column anywhere in cgm_format. Not a gap to close by porting — a schema question.
+   Mitigating: Livia's own GluMind file carries HR/steps *empty* with `HR Observed = 0.0`,
+   `Steps Observed = 0.0`, and `evaluate_model.py` fills missing covariates with `0.0` (with an
+   explicit `--zero-cov` flag for glucose-only runs). So GluMind is runnable glucose-only today.
+2. **`insulin_slow` → `Basal Rate (U/h)` is a semantic mismatch, not a rename.** SugarOne's basal
+   is a *continuous pump rate in U/h*; cgm_format's `insulin_slow` is a *discrete long-acting
+   injection in U* (Dexcom "Long-Acting"). `insulin_fast` → `Bolus Insulin (U)` and `carbs` →
+   `Carbohydrates (g)` map cleanly; basal does not. Needs a product decision before rung 2 can
+   emit a SugarOne-shaped frame.
+
+**Window sizing (§10.3 answered):** the model floor is 400 min (GluMind) / 640 min (SugarOne)
+plus horizon — the CLI's 1440-min `maximum_wanted_duration` is generous, not tight. The number
+that actually matters for the server is the *minimum*: below ~80/128 grid points the model cannot
+run at all, which sharpens §10.4's short-sequence policy into a hard, per-model floor.
+
+### 0.6 Revised difficulty ladder
+
+Ordered least-difficult / least-contradictory → genuinely contradictory. Rungs 1–2 are pure wins
+both repos already agree on; rung 5 is where the projects' philosophies actually collide.
+
+| # | Work | Difficulty | Contested? |
+|---|------|-----------|-----------|
+| 1 | Coalesce same-timestamp rows in `to_data_only_df` instead of dropping (§0.3) | **Low** | ✅ **Done** — `main` @ 5f8c817 |
+| 2 | `to_ml_ready_df()` adapter: SugarOne display names + `round_precision: 3`, `sequence_id`/`Event Type` retained (§0.5) | **Low** | ✅ **Done** — `main` @ 28dd645 |
+| 3 | Grid re-timing: interpolate glucose to the exact grid instant, GDP-style (§0.4) | **Medium** | **Approved 2026-08-17** — own run, see §0.9 |
+| 4 | Per-model minimum-length floor (80 / 128 grid points) in `prepare_for_inference` (§0.5) | **Medium** | Mildly — hard floor vs "predict anyway" |
+| 5 | `insulin_slow` → `Basal Rate (U/h)`: reconcile discrete dose (U) vs pump rate (U/h) (§0.8) | **Blocked** | **Yes — semantic, needs product input** |
+| 6 | Heart rate / step count for GluMind — absent from the unified schema entirely (§0.5) | **High** | **Yes — schema expansion, or accept zero-fill** |
+| 7 | §3's "No" column: short-sequence filter, 24 h post-calibration deletion, `DataCleaner` row removal | **N/A** | **Yes — intentional, do not port** |
+
+Rungs 1+2 move covariate counts to parity (5 fast / 1 slow, matching the reference) and produce
+the wide grid the models expect. Rung 3 is the whole remaining distance to MAE ≤ 0.1. Rungs 5–6
+are where cgm_format and the model repo genuinely disagree about what the data *is*, and cannot
+be settled by porting code.
+
+### 0.7 Rungs 1–2 as landed (2026-08-17, on `main`)
+
+**Rung 1 — `5f8c817`.** `to_data_only_df(drop_duplicates=True)` now collapses rows sharing a
+timestamp (group by `datetime`, first non-null per column) instead of `unique(keep='first')`.
+Covariates in the Livia window went 2 fast / 0 slow → **5 fast / 1 slow**, matching the reference
+exactly; the 2 glucose readings it was also eating came back (287 → 289). Sorting by `datetime`
+additionally fixed unordered output the old `unique()` returned. Regression test added — it fails
+on the old code with `assert [130.0, 120.0] == [120.0, 130.0]`, which is that ordering bug.
+
+**Rung 2 — `28dd645`.** `to_ml_ready_df()` plus `cgm-cli pipeline --ml-ready`, targeting
+**SugarOne** (chosen 2026-08-17). CLI output is byte-comparable to the shipped
+`test_data/livia_sugar_one_ready.csv` header and row format.
+
+Decisions worth remembering:
+
+- **`Event Type` is not a feature channel.** `evaluate_glumind.py:152` states Study Group,
+  Recommended Split and Event Type are all optional; `_canonical_feature_cols` derives purely
+  from glucose + covariates. It still matters that imputed rows carry `Interpolated`, because
+  the NeuralForecast baselines have a `--drop-interpolated` filter keyed on that label.
+- **`Basal Rate (U/h)` ships empty by default** — see rung 5. `insulin_slow` is a discrete dose
+  in U, basal is a rate in U/h; `evaluate_model.py` zero-fills absent covariates, so an empty
+  column costs a covariate rather than injecting a wrong one. `basal_rate_from_insulin_slow=True`
+  opts in.
+- **Still open:** `Recommended Split` / `Study Group` are emitted empty (training-only), and the
+  per-model context floors from §0.5 (80 / 128 grid points) are **not** yet enforced anywhere.
+
+### 0.8 Rung 5 (`Basal Rate (U/h)`) — what is actually missing
+
+Investigated 2026-08-17 against `GlucoseDAO/glucose-forecasting`. This is not a naming decision;
+feeding the column wrong is worse than leaving it empty, and the evidence says so quantitatively.
+
+**The two data sources disagree about what the column means.**
+
+| Source | What `Basal Rate (U/h)` holds | Observed values |
+|--------|-------------------------------|-----------------|
+| **Training** — `loop_ai_ready_joined2.csv` (Loop pump users) | genuine continuous pump rate | not in repo; pump basal is typically ~0.5–2 U/h |
+| **Eval demo** — `test_data/livia_sugar_one_ready.csv` | Livia's Dexcom **Long-Acting injections** | n=444, median **26.0**, range **2–30** |
+
+Livia is a Dexcom + pen user with no pump, so her file's basal column can only have come from
+long-acting doses — and 26.0 is exactly the `insulin_slow` value cgm_format parses at
+`2024-06-12 07:16`. So GDP *did* map long-acting → basal for this export. Copying that mapping
+would be following a demo file, not the training distribution.
+
+**Why the mismatch is actively harmful, not merely untidy.** `train_sugar_one.py:249-308` scales
+every channel with a per-channel **`MinMaxScaler` fitted on the training set** and applied to the
+test set with `fit_scalers=False`. MinMaxScaler maps `[train_min, train_max] → [0, 1]`; it does
+not clip. If training basal spans roughly `[0, 3]` U/h, a 26 U injection arrives at the model as
+≈ **8.7** — nearly an order of magnitude outside the range the network ever saw on that channel.
+An empty column is zero-filled by `evaluate_model.py` and stays in range. **Empty is the safe
+default, and cgm_format's current behaviour is correct.** It also means the shipped Livia demo
+CSV is itself feeding out-of-distribution values into that channel.
+
+**A second, deployment-level problem surfaced while checking this.** The scalers are **not** in
+the checkpoint — `test_model_sugar_one/best_info.json` holds only `epoch` and `val_loss`. At
+evaluation, `_load_train_for_scalers` (`evaluate_model.py:522`) **re-fits them from the training
+CSV** named in `tuning_meta.json` (a Windows path, `D:\...\loop_ai_ready_joined2.csv`). So serving
+SugarOne requires that training CSV on the inference host, or the scalers are wrong. There is a
+fallback that fits on the test file itself when the two paths coincide — silently producing a
+per-request scaling that has nothing to do with training. This is outside cgm_format, but it
+gates whether aligning the basal column matters at all.
+
+**What is missing, concretely:**
+
+1. **The training basal distribution.** Without `loop_ai_ready_joined2.csv` (or just its basal
+   min/max) the scale mismatch cannot be quantified, only bounded. One number from the model team
+   unblocks this.
+2. **A decision on what a pen user's long-acting dose *should* mean to a pump-trained model.**
+   The defensible conversion is a rate, not a dose: spread the injection across its duration of
+   action, e.g. 26 U over 24 h ≈ **1.08 U/h**, which plausibly lands inside pump range. That is a
+   real candidate — but it needs (3).
+3. **Duration of action, which the Dexcom export does not record.** Glargine ≈ 24 h, degludec
+   ≈ 42 h, detemir ≈ 12–20 h. cgm_format cannot infer the product from the CSV, so this has to
+   come from user profile data the library does not currently carry. **This is the actual
+   blocker** — not the column mapping.
+4. **Confirmation of whether SugarOne is even the right model for pen users.** It was trained on
+   pump data with a real basal channel; a Dexcom pen user has no such signal. Running it with
+   basal zero-filled may be the honest configuration, and `--zero-cov` exists for exactly that.
+
+Until 1–4 are answered, `to_ml_ready_df` keeps `Basal Rate (U/h)` empty and exposes
+`basal_rate_from_insulin_slow=True` as an explicit, documented opt-in for a deployment that has
+established its own answer.
+
+### 0.9 Rung 3 (grid re-timing) — approved, but scheduled as its own run
+
+Decision 2026-08-17: matching training's interpolation is the right move, **but it gets a
+dedicated run with idempotency as the primary risk**, not a bolt-on to rungs 1–2.
+
+Why idempotency is the hazard here. Every processing stage in cgm_format is designed to be
+re-runnable: stages sort and measure against **`original_datetime`**, the service column holding
+the reading's true source timestamp, precisely so that a second pass over an already-processed
+frame is a no-op. Grid re-timing breaks that contract if implemented naively — it *rewrites the
+glucose value itself*. Interpolating from values that were already interpolated on a previous
+pass makes each run drift further from the source, and the drift is silent because timestamps
+stop changing after pass one.
+
+Requirements for that run:
+
+- Interpolate strictly from readings anchored on `original_datetime`, never from a previously
+  re-timed `glucose`. The raw reading must remain recoverable at every pass.
+- Mark re-timed values (a `Quality` flag) so a second pass can tell derived from measured, and
+  so inference warnings can surface it.
+- Idempotency tests are the acceptance gate, not an afterthought: `f(f(x)) == f(x)` on the Livia
+  fixture and on the corpora, asserted on **values**, not just row counts and timestamps.
+- Only then re-measure the gate; the target is MAE ≤ 0.1 (currently 0.7834).
 
 ---
 
@@ -161,6 +436,11 @@ Insulin subtype logic is equivalent: Fast-Acting → fast, Long-Acting → slow,
 
 **Impact:** Model trained on GDP sees a regular wide grid; inference today sees irregular multi-row timestamps. This alone explains most prediction drift.
 
+> **Partly superseded — see §0.1 and §0.3.** Timestamps now align exactly (289/289); cgm_format
+> already places rows on the same grid GDP uses. What is left of this gap is (a) long-vs-wide row
+> shape, fixed by coalescing in `to_data_only_df` (§0.3), and (b) grid re-timing of glucose values
+> (§0.4) — not grid construction.
+
 ### 6.2 Data cleaning (GDP only)
 
 `DataCleaner.clean_remote_data()` removes insulin/carbs/exercise rows that fall in glucose gaps >15 min **before** gap detection. cgm_format has no equivalent; non-glucose events stay until sequence assignment.
@@ -260,6 +540,11 @@ uv run pytest tests/test_livia_reference_alignment.py -s -v
 **Logic:** `tests/comparison/livia_alignment.py` compares GDP reference (latest sequence, last 1440 min) vs `cgm-cli pipeline` output on the same input. Thresholds from Phase 0 (`glucose_mae <= 0.1`, row count ratio ~1, etc.).
 
 **Baseline failure (2026-06-17):** row counts match in window (289) but **zero timestamp overlap** — GDP grid at `:02/:07/.../:12` phase vs cgm sync at `:01/:06/.../:16` phase (`GRID_PHASE_OFFSET`).
+
+> **Incorrect — see §0.1.** Against the `livia_reference.csv` committed in this very commit the
+> overlap is 289/289 and there is no phase offset; this note describes a preliminary reference
+> that was regenerated before commit. The gate does still fail, but only on glucose MAE (0.79)
+> and exact-match rate (8.3%).
 
 ### 8.3 Exploratory cross-repo test
 
@@ -414,6 +699,9 @@ Phase 0 (metrics) → Phase 1 (fixed-frequency) → Phase 2 (ML export)
 | `pyproject.toml` | `[tool.uv] native-tls = true` (corporate PyPI TLS fix) |
 
 ### glucose_data_processing
+
+> **Paths below describe the modular tree, which is not on `origin/main` — see §0.2 for the
+> monolith line numbers that actually exist in the checked-out repo.**
 
 | Path | Purpose |
 |------|---------|
