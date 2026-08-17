@@ -1054,7 +1054,8 @@ class CGMProcessor(ABC):
         Args:
             unified_df: DataFrame in UnifiedFormat with all columns
             drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
-            drop_duplicates: If True, drop duplicate timestamps
+            drop_duplicates: If True, collapse rows sharing a timestamp into one row,
+                keeping the first non-null value of each column
             glucose_only: If True, drop non-EGV events
             **kwargs: Implementation-specific parameters (e.g., validation_mode)
             
