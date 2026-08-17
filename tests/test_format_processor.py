@@ -2221,6 +2221,51 @@ class TestSequenceDetection:
             "Large gap should mark start of sequence 2"
 
 
+def test_to_data_only_df_merges_covariates_sharing_a_timestamp():
+    """A dose landing on the same grid point as a reading must not delete either one."""
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+
+    def row(event_type, **values):
+        record = {
+            'sequence_id': 0,
+            'event_type': event_type,
+            'quality': GOOD_QUALITY.value,
+            'datetime': base_time,
+            'glucose': None,
+            'carbs': None,
+            'insulin_slow': None,
+            'insulin_fast': None,
+            'exercise': None,
+        }
+        record.update(values)
+        return record
+
+    # Two events on one grid point, in each order, plus a plain reading 5 minutes later.
+    unified_df = create_test_dataframe([
+        row(UnifiedEventType.GLUCOSE.value, glucose=120.0),
+        row(UnifiedEventType.INSULIN_FAST.value, insulin_fast=4.0),
+        row(UnifiedEventType.INSULIN_SLOW.value,
+            datetime=base_time + timedelta(minutes=5), insulin_slow=26.0),
+        row(UnifiedEventType.GLUCOSE.value,
+            datetime=base_time + timedelta(minutes=5), glucose=130.0),
+    ])
+
+    result = FormatProcessor.to_data_only_df(unified_df, drop_duplicates=True)
+
+    # One row per timestamp, and nothing thrown away.
+    assert result.height == 2
+    assert result['datetime'].n_unique() == 2
+    assert result['glucose'].to_list() == [120.0, 130.0]
+    assert result['insulin_fast'].to_list() == [4.0, None]
+    # Merging works regardless of which event sorted first at that timestamp.
+    assert result['insulin_slow'].to_list() == [None, 26.0]
+
+    # Collapsing an already-collapsed frame changes nothing.
+    assert FormatProcessor._coalesce_duplicate_timestamps(
+        FormatProcessor._coalesce_duplicate_timestamps(unified_df)
+    ).equals(FormatProcessor._coalesce_duplicate_timestamps(unified_df))
+
+
 if __name__ == "__main__":
     # Allow running as script for quick testing
     pytest.main([__file__, "-v", "-s"])

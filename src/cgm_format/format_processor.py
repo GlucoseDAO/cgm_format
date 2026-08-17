@@ -1093,7 +1093,10 @@ class FormatProcessor(CGMProcessor):
         Args:
             unified_df: DataFrame in UnifiedFormat with all columns
             drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
-            drop_duplicates: If True, drop duplicate timestamps (keeps first occurrence)
+            drop_duplicates: If True, collapse rows sharing a timestamp into one row,
+                keeping the first non-null value of each column. A glucose reading and an
+                insulin dose that land on the same grid point merge into a single wide row
+                instead of one discarding the other.
             glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
             validation_mode: Validation mode (defaults to cls.validation_mode_default)
 
@@ -1112,15 +1115,36 @@ class FormatProcessor(CGMProcessor):
         if glucose_only:
             unified_df, _ = cls.split_glucose_events(unified_df, validation_mode)
 
-        # Drop duplicate timestamps if requested
+        # Collapse rows sharing a timestamp if requested
         if drop_duplicates:
-            unified_df = unified_df.unique(subset=['datetime'], keep='first')
+            unified_df = cls._coalesce_duplicate_timestamps(unified_df)
 
         if drop_service_columns:
             data_columns = [col['name'] for col in cls.schema.data_columns]
             unified_df = unified_df.select(data_columns)
         #no Output validation - is not unified format
         return unified_df
+
+    @classmethod
+    def _coalesce_duplicate_timestamps(cls, unified_df: pl.DataFrame) -> pl.DataFrame:
+        """Merge rows sharing a datetime into one row, keeping the first non-null per column.
+
+        Events are stored one per row, so a glucose reading and an insulin dose that fall on
+        the same grid point occupy two rows. Dropping one of them (the previous behaviour)
+        silently discarded whichever sorted second - insulin doses on some timestamps, glucose
+        readings on others. Merging keeps both in the single wide row that ML models expect.
+        """
+        if unified_df.height == 0:
+            return unified_df
+
+        other_columns = [col for col in unified_df.columns if col != 'datetime']
+        return (
+            unified_df
+            .group_by('datetime', maintain_order=True)
+            .agg([pl.col(col).drop_nulls().first().alias(col) for col in other_columns])
+            .select(unified_df.columns)
+            .sort('datetime')
+        )
 
     @classmethod
     def to_core_df(cls, unified_df: UnifiedFormat) -> UnifiedFormat:
