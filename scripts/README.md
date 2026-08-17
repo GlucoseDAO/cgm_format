@@ -302,6 +302,48 @@ uv run python scripts/scrub_synthetic_dexcom.py \
 - Generating demo data without exposing real patient information
 - Testing Dexcom format parsers with realistic but fake data
 
+## triage-state.py, triage-archive.py, watch-inbox.sh
+
+The consumer-inbox triage loop for [`docs/FEEDBACK.md`](../docs/FEEDBACK.md) and
+[`docs/FEEDBACK_HISTORY.md`](../docs/FEEDBACK_HISTORY.md). The document is both the transcript and
+the state: each item's verdict is derived by fingerprinting the reporter's own text, excluding any
+reply, so re-running after writing a reply is a no-op. The runbook is
+[`docs/CONSUMER_TRIAGE_LOOP.md`](../docs/CONSUMER_TRIAGE_LOOP.md) — read that before triaging, not
+this section; the generalized pattern it adapts is
+<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>.
+
+These three are the one part of the repo that does **not** run under `uv`: stdlib-only Python 3.11+
+and bash, importing nothing from the package, so the reason behind the always-`uv run` rule (the
+workspace environment) does not apply. They must stay in the same directory — the archiver resolves
+the ledger relative to its own path, and the watcher shells out to it the same way.
+
+```sh
+./scripts/triage-state.py                          # every item: new / revised / unmarked-reply / current
+./scripts/triage-state.py --pending                # only what needs work
+./scripts/triage-state.py --next                   # next unclaimed id, over BOTH documents
+./scripts/triage-state.py --backfill               # stamp markers on replies written before the ledger
+./scripts/triage-state.py docs/FEEDBACK_HISTORY.md # the post-archive lint: everything should read `current`
+./scripts/triage-archive.py S1 S2                  # move answered items, verifying the prose moved verbatim
+FILE=docs/FEEDBACK.md ./scripts/watch-inbox.sh     # one stdout line when the inbox settles (150s cooldown)
+```
+
+`INBOX`, `HISTORY` and `PREFIX` override the paths and the id prefix. Unlike the upstream gist, the
+defaults are derived from this script directory rather than from `$PWD`, so the tools work from
+anywhere in the tree; that is the only local change to them.
+
+Two things worth knowing before using them:
+
+- **The `.py` files are Python. Never `bash triage-state.py`** — bash ignores the shebang, executes
+  the module docstring as commands, and `import hashlib` reaches ImageMagick's `import`, which
+  silently writes 0-byte files named after each import into the working directory.
+- **Rehearse an archive on copies, not with `--dry-run`.** The dry run returns before the write, so
+  it never reaches the before/after fingerprint comparison that is the thing worth rehearsing:
+  `INBOX=/tmp/copy.md HISTORY=/tmp/copy_HISTORY.md ./scripts/triage-archive.py S1`.
+
+The watcher is not armed by anything in the repo; arm it yourself when you want the inbox to page
+you, and note that it never fires for a change that predates it, so run the ledger by hand for a
+standing backlog.
+
 ## Notes
 
 All scrubber scripts:

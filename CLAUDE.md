@@ -37,7 +37,9 @@ Delegation is for finding things, never for deciding them.
 4. **[docs/dogfooding.md](docs/dogfooding.md)** — open findings from using the shipped surface for
    real work. Read it before touching the parser, processor, or CLI surface.
 5. **[docs/FEEDBACK.md](docs/FEEDBACK.md)** — the consumer inbox. Empty means nothing is owed.
-   `docs/FEEDBACK_HISTORY.md` holds the answered items.
+   `docs/FEEDBACK_HISTORY.md` holds the answered items, and
+   **[docs/CONSUMER_TRIAGE_LOOP.md](docs/CONSUMER_TRIAGE_LOOP.md)** is the runbook for answering them
+   — read it before triaging anything, not just §8 below.
 6. **Per-area reference — read the one your task touches:**
    [docs/PIPELINE.md](docs/PIPELINE.md) (stage detail),
    [docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md) (schema),
@@ -200,8 +202,8 @@ reason gets rationalised away at 2 a.m.
 - **Never route around a capability the library lacks while dogfooding.** See §7.
 - **Never resolve a contradiction between two rules by inference.** Run §1.
 - **Never edit or re-wrap a reporter's prose** in `docs/FEEDBACK.md` — not when answering it, not
-  when moving it to history. It is the record of what was *observed*, not of what was decided.
-  Replies are appended below it.
+  when moving it to history. It is the record of what was *observed*, not of what was decided. A
+  reply is added as its own `**Status —` paragraph above it, immediately after the heading (§8).
 - **Never reuse a feedback id**, not even one answered as a non-issue; the reply is part of the
   record and a recycled id collides with it. Compute the next id from the inbox **and**
   `docs/FEEDBACK_HISTORY.md` — once answered items move out, the live file's highest visible id is
@@ -539,10 +541,43 @@ Triage order: establish what already shipped → reproduce against the **code**,
 - **A non-issue verdict is not the cheap outcome.** "Nothing is wrong here" has to be shown — what
   was probed and did not reproduce. A bare "works as intended" is not a reply.
 
-Runbook, scripts and the full gotcha list:
-<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>. The one thing it cannot supply
-is this repo's own compatibility rule set, which is what the legality step reads — that is the list
-just above, plus `docs/PHILOSOPHY.md`.
+**The runbook is [docs/CONSUMER_TRIAGE_LOOP.md](docs/CONSUMER_TRIAGE_LOOP.md)** — the full algorithm,
+the routing table, the thresholds that call the user, what may be done unattended, and the gotcha
+list. Read it before triaging; the section you are reading is the orientation, not the procedure. The
+generalized pattern it adapts is published at
+<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>, and a change to the *pattern*
+(the algorithm, a script's contract, a gotcha in the mechanism) belongs in both. The one thing the
+gist cannot supply is this repo's own compatibility rule set, which is what the legality step reads —
+that is the list just above, plus `docs/PHILOSOPHY.md`.
+
+**The scripts are installed here**, in `scripts/` (`triage-state.py`, `triage-archive.py`,
+`watch-inbox.sh`), documented in `scripts/README.md`, with defaults repointed at `docs/FEEDBACK.md`
+so they run from anywhere in the tree. They are stdlib-only and import nothing from the package,
+which is why they are the sanctioned exception to always-`uv run` (§2) — the workspace environment is
+not what they need. Run the ledger before triaging and the archiver after replying:
+
+```sh
+./scripts/triage-state.py --pending    # what is owed          (new / revised / unmarked-reply)
+./scripts/triage-state.py --next       # the next id, over BOTH documents — never guess it
+./scripts/triage-archive.py S1         # archive, verifying the prose moved byte-for-byte
+./scripts/triage-state.py docs/FEEDBACK_HISTORY.md   # post-archive lint: all `current`, nothing `new`
+```
+
+- **Never pass a `.py` script to `bash`.** The shebang is ignored, the module docstring runs as
+  commands, and `import hashlib` reaches ImageMagick's `import`, which silently writes 0-byte files
+  named after each import into the working directory.
+- **A reply is a `**Status —` paragraph first in the section, ending in the ledger's
+  `<!-- triaged: … sha … -->` marker**, whose fingerprint covers the reporter's text and never the
+  reply — that is what stops a watcher firing on your own write. Take the sha from the ledger, never
+  by hand, and never restamp a `revised` section to silence it: `revised` is the only signal that
+  catches a reporter editing what they reported. `--backfill` touches `unmarked-reply` alone, on
+  purpose.
+- **`--dry-run` is not a rehearsal** — it returns before the write and so never reaches the
+  before/after fingerprint comparison. Rehearse against copies with `INBOX=` / `HISTORY=` instead.
+- **The archiver verifies the move, not the verdict.** It will archive an unanswered item without
+  complaint; the lint above is what catches that.
+- **The contents line in `FEEDBACK_HISTORY.md` is hand-written** — the archiver deliberately does not
+  generate it. One line, under 80 characters.
 
 ### Prose style
 
@@ -598,6 +633,12 @@ same applies when the user corrects a preference: it goes in §10, in their word
   columns stay on the vendor schema; unified parse drops them (RM6).
 - `data/.gitignore` ignores `input/` outright (F2); new vendor fixtures are not auto-tracked. The
   mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it is absent.
+- The triage-loop scripts (`scripts/triage-state.py`, `scripts/triage-archive.py`,
+  `scripts/watch-inbox.sh`, adopted 2026-08-17) must stay in one directory — the archiver resolves the
+  ledger relative to its own path and the watcher shells out to it the same way. Their only local
+  divergence from the gist is the default `INBOX` / `FILE`, derived from the script's own location
+  instead of `$PWD`. Nothing arms the watcher; that is a deliberate operational choice, not an
+  oversight.
 
 ---
 
