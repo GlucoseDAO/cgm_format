@@ -28,6 +28,8 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
 )
 from cgm_format.formats.unified import UNIFIED_TIMESTAMP_FORMATS
+from cgm_format.formats.supported import UNIFIED_TARGET_SCHEMA
+from cgm_format.format_processor import FormatProcessor
 
 
 # Constants - relative to project root
@@ -177,9 +179,60 @@ class TestFormatDetection:
         assert FormatParser.format_supported("not a cgm file") == False
 
 
+class TestPreRetimingUnifiedCsvStillParses:
+    """A unified CSV written before 0.12.0 has no `original_glucose` column.
+
+    Every committed unified fixture was migrated when the column landed, so
+    without this the backward-compatible path would have no coverage at all —
+    the fixtures that used to exercise it by accident no longer do. The CSV is
+    written inline rather than kept as a file precisely so it cannot be migrated
+    out from under the test later.
+    """
+
+    LEGACY_CSV = (
+        "sequence_id,original_datetime,quality,event_type,datetime,"
+        "glucose,carbs,insulin_slow,insulin_fast,exercise\n"
+        "1,2024-05-02T07:00:00.000,0,EGV_READ,2024-05-02T07:00:00.000,96.0,,,,\n"
+        "1,2024-05-02T07:05:00.000,0,EGV_READ,2024-05-02T07:05:00.000,103.0,,,,\n"
+        "1,2024-05-02T07:10:00.000,0,CARBS_IN,2024-05-02T07:10:00.000,,52.0,,,\n"
+        "1,2024-05-02T07:15:00.000,0,EGV_READ,2024-05-02T07:15:00.000,117.0,,,,\n"
+    )
+
+    def test_the_anchor_is_backfilled_from_glucose(self):
+        """The reading is the anchor when nothing recorded one separately.
+
+        Backfilling here is honest rather than a silent substitution: a file
+        written before re-timing existed cannot have been re-timed, so its
+        `glucose` *is* the measured value. The column would be wrong to leave
+        null — that would read as 'no glucose', and every later pass would
+        refuse to use the row as an anchor.
+        """
+        parsed = FormatParser.parse_from_string(self.LEGACY_CSV)
+
+        assert "original_glucose" in parsed.columns
+
+        glucose_rows = parsed.filter(pl.col("event_type") == "EGV_READ").sort("datetime")
+        assert glucose_rows["original_glucose"].to_list() == [96.0, 103.0, 117.0]
+
+        # A row that carries no glucose carries no anchor either — null means
+        # "the device did not say", and a carb entry says nothing about glucose.
+        carb_row = parsed.filter(pl.col("event_type") == "CARBS_IN")
+        assert carb_row["original_glucose"].to_list() == [None]
+
+    def test_a_legacy_file_re_times_from_its_own_readings(self):
+        """The backfilled anchor is usable: re-timing runs and preserves it."""
+        parsed = FormatParser.parse_from_string(self.LEGACY_CSV)
+
+        synced = FormatProcessor.synchronize_timestamps(parsed, retime_glucose=True)
+
+        assert synced.sort("original_datetime")["original_glucose"].equals(
+            parsed.sort("original_datetime")["original_glucose"]
+        )
+
+
 class TestUnifiedParsing:
     """Test parsing all files to unified format."""
-    
+
     def test_parse_all_to_unified(self, all_data_files, supported_data_files):
         """Test that all supported files can be parsed to unified format."""
         failed_files = []
@@ -239,19 +292,23 @@ class TestUnifiedParsing:
         assert len(successful_parses) == len(supported_data_files), "Not all supported files were parsed"
     
     def test_unified_format_schema(self, supported_data_files):
-        """Test that parsed data has correct schema."""
-        expected_columns = ['sequence_id', 'event_type', 'quality', 'original_datetime', 'datetime', 'glucose', 
-                           'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
-        
+        """Test that parsed data has correct schema.
+
+        The expected columns come from `CGM_SCHEMA` rather than a literal list.
+        A restated copy only ever fails *after* the schema changes, which makes
+        it a chore rather than a check — it tells you the list is out of date,
+        never that the parser is. Asserting the exact order, which the schema
+        also defines, is strictly more than the old set comparison did.
+        """
         for csv_file in supported_data_files[:3]:  # Test first 3 supported files for schema
             with open(csv_file, 'rb') as f:
                 raw_data = f.read()
             text_data = FormatParser.decode_raw_data(raw_data)
             detected_format = FormatParser.detect_format(text_data)
             unified_df = FormatParser.parse_to_unified(text_data, detected_format)
-            
-            # Check all expected columns are present
-            assert set(expected_columns) == set(unified_df.columns), \
+
+            expected_columns = UNIFIED_TARGET_SCHEMA[detected_format].get_column_names()
+            assert unified_df.columns == expected_columns, \
                 f"Column mismatch in {csv_file.name}: expected {expected_columns}, got {unified_df.columns}"
     
     def test_datetime_column_type(self, supported_data_files):

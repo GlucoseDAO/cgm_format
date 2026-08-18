@@ -252,22 +252,39 @@ is absent.
 
 **Key Features:**
 - Parametrized tests run on all supported CSV files
+- Every chain that calls `synchronize_timestamps` runs twice, `retime_glucose` on and off
+  (ids `retimed` / `measured`), because the two modes converge for different reasons
 - Tests multiple applications of operations produce same result
 - Tests different operation orders produce same final result
 - Validates strict output constraints (no large gaps, no NULL glucose, sharp timestamps)
+- Comparisons are on **values**, not just shapes: `assert_dataframes_equal` sorts by the schema's
+  stable keys and compares the frames cell by cell
 
 **Test Classes:**
 - **TestProcessingIdempotency** - Tests idempotent and commutative operations
   - `test_triple_sync_idempotency()` - Tests sync → sync → sync is idempotent
   - `test_triple_interpolate_idempotency()` - Tests interpolate → interpolate → interpolate is idempotent
   - `test_interpolate_sync_interpolate_idempotency()` - Tests interpolate → sync → interpolate
-  - `test_sync_interpolate_sync_idempotency()` - Tests sync → interpolate → sync
+  - `test_sync_interpolate_sync_idempotency()` - Tests sync → interpolate → sync. Also what forces
+    the two grid stages to share one interpolant: a second value formula beside the shared one fails
+    here and nowhere else
   - `test_processing_commutativity()` - **Critical:** Tests both chains (interpolate→sync→interpolate and sync→interpolate→sync) produce identical results
   - `test_triple_sequence_detection_idempotency()` - Tests detect_and_assign_sequences is idempotent
+- **TestGridRetiming** - The two assertions the chains above cannot make. A stage that simply
+  refused to recompute after the first pass would satisfy every chain and still be wrong.
+  - `test_retiming_never_consumes_its_own_output()` - `original_glucose` still equals a **fresh
+    parse** after three re-timing passes, and every glucose row carries `GRID_RETIMED`
+  - `test_retimed_value_matches_the_raw_readings_that_bracket_it()` - Re-timed values equal the
+    vendor CSV's own readings interpolated to the grid instant, over the whole newest sequence.
+    Ground truth is read from the raw text, never from the parser under test; the test also asserts
+    that leaving values alone would produce a *different* answer, so it cannot pass against a no-op
 
 **Helper Functions:**
 - `check_no_large_gaps()` - Verifies no gaps > TOLERANCE_INTERVAL_MINUTES within sequences (glucose-only by default)
-- `check_no_null_glucose_egv()` - Verifies no NULL glucose values for EGV events
+- `check_no_null_glucose_egv()` - Verifies no NULL glucose values for EGV events. Read the event
+  type from `UnifiedEventType`, never a literal: this helper spent several releases filtering `'EGV'`
+  against a schema whose code is `'EGV_READ'`, so it early-returned on every call and enforced
+  nothing (F15 in `docs/previous_issues.md`)
 - `check_seconds_are_zero()` - Verifies all datetime values have 00 seconds (sharp timestamps)
 
 ---

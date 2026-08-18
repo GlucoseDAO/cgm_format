@@ -21,11 +21,19 @@ from cgm_format.interface.cgm_interface import (
     SMALL_GAP_MAX_MINUTES,
     TOLERANCE_INTERVAL_MINUTES,
 )
-from cgm_format.formats.unified import CGM_SCHEMA
+from cgm_format.formats.unified import CGM_SCHEMA, Quality, UnifiedEventType
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
 
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "input"
+
+# Every chain that calls synchronize_timestamps runs twice: once re-timing
+# glucose onto the grid (the 0.12.0 default) and once keeping each reading's
+# measured value under its new timestamp (what sync did before). Both have to
+# converge, and for different reasons — the first because it recomputes from
+# columns nothing writes, the second because it writes no values at all.
+RETIME_MODES = [True, False]
+RETIME_IDS = ["retimed", "measured"]
 
 
 
@@ -146,27 +154,34 @@ def check_no_large_gaps(df: pl.DataFrame, expected_interval: int, label: str, ma
 
 def check_no_null_glucose_egv(df: pl.DataFrame, label: str) -> None:
     """Verify that no EGV events have NULL glucose values.
-    
+
+    The event type is read from the schema rather than spelled here. Until
+    2026-08-17 this filtered the literal ``'EGV'``, which no unified frame has
+    ever contained — the code is ``'EGV_READ'`` — so the filter matched nothing,
+    the early return below always fired, and the null check never ran on any of
+    its ten call sites. The column it then read, ``glucose_value_mg_dl``, had
+    likewise been renamed to ``glucose`` and would have raised on contact.
+
     Args:
-        df: DataFrame with 'event_type' and 'glucose_value_mg_dl' columns
+        df: DataFrame with 'event_type' and 'glucose' columns
         label: Label for error messages
     """
     if len(df) == 0:
         return
-    
+
     # Filter for EGV events
-    egv_df = df.filter(pl.col('event_type') == 'EGV')
-    
+    egv_df = df.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+
     if len(egv_df) == 0:
         return
-    
+
     # Check for NULL glucose values
-    null_glucose = egv_df.filter(pl.col('glucose_value_mg_dl').is_null())
-    
+    null_glucose = egv_df.filter(pl.col('glucose').is_null())
+
     if len(null_glucose) > 0:
         raise AssertionError(
             f"{label}: Found {len(null_glucose)} EGV events with NULL glucose values\n"
-            f"Sample rows:\n{null_glucose.head(10).select(['datetime', 'event_type', 'glucose_value_mg_dl', 'sequence_id'])}"
+            f"Sample rows:\n{null_glucose.head(10).select(['datetime', 'event_type', 'glucose', 'sequence_id'])}"
         )
 
 
@@ -239,34 +254,39 @@ def assert_dataframes_equal(df1: pl.DataFrame, df2: pl.DataFrame, label: str) ->
 class TestProcessingIdempotency:
     """Test idempotency and commutativity of processing operations."""
     
+    @pytest.mark.parametrize("retime", RETIME_MODES, ids=RETIME_IDS)
     @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
-    def test_triple_sync_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
+    def test_triple_sync_idempotency(self, file_path: Path, retime: bool, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: synchronize_timestamps → synchronize_timestamps → synchronize_timestamps
-        
+
         Applying sync three times should produce the same result as the first application.
+
+        Run with re-timing both on and off. On is the interesting case: it is
+        the only stage that rewrites `glucose`, so a version that read the value
+        it had just written would compound here and nowhere else.
         """
-        
+
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
             pytest.skip(f"File not in cache: {file_path.name}")
-        
+
         print(f"\n{'='*70}")
-        print(f"Testing triple sync: {file_path.name}")
+        print(f"Testing triple sync (retime_glucose={retime}): {file_path.name}")
         print(f"{'='*70}\n")
-        
+
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        
+
         # Apply sync three times
-        df1 = FormatProcessor.synchronize_timestamps(unified_df)
+        df1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
         print(f"After 1st sync: {len(df1)} rows")
-        
-        df2 = FormatProcessor.synchronize_timestamps(df1)
+
+        df2 = FormatProcessor.synchronize_timestamps(df1, retime_glucose=retime)
         print(f"After 2nd sync: {len(df2)} rows")
-        
-        df3 = FormatProcessor.synchronize_timestamps(df2)
+
+        df3 = FormatProcessor.synchronize_timestamps(df2, retime_glucose=retime)
         print(f"After 3rd sync: {len(df3)} rows")
-        
+
         # Assert 1st and 3rd are identical
         assert_dataframes_equal(df1, df3, "Triple sync idempotency (1st vs 3rd)")
         
@@ -319,32 +339,33 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Triple interpolate is idempotent")
     
+    @pytest.mark.parametrize("retime", RETIME_MODES, ids=RETIME_IDS)
     @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
-    def test_interpolate_sync_interpolate_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
+    def test_interpolate_sync_interpolate_idempotency(self, file_path: Path, retime: bool, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: interpolate_gaps → synchronize_timestamps → interpolate_gaps
-        
+
         The second interpolate_gaps should not change anything.
         """
-        
+
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
             pytest.skip(f"File not in cache: {file_path.name}")
-        
+
         print(f"\n{'='*70}")
-        print(f"Testing interpolate→sync→interpolate: {file_path.name}")
+        print(f"Testing interpolate→sync→interpolate (retime_glucose={retime}): {file_path.name}")
         print(f"{'='*70}\n")
-        
+
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        
+
         # Step 1: interpolate_gaps
         df1 = FormatProcessor.interpolate_gaps(unified_df)
         print(f"After 1st interpolate_gaps: {len(df1)} rows")
-        
+
         # Step 2: synchronize_timestamps
-        df2 = FormatProcessor.synchronize_timestamps(df1)
+        df2 = FormatProcessor.synchronize_timestamps(df1, retime_glucose=retime)
         print(f"After synchronize_timestamps: {len(df2)} rows")
-        
+
         # Step 3: interpolate_gaps again (should be idempotent)
         df3 = FormatProcessor.interpolate_gaps(df2)
         print(f"After 2nd interpolate_gaps: {len(df3)} rows")
@@ -359,36 +380,43 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Second interpolate_gaps was idempotent")
     
+    @pytest.mark.parametrize("retime", RETIME_MODES, ids=RETIME_IDS)
     @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
-    def test_sync_interpolate_sync_idempotency(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
+    def test_sync_interpolate_sync_idempotency(self, file_path: Path, retime: bool, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test: synchronize_timestamps → interpolate_gaps → synchronize_timestamps
-        
+
         The second synchronize_timestamps should not change anything.
+
+        This is the chain that forces the two stages to share one interpolant.
+        With re-timing on, the interpolate in the middle runs over neighbours
+        whose `glucose` has already been rewritten; if it derived its created
+        points from those values instead of from the measured anchors, the sync
+        that follows would recompute them and this assertion would fail.
         """
-        
+
         # Get cached parsed data
         if file_path.name not in parsed_files_cache:
             pytest.skip(f"File not in cache: {file_path.name}")
-        
+
         print(f"\n{'='*70}")
-        print(f"Testing sync→interpolate→sync: {file_path.name}")
+        print(f"Testing sync→interpolate→sync (retime_glucose={retime}): {file_path.name}")
         print(f"{'='*70}\n")
-        
+
         # Clone the cached dataframe for this test
         unified_df = parsed_files_cache[file_path.name].clone()
-        
+
         # Step 1: synchronize_timestamps
-        df1 = FormatProcessor.synchronize_timestamps(unified_df)
+        df1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
         print(f"After 1st synchronize_timestamps: {len(df1)} rows")
-        
+
         # Step 2: interpolate_gaps
         df2 = FormatProcessor.interpolate_gaps(df1)
         print(f"After interpolate_gaps: {len(df2)} rows")
-        
+
         # Step 3: synchronize_timestamps again (should be idempotent)
-        df3 = FormatProcessor.synchronize_timestamps(df2)
+        df3 = FormatProcessor.synchronize_timestamps(df2, retime_glucose=retime)
         print(f"After 2nd synchronize_timestamps: {len(df3)} rows")
-        
+
         # Assert df2 and df3 are identical
         assert_dataframes_equal(df2, df3, "sync→interpolate→sync")
         
@@ -399,8 +427,9 @@ class TestProcessingIdempotency:
         
         print("✅ PASSED: Second synchronize_timestamps was idempotent")
     
+    @pytest.mark.parametrize("retime", RETIME_MODES, ids=RETIME_IDS)
     @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
-    def test_processing_commutativity(self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
+    def test_processing_commutativity(self, file_path: Path, retime: bool, parsed_files_cache: Dict[str, pl.DataFrame]) -> None:
         """Test that both processing chains produce identical results.
         
         Chain A: interpolate_gaps → synchronize_timestamps → interpolate_gaps
@@ -422,7 +451,7 @@ class TestProcessingIdempotency:
         
         # Chain A: interpolate → sync → interpolate
         df_a1 = FormatProcessor.interpolate_gaps(unified_df)
-        df_a2 = FormatProcessor.synchronize_timestamps(df_a1)
+        df_a2 = FormatProcessor.synchronize_timestamps(df_a1, retime_glucose=retime)
         df_a3 = FormatProcessor.interpolate_gaps(df_a2)
         print(f"Chain A final: {len(df_a3)} rows")
         check_no_large_gaps(df_a3, EXPECTED_INTERVAL_MINUTES, "Chain A final")
@@ -430,9 +459,9 @@ class TestProcessingIdempotency:
         check_seconds_are_zero(df_a3, "Chain A final")
         
         # Chain B: sync → interpolate → sync
-        df_b1 = FormatProcessor.synchronize_timestamps(unified_df)
+        df_b1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
         df_b2 = FormatProcessor.interpolate_gaps(df_b1)
-        df_b3 = FormatProcessor.synchronize_timestamps(df_b2)
+        df_b3 = FormatProcessor.synchronize_timestamps(df_b2, retime_glucose=retime)
         print(f"Chain B final: {len(df_b3)} rows")
         check_no_large_gaps(df_b3, EXPECTED_INTERVAL_MINUTES, "Chain B final")
         check_no_null_glucose_egv(df_b3, "Chain B final")
@@ -530,6 +559,190 @@ class TestProcessingIdempotency:
             f"Row count changed from {len(unified_df)} to {len(result1)}"
         
         print("✅ PASSED: Triple sequence detection is idempotent")
+
+
+class TestGridRetiming:
+    """The value anchor, and the number the anchor is supposed to produce.
+
+    The chains above prove re-timing converges. These prove it converges on the
+    *right* value and for the right reason — a stage that simply refused to
+    recompute after the first pass would satisfy every chain above and be wrong.
+    """
+
+    COMPARISON_DIR = Path(__file__).parent.parent / "data" / "comparison"
+
+    @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
+    def test_retiming_never_consumes_its_own_output(
+        self, file_path: Path, parsed_files_cache: Dict[str, pl.DataFrame]
+    ) -> None:
+        """`original_glucose` still holds the device's reading after three passes.
+
+        This is the assertion the whole design exists to satisfy. Re-timing
+        rewrites `glucose`, so if it read `glucose` back on the next pass each
+        run would interpolate from the previous run's approximation and drift —
+        silently, because the timestamps stop moving after pass one. Comparing
+        the anchors against a *fresh parse* is what catches that: the chains
+        cannot, since a frame drifting by a fixed rule still equals itself.
+        """
+        if file_path.name not in parsed_files_cache:
+            pytest.skip(f"File not in cache: {file_path.name}")
+
+        parsed = parsed_files_cache[file_path.name].clone()
+
+        df = FormatProcessor.synchronize_timestamps(parsed, retime_glucose=True)
+        df = FormatProcessor.synchronize_timestamps(df, retime_glucose=True)
+        df = FormatProcessor.synchronize_timestamps(df, retime_glucose=True)
+
+        # Sync adds no rows, so the anchors are the parsed readings, one for one.
+        measured = parsed.sort('original_datetime')['original_glucose']
+        after_three_passes = df.sort('original_datetime')['original_glucose']
+
+        assert after_three_passes.equals(measured), (
+            "original_glucose changed under re-timing — the anchor is being "
+            "written by the stage that reads it, so every pass compounds"
+        )
+
+        glucose_rows = df.filter(pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+        if glucose_rows.height > 0:
+            unflagged = glucose_rows.filter(
+                (pl.col('quality') & Quality.GRID_RETIMED.value) == 0
+            )
+            assert unflagged.height == 0, (
+                f"{unflagged.height} re-timed glucose rows are not flagged "
+                f"GRID_RETIMED, so a reader cannot tell derived from measured"
+            )
+
+    def test_retimed_value_matches_the_raw_readings_that_bracket_it(self) -> None:
+        """A re-timed value is the raw series evaluated at the grid instant.
+
+        Ground truth comes from the Dexcom export's own rows, read here as text,
+        never from the parser under test. Every grid point in the window is
+        checked, not one worked example — a single point can agree by accident,
+        a whole day cannot.
+        """
+        raw_csv = self.COMPARISON_DIR / "livia_test.csv"
+        if not raw_csv.exists():
+            pytest.skip(f"Fixture not found: {raw_csv}")
+
+        # Ground truth: the raw EGV rows, straight out of the vendor CSV.
+        raw = pl.read_csv(raw_csv, infer_schema_length=0, encoding="utf8-lossy")
+        timestamp_col = next(c for c in raw.columns if "Timestamp" in c)
+        event_col = next(c for c in raw.columns if c.strip() == "Event Type")
+        glucose_col = next(c for c in raw.columns if "Glucose Value" in c)
+
+        readings = (
+            raw.filter(pl.col(event_col) == "EGV")
+            .select(
+                pl.col(timestamp_col)
+                .str.strptime(pl.Datetime("ms"), "%Y-%m-%dT%H:%M:%S", strict=False)
+                .alias("t"),
+                # Dexcom's out-of-range markers, replaced the way the parser does.
+                pl.when(pl.col(glucose_col) == "High").then(pl.lit(401.0))
+                .when(pl.col(glucose_col) == "Low").then(pl.lit(39.0))
+                .otherwise(pl.col(glucose_col).cast(pl.Float64, strict=False))
+                .alias("g"),
+            )
+            .drop_nulls(["t", "g"])
+            .sort("t")
+            .unique(subset=["t"], keep="first")
+            .sort("t")
+        )
+
+        processed = FormatProcessor.synchronize_timestamps(
+            FormatProcessor.interpolate_gaps(
+                FormatProcessor.detect_and_assign_sequences(
+                    FormatParser.parse_file(raw_csv)
+                )
+            ),
+            retime_glucose=True,
+        )
+
+        # One long sequence dominates this export; check its grid points.
+        newest_sequence = (
+            processed.group_by('sequence_id')
+            .agg(pl.col('datetime').max().alias('_last'))
+            .sort('_last')['sequence_id'][-1]
+        )
+        window = processed.filter(
+            (pl.col('sequence_id') == newest_sequence)
+            & (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+        ).sort('datetime')
+
+        # Ground truth has to respect the sequence boundary the processor does.
+        # A sequence exists precisely because the gap on either side of it is
+        # too long to interpolate across, so the raw reading beyond that gap is
+        # not an anchor for these grid points — the processor clamps to the
+        # sequence's own first and last readings instead, and a check that
+        # interpolated across the boundary would be marking correct behaviour
+        # wrong.
+        measured_span = window.filter(
+            (pl.col('quality') & Quality.IMPUTATION.value) == 0
+        )['original_datetime']
+        in_sequence = readings.filter(
+            pl.col('t').is_between(measured_span.min(), measured_span.max())
+        )
+
+        joined = (
+            window.select('datetime', 'glucose')
+            # Grid points outside the sequence's own readings are clamped by
+            # design; they are checked separately below.
+            .filter(pl.col('datetime').is_between(in_sequence['t'].min(),
+                                                  in_sequence['t'].max()))
+            .join_asof(in_sequence.rename({'t': 't0', 'g': 'g0'}),
+                       left_on='datetime', right_on='t0', strategy='backward')
+            .join_asof(in_sequence.rename({'t': 't1', 'g': 'g1'}),
+                       left_on='datetime', right_on='t1', strategy='forward')
+            .drop_nulls(['g0', 'g1'])
+            .filter(pl.col('t1') > pl.col('t0'))
+        )
+        assert joined.height > 100, "window too small to be a meaningful check"
+
+        alpha = (
+            (pl.col('datetime') - pl.col('t0')).dt.total_nanoseconds()
+            / (pl.col('t1') - pl.col('t0')).dt.total_nanoseconds()
+        )
+        expected = pl.col('g0') + alpha * (pl.col('g1') - pl.col('g0'))
+        deviation = joined.select((pl.col('glucose') - expected).abs().alias('d'))['d']
+
+        assert deviation.max() < 1e-6, (
+            f"re-timed values deviate from the raw readings that bracket them "
+            f"by up to {deviation.max()} mg/dL over {joined.height} grid points"
+        )
+
+        # Outside the sequence's own readings there is nothing to interpolate
+        # between, so the value must be the nearest reading itself — clamped,
+        # never extrapolated past it. Extrapolating is what makes the reference
+        # implementation emit values tens of mg/dL from anything measured.
+        outside = window.filter(
+            ~pl.col('datetime').is_between(in_sequence['t'].min(),
+                                           in_sequence['t'].max())
+        )
+        if outside.height > 0:
+            lo, hi = in_sequence['g'].min(), in_sequence['g'].max()
+            assert outside['glucose'].min() >= lo and outside['glucose'].max() <= hi, (
+                "a grid point outside the sequence's readings was extrapolated "
+                "beyond the range of anything the sensor reported"
+            )
+
+        # The gap this closes: keeping the measured value under the new
+        # timestamp is a materially different number, so the check above is
+        # not trivially satisfied by doing nothing.
+        untouched = FormatProcessor.synchronize_timestamps(
+            FormatProcessor.interpolate_gaps(
+                FormatProcessor.detect_and_assign_sequences(
+                    FormatParser.parse_file(raw_csv)
+                )
+            ),
+            retime_glucose=False,
+        ).filter(
+            (pl.col('sequence_id') == newest_sequence)
+            & (pl.col('event_type') == UnifiedEventType.GLUCOSE.value)
+        ).sort('datetime')
+
+        assert not untouched['glucose'].equals(window['glucose']), (
+            "re-timing produced the same values as leaving them alone, so this "
+            "test would pass against a no-op implementation"
+        )
 
 
 class TestLibreCoverageInGlob:

@@ -30,7 +30,7 @@ except Exception:
     # Tech debt: RM2 in docs/ROADMAP.md. Two sources of truth drift, and the
     # one you read is the wrong one -- the right fix is an editable install so
     # metadata is always present, then dropping this branch.
-    __version__ = "0.11.0"  # Keep in sync with pyproject.toml
+    __version__ = "0.12.0"  # Keep in sync with pyproject.toml
 
 # Core classes
 from cgm_format.format_parser import FormatParser

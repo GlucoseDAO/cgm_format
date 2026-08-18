@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cgm-format"
-version = "0.11.0"
+version = "0.12.0"
 description = "Unified CGM data format converter for ML training and inference"
 authors = [
     {name = "Newton Winter", email = "isoutthere@gmail.com"},
@@ -39,6 +39,10 @@ dev = [
 
 [project.scripts]
 cgm-cli = "cgm_format.cgm_cli:main"
+
+[tool.uv]
+# Use the OS certificate store (needed when PyPI is reached via corporate proxy TLS inspection).
+native-tls = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cgm_format"]

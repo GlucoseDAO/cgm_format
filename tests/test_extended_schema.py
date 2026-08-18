@@ -73,6 +73,7 @@ class TestExtendedSchemaShape:
         assert CGM_SCHEMA.get_column_names() == [
             "sequence_id",
             "original_datetime",
+            "original_glucose",
             "quality",
             "event_type",
             "datetime",
@@ -265,6 +266,12 @@ class TestExtendedRoundTrip:
             {
                 "sequence_id": [1, 1, 1, 1],
                 "original_datetime": moments,
+                # Carried explicitly, exactly as a parsed frame carries it. A
+                # fixture that left this null would not round-trip byte
+                # identically, because the parser fills the value anchor from
+                # `glucose` on the way back in — which is the point of the
+                # column, not a defect in the round trip.
+                "original_glucose": [96.0, 103.0, None, 117.0],
                 "quality": [Quality(0).value] * 4,
                 "event_type": [
                     UnifiedEventType.GLUCOSE.value,

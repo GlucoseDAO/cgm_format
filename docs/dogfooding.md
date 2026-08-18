@@ -206,3 +206,31 @@ is wrong differently:**
 What would settle it: whether `TrackCoverage` is meant to report a row ratio, in which case a
 per-format denominator convention needs writing down, or a duty cycle, in which case it needs a new
 field beside `rows` rather than a redefinition of it.
+
+### F16 — the alignment gate's reference fixture cannot be regenerated
+
+`data/comparison/livia_reference.csv` is the training-side ground truth
+`tests/test_livia_reference_alignment.py` gates against. Three places tell you how to regenerate it:
+
+- `tests/test_livia_reference_alignment.py:10` and its skip message at `:48`
+- `data/comparison/glucose_config_livia_reference.yaml:8` — `uv run python scripts/generate_livia_reference.py --force`
+- `docs/modification_plan.md`, in the fixture table and the key-file reference
+
+`scripts/generate_livia_reference.py` does not exist, and `git log --all -- '*generate_livia_reference*'`
+is empty — it has never existed in any commit on any branch. The fixture is a pinned artifact whose
+provenance is documented but not reproducible, and the documentation asserts otherwise.
+
+This matters more than a broken doc link because of what the fixture *is*: the definition of
+"correct" for the numeric alignment between our inference path and the models' training path. If it
+is ever suspected of being wrong, there is currently no way to re-derive it and check.
+
+**Surfaced rather than repaired**, because writing the script is not the small part of the job. The
+committed `glucose_config_livia_reference.yaml` uses keys — `restrict_output_to_config_fields`,
+`service_fields_allowlist`, `output_fields`, `field_to_display_name_map` — that the
+`glucose_data_processing` monolith on `origin/main` does not read; it was written against a tree
+that exists only on one Windows machine (`docs/modification_plan.md` §0.2). So a regeneration script
+would either need that tree, or would have to reimplement the config handling, at which point it is
+no longer regenerating the reference so much as re-deciding it.
+
+What would settle it: which `glucose_data_processing` tree actually produced the committed CSV, and
+whether it is reachable from a clean checkout.

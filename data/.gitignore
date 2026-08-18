@@ -9,3 +9,6 @@
 # Add !<dir>/ + !<dir>/** only when committing another top-level subtree.
 input/
 input/**
+
+!comparison/
+!comparison/**

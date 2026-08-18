@@ -515,6 +515,22 @@ class FormatParser(CGMParser):
                 pl.col('datetime').alias('original_datetime')
             ])
 
+        # Populate original_glucose from glucose — the value anchor that grid
+        # re-timing reads, so re-timing never compounds across passes.
+        #
+        # Per-ROW coalesce, not a `'original_glucose' not in columns` guard: the
+        # column can be present and null (schema enforcement creates it that way
+        # on a frame assembled before this point), and a frame-level guard then
+        # no-ops over exactly the rows that needed filling. That is the shape
+        # that left every BIG IDEAs meal row without an anchor — F6.
+        if 'glucose' in unified_df.columns:
+            source = (
+                pl.coalesce(pl.col('original_glucose'), pl.col('glucose'))
+                if 'original_glucose' in unified_df.columns
+                else pl.col('glucose')
+            )
+            unified_df = unified_df.with_columns([source.cast(pl.Float64).alias('original_glucose')])
+
         # Sort by datetime
         unified_df = unified_df.sort("datetime")
         
