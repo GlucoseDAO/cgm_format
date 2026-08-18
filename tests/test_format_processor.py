@@ -2115,7 +2115,7 @@ class TestSequenceDetection:
         # Create test data with a glucose gap bridged by non-glucose events
         base_time = datetime(2023, 9, 16, 8, 0)
         
-        # Schema order: sequence_id, original_datetime, quality, event_type, datetime, glucose, carbs, insulin_slow, insulin_fast, exercise
+        # Schema order: sequence_id, original_datetime, original_glucose, quality, event_type, datetime, glucose, carbs, insulin_slow, insulin_fast, exercise
         test_data = pl.DataFrame({
             'sequence_id': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
             'original_datetime': pl.Series([
@@ -2129,6 +2129,7 @@ class TestSequenceDetection:
                 base_time + timedelta(minutes=32),
                 base_time + timedelta(minutes=37),
             ], dtype=pl.Datetime('ms')),
+            'original_glucose': pl.Series([100.0, 105.0, 110.0, 115.0, None, None, None, 120.0, 125.0], dtype=pl.Float64),
             'quality': pl.Series([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=pl.Int64),
             'event_type': pl.Series([
                 UnifiedEventType.GLUCOSE.value,      # 0

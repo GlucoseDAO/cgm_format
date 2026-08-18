@@ -16,6 +16,7 @@ The output is a **Polars DataFrame** with strict schema constraints.
 |--------|------|-------------|
 | `sequence_id` | `Int64` | Unique identifier for the data sequence |
 | `original_datetime` | `Datetime` | Original timestamp before any modifications (preserved from conversion) |
+| `original_glucose` | `Float64` | Glucose as the device reported it, before any grid re-timing (mg/dL). Null on rows carrying no glucose |
 | `quality` | `Int64` | Data quality indicator (bitwise flags, 0=GOOD) |
 | `event_type` | `Utf8` | Type of recorded event (8-char code mapping to Dexcom EVENT_TYPE+SUBTYPE) |
 
@@ -80,6 +81,8 @@ The quality field uses bitwise flags (Python `Flag` enum) to indicate data issue
 - `4` = IMPUTATION - Imputed/interpolated data
 - `8` = TIME_DUPLICATE - Event time is non-unique
 - `16` = SYNCHRONIZATION - Event time was synchronized
+- `32` = TRACK_MERGE - Value synthesized by merging two concurrent sensor tracks
+- `64` = GRID_RETIMED - `glucose` recomputed at the grid instant; the device's own reading is in `original_glucose`
 
 Multiple flags can be combined (e.g., `3` = OUT_OF_RANGE | SENSOR_CALIBRATION).
 
@@ -101,16 +104,17 @@ The following columns are passed to the LLM:
 The schema defines a primary key consisting of all data columns:
 - `(datetime, glucose, carbs, insulin_slow, insulin_fast, exercise)`
 
-Rows with identical data values across these columns are considered true duplicates. Service columns (`sequence_id`, `original_datetime`, `quality`, `event_type`) are metadata and not part of the primary key.
+Rows with identical data values across these columns are considered true duplicates. Service columns (`sequence_id`, `original_datetime`, `original_glucose`, `quality`, `event_type`) are metadata and not part of the primary key.
 
 ### Stable Sorting
 
 For deterministic row ordering, the schema uses all columns in priority order:
 1. `sequence_id` - Group by sequence
 2. `original_datetime` - Temporal order (preserves original timing)
-3. `quality` - Clean data first (0 = no flags)
-4. `event_type` - Consistent event ordering
-5. All data columns - Final tiebreaker for identical events
+3. `original_glucose` - The reading behind the row (null sorts first, so a non-glucose event at the same instant precedes the reading)
+4. `quality` - Clean data first (0 = no flags)
+5. `event_type` - Consistent event ordering
+6. All data columns - Final tiebreaker for identical events
 
 This ensures completely deterministic ordering even when multiple events have the same timestamp, quality, and type.
 

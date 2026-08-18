@@ -11,6 +11,92 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.12.0 — 2026-08-18
+
+**Minor.** A new `original_glucose` service column, a new `Quality.GRID_RETIMED` member, a new
+`retime_glucose` parameter. Nothing removed, nothing retyped. But **read the migration note below
+before upgrading**: the default glucose values coming out of `synchronize_timestamps` change, and a
+frame built by hand against the old schema now raises.
+
+### `synchronize_timestamps` re-times glucose onto the grid
+
+A reading taken at `14:11:45` and re-labelled `14:11:00` is not a reading *of* `14:11:00`. Until now
+sync moved the timestamp and kept the number, which left every value leaning systematically toward
+the previous reading. It now recomputes `glucose` as the measured series evaluated at the grid
+instant, and flags the row `Quality.GRID_RETIMED`.
+
+Measured against the `glucose_data_processing` reference that produced the deployed models' training
+data (`data/comparison/livia_reference.csv`, 289-point inference window):
+
+| | MAE | max | matches within 0.01 |
+|---|---|---|---|
+| 0.11.0 | 0.7834 | 3.30 | 8.7% (25/289) |
+| **0.12.0** | **0.000176** | 0.0005 | **100% (289/289)** |
+
+`tests/test_livia_reference_alignment.py` was failing on `GLUCOSE_MAE`; it passes now. This closes
+rung 3 of `docs/modification_plan.md`.
+
+`interpolate_gaps` and the re-timing half of sync now share one interpolant, evaluated over the same
+measured anchors, so the value at a grid point no longer depends on which stage produced its row.
+Created points therefore shift slightly too — they anchor on raw reading times rather than on
+grid-snapped ones. Idempotency and commutativity are unchanged and still gate the release.
+
+Interpolation clamps at a sequence's first and last reading rather than extrapolating past them.
+`glucose_data_processing` picks its two interpolation points by absolute time distance without
+requiring them to bracket the target, so where both fall on the same side its weights sum to more
+than one; that artifact is not reproduced.
+
+Across the whole reference — not just the inference window — the two pipelines now agree on 99.1% of
+its 25,332 grid points. The 229 that differ are the reference's defects, not ours: 201 sit beside a
+`Low` marker, where it carries roughly the last valid reading instead of the 39 mg/dL floor its own
+config declares, and 24 sit beside a `Calibration` row, where it lets a fingerstick value into the
+CGM glucose channel. None fall in an inference window. Full breakdown in
+`docs/LOGIC_RECONCILIATION.md`.
+
+### The value anchor, and what it costs you
+
+`original_glucose` is to `glucose` what `original_datetime` is to `datetime`: written once at parse,
+read by every later pass, never written again. It is what makes re-timing re-runnable — without it
+the second pass would interpolate from the first pass's output and drift silently, because the
+timestamps stop moving after pass one.
+
+**Migration, for `sugar-sugar` and `glucosedao`.** Frames that arrive through any `parse_*` entry
+point get the column filled automatically, including from a pre-0.12 unified CSV, so the normal path
+needs no change. A frame **constructed or cached in memory** against the 0.11 schema and handed
+straight to a processor method now raises `MissingColumnError` under the default validation mode.
+Either re-parse it or add `original_glucose` (Float64, the measured reading, null where there is no
+glucose).
+
+To keep 0.11 numeric behaviour: `synchronize_timestamps(..., retime_glucose=False)`, or
+`cgm-cli pipeline --no-retime-glucose`. The measured value is in `original_glucose` either way.
+
+### Also in this release
+
+- **`ProcessingWarning.SYNCHRONIZATION` is finally emitted.** It has existed in the enum since the
+  warning system was written and no code path ever raised it. `prepare_for_inference` now does, when
+  any row carries `SYNCHRONIZATION` or `GRID_RETIMED` — so a caller can tell that the number under a
+  given instant is not the number the device stamped with it. Expect it in warning sets that
+  previously omitted it.
+- **One-row sequences stop being a special case.** They took a shortcut through `dt.round('1m')`
+  that quietly exempted them from the `SYNCHRONIZATION` flag as well. They go through the normal
+  path now, which produces the same timestamp and the flags they should always have carried.
+- **A dead check in the idempotency suite is alive.** `check_no_null_glucose_egv` filtered
+  `event_type == 'EGV'` — the code is `'EGV_READ'` — so it early-returned on all ten of its call
+  sites, and the column it would then have read (`glucose_value_mg_dl`) no longer exists. The
+  module's docstring had been advertising a constraint nothing enforced. Two more restated-vocabulary
+  checks went the same way in this pass: `test_unified_format_schema` now derives its column list
+  from the schema, and `cgm-cli`'s warning descriptions now come from `WarningDescription` rather
+  than a hand-written dict that covered five of seven members — which is why the CLI greeted the new
+  `SYNCHRONIZATION` warning with "Unknown warning". Written up as F15 in `docs/previous_issues.md`.
+- **F16, surfaced not fixed** (`docs/dogfooding.md`): the alignment gate's reference fixture names a
+  regeneration script in three places, and that script has never existed in any commit. The
+  definition of "correct" for our alignment with training is currently not reproducible.
+- **Every surface that synchronizes can opt out.** `cgm-cli pipeline`, `cgm-cli process` and
+  `cgm-cli batch` all gain `--retime-glucose/--no-retime-glucose` (default on); the library
+  equivalent is `synchronize_timestamps(..., retime_glucose=False)`, or
+  `FormatProcessor.retime_glucose = False` to change it for a whole run. 0.11.0 behaviour stays
+  reachable without pinning an old version.
+
 ## 0.11.0 — 2026-08-16
 
 **Minor.** A new `SupportedCGMFormat.BIGIDEAS` member plus registry entries. Nothing a consumer

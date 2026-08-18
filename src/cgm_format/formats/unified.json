@@ -17,9 +17,18 @@
       }
     },
     {
+      "name": "original_glucose",
+      "type": "number",
+      "description": "Glucose as the device reported it, before any grid re-timing (write-once, the value anchor beside original_datetime). Null on rows that carry no glucose.",
+      "unit": "mg/dL",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
       "name": "quality",
       "type": "integer",
-      "description": "Data quality indicator \u2014 bitwise Quality flags stored as Int64 (0=GOOD_QUALITY, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, 32=TRACK_MERGE; combine with |, test with &)",
+      "description": "Data quality indicator \u2014 bitwise Quality flags stored as Int64 (0=GOOD_QUALITY, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, 32=TRACK_MERGE, 64=GRID_RETIMED; combine with |, test with &)",
       "constraints": {
         "required": true,
         "enum": [
@@ -29,7 +38,8 @@
           4,
           8,
           16,
-          32
+          32,
+          64
         ]
       }
     },

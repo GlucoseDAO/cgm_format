@@ -253,3 +253,45 @@ glucose path already has the right shape to copy.
 
 **Guarded by** `tests/test_bigideas.py::TestReportsWhatItDropped`, including the negative case that
 a fully parseable food log stays quiet.
+
+---
+
+## F15 — the idempotency suite's null-glucose check never ran
+
+**Found:** while implementing grid re-timing (0.12.0), where `tests/test_idempotency.py` is the
+acceptance gate. **Severity:** a documented constraint had no enforcement anywhere.
+**Legality:** a patch — test-only, nothing a consumer reads changed.
+
+The module docstring promises the suite verifies "No NULL values in glucose column for EGV events".
+It did not, on any of the ten call sites of `check_no_null_glucose_egv`:
+
+```python
+egv_df = df.filter(pl.col('event_type') == 'EGV')   # the code is 'EGV_READ'
+if len(egv_df) == 0:
+    return                                          # so this always fired
+null_glucose = egv_df.filter(pl.col('glucose_value_mg_dl').is_null())  # renamed to `glucose`
+```
+
+The filter matched nothing, the early return took every call, and the line below it — naming a column
+the schema has not had for several releases — was never reached to raise. A check that cannot run is
+not a check that passes, and this one had been reporting success across the whole parametrized
+matrix.
+
+**Resolution.** The event type comes from `UnifiedEventType.GLUCOSE` rather than a string literal,
+and the column is `glucose` (`tests/test_idempotency.py`, `check_no_null_glucose_egv`). It passes on
+every committed fixture, so nothing was hiding behind it — but nothing would have told us if
+something were.
+
+**The shape is worth naming, because it is not specific to this helper.** A predicate built from a
+hardcoded copy of a vocabulary goes stale silently; one derived from the enum fails loudly at the
+rename. `CLAUDE.md` §5 already says to derive a guard from the schema's rule rather than restate it
+beside it — the same rule applies to test code, where nothing was enforcing it. Two more instances
+were found and converted in the same pass rather than left to rot:
+
+- `tests/test_format_parser.py::test_unified_format_schema` compared against a literal column list;
+  it now reads `UNIFIED_TARGET_SCHEMA[detected_format].get_column_names()` and asserts exact order,
+  which is strictly more than the old set comparison.
+- `cgm_cli._get_warning_description` held a hand-written dict covering five of the seven
+  `ProcessingWarning` members. The first time `prepare_for_inference` emitted `SYNCHRONIZATION`, the
+  CLI printed "SYNCHRONIZATION: Unknown warning" at the user. It now reads `WarningDescription`,
+  which is declared beside the enum itself.

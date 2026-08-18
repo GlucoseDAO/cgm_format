@@ -928,12 +928,19 @@ class CGMProcessor(ABC):
         dataframe: UnifiedFormat,
         **kwargs
     ) -> UnifiedFormat:
-        """Align timestamps to minute boundaries.
-        
+        """Align timestamps to the sequence grid, re-timing glucose onto it.
+
+        Row-count lossless: every source row survives with a new `datetime`.
+        An implementation that also re-times glucose (the default here) must
+        derive the new value from columns it never writes — `original_datetime`
+        and `original_glucose` — so that re-running the stage is a no-op rather
+        than a compounding approximation.
+
         Args:
             dataframe: DataFrame in unified format
-            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes, validation_mode)
-            
+            **kwargs: Implementation-specific parameters (e.g., expected_interval_minutes,
+                retime_glucose, validation_mode)
+
         Returns:
             DataFrame with synchronized timestamps
         """

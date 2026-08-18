@@ -28,7 +28,9 @@ Types are the first line of defense against data corruption.
 
 Every processing operation must produce the same output whether it runs once or ten times. This is non-negotiable for pipelines where retries, caching, and reprocessing are normal.
 
-**`original_datetime` is the anchor.** Parsing creates this column as a copy of `datetime` before any modification. All downstream operations — grid alignment, gap detection, calibration marking — compute from `original_datetime`, never from `datetime`. Since `original_datetime` is never written after creation, repeated processing always starts from the same reference.
+**`original_datetime` and `original_glucose` are the anchors.** Parsing creates them as copies of `datetime` and `glucose` before any modification. All downstream operations — grid alignment, gap detection, calibration marking, glucose re-timing — compute from the anchors, never from the columns they feed. Since the anchors are never written after creation, repeated processing always starts from the same reference.
+
+The value anchor is what makes an operation that rewrites a *measurement* safe to re-run. Grid re-timing does exactly that, and a version of it that read `glucose` back would interpolate each pass from the last pass's approximation — drifting further from the source every time, and silently, because the timestamps stop moving after the first pass. Anchoring on a column no stage writes turns that into a fixed point instead.
 
 **Sequence detection resets before recomputing.** `detect_and_assign_sequences` sets all `sequence_id` values to 0 and then reassigns from scratch. Calling it twice with the same parameters produces identical output.
 
@@ -78,7 +80,7 @@ The categories **compose**: a corpus's member is a bundle or an export, so `pars
 
 The schema is the contract between parser output and processor input.
 
-**Service columns vs data columns.** Service columns (`sequence_id`, `original_datetime`, `quality`, `event_type`) carry metadata for processing. Data columns (`datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise`) carry the signal. `get_polars_schema(data_only=True)` and `to_data_only_df()` strip service columns for ML consumption.
+**Service columns vs data columns.** Service columns (`sequence_id`, `original_datetime`, `original_glucose`, `quality`, `event_type`) carry metadata for processing. Data columns (`datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise`) carry the signal. `get_polars_schema(data_only=True)` and `to_data_only_df()` strip service columns for ML consumption.
 
 **Validation vs enforcement.** Validation (`enforce=False`) checks the DataFrame and raises typed errors (`MissingColumnError`, `ExtraColumnError`, `ColumnOrderError`, `ColumnTypeError`). Enforcement (`enforce=True`) fixes the DataFrame — adds missing columns with nulls, casts types, reorders, removes extras, and applies stable sorting. Internal pipeline stages use enforcement; external-facing APIs default to validation.
 
@@ -90,19 +92,21 @@ The schema is the contract between parser output and processor input.
 
 Processing should add information, not destroy it.
 
-**Synchronization keeps all rows.** Timestamp rounding maps each source row to its nearest grid point. No rows are dropped; the operation is purely a timestamp transform.
+**Synchronization keeps all rows.** Timestamp rounding maps each source row to its nearest grid point. No rows are dropped.
+
+It is not, however, purely a *timestamp* transform, and saying so would be the comfortable lie. Moving a reading from 14:11:45 to 14:11:00 makes a claim about 14:11:00 that the sensor never made, so synchronization also re-times `glucose` — the measured series evaluated at the grid instant — and flags the row `GRID_RETIMED`. Losslessness survives this because nothing is destroyed: the device's own number stays in `original_glucose`, the row stays where it was, and the flag says which is which. A caller who wants the older behaviour passes `retime_glucose=False`.
 
 **Interpolation adds rows.** New rows are inserted in gaps, marked with `IMPUTATION` (and `SYNCHRONIZATION` if snapped to grid). Original rows are never removed or modified.
 
 **Sequence detection is annotation.** Assigning `sequence_id` does not alter, merge, or delete any row. It is a pure labeling operation.
 
-**`original_datetime` is write-once.** Created during parsing, never overwritten. Any operation that modifies `datetime` leaves `original_datetime` untouched.
+**The anchors are write-once.** `original_datetime` and `original_glucose` are created during parsing and never overwritten. Any operation that modifies `datetime` or `glucose` leaves them untouched.
 
 ---
 
 ## Quality Tracking: Two Levels
 
-**Row-level: `Quality` flags.** Fine-grained, per-row quality indicators stored as an integer column. Flags include `OUT_OF_RANGE`, `SENSOR_CALIBRATION`, `IMPUTATION`, `TIME_DUPLICATE`, and `SYNCHRONIZATION`. Multiple flags combine via bitwise OR. Zero means good quality.
+**Row-level: `Quality` flags.** Fine-grained, per-row quality indicators stored as an integer column. Flags include `OUT_OF_RANGE`, `SENSOR_CALIBRATION`, `IMPUTATION`, `TIME_DUPLICATE`, `SYNCHRONIZATION`, `TRACK_MERGE`, and `GRID_RETIMED`. Multiple flags combine via bitwise OR. Zero means good quality.
 
 **Sequence-level: `ProcessingWarning` flags.** Coarse-grained, returned from `prepare_for_inference()`. Summarize the overall state of the selected sequence: `TOO_SHORT`, `CALIBRATION`, `OUT_OF_RANGE`, `IMPUTATION`, `TIME_DUPLICATES`. These tell the caller whether the data is usable, without requiring inspection of every row.
 

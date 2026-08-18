@@ -2,8 +2,8 @@
 
 Persistent reference for aligning **inference-time** data processing in `cgm_format` with **training-time** processing in `glucose_data_processing`, so ML model predictions stay consistent.
 
-**Last updated:** 2026-08-17 (re-validated after rebase onto `main` @ 0.11.0)  
-**Status:** Rungs 1–2 landed on `main`; rung 3 approved for its own run; rung 5 blocked (§0.8)  
+**Last updated:** 2026-08-18 (rung 3 shipped in 0.12.0)  
+**Status:** Rungs 1–3 shipped; rung 4 open; rung 5 blocked (§0.8); rungs 6–7 contested  
 **Related test:** `tests/test_livia_gdp_cgm_comparison.py`  
 **Sample report:** `data/comparison/livia_gdp_cgm_comparison_report.txt` (local, gitignored)
 
@@ -166,7 +166,7 @@ both repos already agree on; rung 5 is where the projects' philosophies actually
 |---|------|-----------|-----------|
 | 1 | Coalesce same-timestamp rows in `to_data_only_df` instead of dropping (§0.3) | **Low** | ✅ **Done** — `main` @ 5f8c817 |
 | 2 | `to_ml_ready_df()` adapter: SugarOne display names + `round_precision: 3`, `sequence_id`/`Event Type` retained (§0.5) | **Low** | ✅ **Done** — `main` @ 28dd645 |
-| 3 | Grid re-timing: interpolate glucose to the exact grid instant, GDP-style (§0.4) | **Medium** | **Approved 2026-08-17** — own run, see §0.9 |
+| 3 | Grid re-timing: interpolate glucose to the exact grid instant, GDP-style (§0.4) | **Medium** | ✅ **Done** — 0.12.0, see §0.9 |
 | 4 | Per-model minimum-length floor (80 / 128 grid points) in `prepare_for_inference` (§0.5) | **Medium** | Mildly — hard floor vs "predict anyway" |
 | 5 | `insulin_slow` → `Basal Rate (U/h)`: reconcile discrete dose (U) vs pump rate (U/h) (§0.8) | **Blocked** | **Yes — semantic, needs product input** |
 | 6 | Heart rate / step count for GluMind — absent from the unified schema entirely (§0.5) | **High** | **Yes — schema expansion, or accept zero-fill** |
@@ -259,7 +259,49 @@ Until 1–4 are answered, `to_ml_ready_df` keeps `Basal Rate (U/h)` empty and ex
 `basal_rate_from_insulin_slow=True` as an explicit, documented opt-in for a deployment that has
 established its own answer.
 
-### 0.9 Rung 3 (grid re-timing) — approved, but scheduled as its own run
+### 0.9 Rung 3 (grid re-timing) — **shipped in 0.12.0, 2026-08-18**
+
+**Result: MAE 0.7834 → 0.000176 mg/dL** over the 289-point gate window, max abs diff 0.0005,
+exact-match rate 8.7% (25/289) → **100%** (289/289). `tests/test_livia_reference_alignment.py` passes.
+
+Shipped as `synchronize_timestamps(..., retime_glucose=True)`, default on, with a new write-once
+`original_glucose` service column as the value anchor and `Quality.GRID_RETIMED` (64) marking
+re-timed rows. `interpolate_gaps` and sync now share one interpolant over the same measured anchors.
+Full account in `docs/CHANGELOG.md` under 0.12.0.
+
+**Two corrections to what this document said before the work.**
+
+1. **§0.2's claim that GDP uses "the monolith's two-nearest-point formula" is right about the
+   mechanism and wrong about what it computes.** `create_fixed_frequency_data` picks its two points
+   by absolute time distance (`argsort` on `|t − t_grid|`) with **no requirement that they bracket
+   the target**. When they do, the weights sum to 1 and it is ordinary linear interpolation — which
+   is why the §0.4 worked example lands on 131.3 to the digit. When both fall on the same side, the
+   weights sum to more than 1 and it emits a mirrored pseudo-extrapolation. That happens at the first
+   grid point of roughly half of all sequences (grid start rounds down when the first reading's
+   seconds are 1–29), and in the interior wherever `interpolate_missing_values` left a 6–9 minute gap
+   unfilled (`int(diff/5) - 1 == 0`).
+
+   **We did not reproduce it.** Clamped bracketing interpolation reproduces the whole 25,332-row
+   reference to MAE 0.043 with 99.1% of points within 0.01 mg/dL, and the residual outliers are
+   exactly the points where GDP produced that artifact — up to 91 mg/dL from anything the sensor
+   reported. None fall inside an inference window.
+
+2. **The idempotency hazard this section was written around was real, and the fix is the anchor
+   column, not the flag.** `Quality.GRID_RETIMED` marks re-timed rows so a reader can tell derived
+   from measured, but it is not what makes the operation re-runnable — skipping already-flagged rows
+   would have gone stale the moment a caller re-ran with a different interval. Recomputing every pass
+   from `(original_datetime, original_glucose)`, columns no stage writes, is what makes
+   `f(f(x)) == f(x)` hold for any parameters.
+
+All five idempotency and commutativity chains pass on every committed fixture, in both re-timing
+modes, asserted on values. `tests/test_idempotency.py::TestGridRetiming` adds the two assertions the
+chains cannot make: that the anchor still equals a fresh parse after three passes, and that re-timed
+values equal the raw readings that bracket them.
+
+<details>
+<summary>The original plan for this rung, kept for the reasoning</summary>
+
+### 0.9 (original) Rung 3 (grid re-timing) — approved, but scheduled as its own run
 
 Decision 2026-08-17: matching training's interpolation is the right move, **but it gets a
 dedicated run with idempotency as the primary risk**, not a bolt-on to rungs 1–2.
@@ -281,6 +323,8 @@ Requirements for that run:
 - Idempotency tests are the acceptance gate, not an afterthought: `f(f(x)) == f(x)` on the Livia
   fixture and on the corpora, asserted on **values**, not just row counts and timestamps.
 - Only then re-measure the gate; the target is MAE ≤ 0.1 (currently 0.7834).
+
+</details>
 
 ---
 
@@ -409,7 +453,7 @@ Constants (aligned with GDP): `SMALL_GAP_MAX_MINUTES = 15`, `EXPECTED_INTERVAL_M
 | Calibration events | Removed (`remove_calibration: true`) | Not emitted as rows (only EGV, insulin, carbs, exercise parsed) |
 | Row structure | Flat stream + `Event Type` column | Unified event codes (`EGV_READ`, `INS_FAST`, …) |
 | Insulin | Split to `fast_acting_insulin_u` / `long_acting_insulin_u` | `insulin_fast` / `insulin_slow` |
-| Metadata | `original_datetime`, `quality`, `event_type` service columns | Same (idempotent processing design) |
+| Metadata | `original_datetime`, `quality`, `event_type` service columns | Same, plus `original_glucose` — the value anchor grid re-timing reads (idempotent processing design) |
 | Timestamps | `%Y-%m-%dT%H:%M:%S`, `%Y-%m-%d %H:%M:%S` | Same |
 
 Insulin subtype logic is equivalent: Fast-Acting → fast, Long-Acting → slow, default → fast.

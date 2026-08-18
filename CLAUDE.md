@@ -42,6 +42,8 @@ Delegation is for finding things, never for deciding them.
    — read it before triaging anything, not just §8 below.
 6. **Per-area reference — read the one your task touches:**
    [docs/PIPELINE.md](docs/PIPELINE.md) (stage detail),
+   [docs/LOGIC_RECONCILIATION.md](docs/LOGIC_RECONCILIATION.md) (measured agreement with the
+   models' training pipeline — read before changing any grid or interpolation arithmetic),
    [docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md) (schema),
    [docs/USAGE.md](docs/USAGE.md) (public API),
    [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist),
@@ -103,13 +105,14 @@ new sensor requires zero processor changes.
 
 Canonical output is a Polars DataFrame conforming to `CGM_SCHEMA` (`formats/unified.py`):
 
-- **Service columns** (metadata): `sequence_id`, `original_datetime`, `quality`, `event_type`
+- **Service columns** (metadata): `sequence_id`, `original_datetime`, `original_glucose`, `quality`,
+  `event_type`
 - **Data columns** (signal): `datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise`
 
 `get_polars_schema(data_only=True)` / `to_data_only_df()` strip service columns for ML consumption.
 `quality` is a bitwise `Quality` flag (`OUT_OF_RANGE`, `SENSOR_CALIBRATION`, `IMPUTATION`,
-`TIME_DUPLICATE`, `SYNCHRONIZATION`); `0` = good. `event_type` holds 8-char `UnifiedEventType` codes
-(`"EGV_READ"`, `"CALIBRAT"`, `"CARBS_IN"`, …).
+`TIME_DUPLICATE`, `SYNCHRONIZATION`, `TRACK_MERGE`, `GRID_RETIMED`); `0` = good. `event_type` holds
+8-char `UnifiedEventType` codes (`"EGV_READ"`, `"CALIBRAT"`, `"CARBS_IN"`, …).
 
 **Validation vs enforcement.** Validation (`enforce=False`) raises typed errors
 (`MissingColumnError`, `ExtraColumnError`, `ColumnOrderError`, `ColumnTypeError`). Enforcement
@@ -223,15 +226,23 @@ These are the pipeline's correctness contract and the reason the library is wort
 one is a real behavior change — gate it on a test demonstrating the new behavior and update
 `docs/PHILOSOPHY.md`.
 
-- **Idempotency.** Every op yields the same result run once or ten times. `original_datetime` is
-  write-once (created at parse, never overwritten); `detect_and_assign_sequences` resets to 0 then
-  reassigns from scratch; quality flags are additive via `|`. Re-running is a bit-level no-op.
-- **Losslessness.** `synchronize_timestamps` keeps all rows (pure timestamp transform);
+- **Idempotency.** Every op yields the same result run once or ten times. `original_datetime` **and
+  `original_glucose`** are write-once (created at parse, never overwritten) and every stage computes
+  from them rather than from the `datetime` / `glucose` it writes; `detect_and_assign_sequences`
+  resets to 0 then reassigns from scratch; quality flags are additive via `|`. Re-running is a
+  bit-level no-op. **Any new op that rewrites a measurement needs an anchor of its own** — without
+  one it reads back its last approximation and compounds, silently, because the thing that would
+  reveal it (the timestamp) stops changing after the first pass.
+- **Losslessness.** `synchronize_timestamps` keeps all rows — it rewrites `datetime`, and by default
+  `glucose` too (re-timed onto the grid, flagged `GRID_RETIMED`), both recoverable from the anchors;
   `interpolate_gaps` only *adds* rows (marked `IMPUTATION`, plus `SYNCHRONIZATION` when snapped);
-  sequence detection is pure annotation. Nothing silently drops or edits original rows.
+  sequence detection is pure annotation. Nothing silently drops rows or destroys an original value.
 - **Commutativity of grid ops.** `interpolate_gaps` (snap-to-grid) and `synchronize_timestamps` share
-  one grid calculation rooted in each sequence's first `original_datetime`, so their order doesn't
-  matter — see §12.
+  one grid calculation rooted in each sequence's first `original_datetime`, **and one interpolant**
+  (`_glucose_at` over the measured anchors), so their order doesn't matter — see §12. Both halves are
+  load-bearing: a second value formula beside the shared one puts the two stages back in
+  disagreement about what belongs at a grid instant, which `test_sync_interpolate_sync_idempotency`
+  is what catches.
 - **Deterministic row order.** Parquet/CSV bytes depend on row order. The schema defines a total
   ordering (sequence, time, quality, event type, then data columns); apply stable sorting after any
   `concat` / `merge`. Never derive emitted rows from `set` / `dict` iteration or from polars

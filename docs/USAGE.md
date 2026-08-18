@@ -333,17 +333,18 @@ After `to_data_only_df()` with `glucose_only=True`:
 # glucose_only_df columns when drop_service_columns=False:
 # - sequence_id: Int64 (sequence identifier)
 # - original_datetime: Datetime (original timestamp before synchronization)
-# - quality: Int64 (quality flags: 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION)
+# - original_glucose: Float64 (mg/dL, the device's own reading before grid re-timing)
+# - quality: Int64 (quality flags: 0=GOOD, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, 4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, 32=TRACK_MERGE, 64=GRID_RETIMED)
 # - event_type: Utf8 (always "EGV_READ" for glucose-only data)
 # - datetime: Datetime (timestamp, may be synchronized to grid)
-# - glucose: Float64 (mg/dL, always present for glucose-only data)
+# - glucose: Float64 (mg/dL, re-timed onto the grid by synchronize_timestamps)
 # - carbs: Float64 (grams, nullable)
 # - insulin_slow: Float64 (units, nullable)
 # - insulin_fast: Float64 (units, nullable)
 # - exercise: Int64 (seconds, nullable)
 
 print(glucose_only_df.columns)
-# ['sequence_id', 'original_datetime', 'quality', 'event_type', 'datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
+# ['sequence_id', 'original_datetime', 'original_glucose', 'quality', 'event_type', 'datetime', 'glucose', 'carbs', 'insulin_slow', 'insulin_fast', 'exercise']
 
 # If you want only data columns without metadata, use drop_service_columns=True:
 data_only_df = FormatProcessor.to_data_only_df(

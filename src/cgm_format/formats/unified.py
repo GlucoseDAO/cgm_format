@@ -150,6 +150,13 @@ class Quality(Flag):
     # single device produced. A row fed by exactly one sensor is that sensor's
     # reading and is NOT flagged.
     TRACK_MERGE = auto()
+    # 64 — `glucose` was re-timed onto the grid: the row's own reading was
+    # measured a few seconds off the grid instant, and the value emitted is the
+    # measured series evaluated *at* that instant instead. Distinct from
+    # IMPUTATION: the reading is real and nothing was missing, only re-dated.
+    # The measurement itself stays in `original_glucose`, which is what every
+    # re-timing pass reads, so the operation never compounds.
+    GRID_RETIMED = auto()
 
 GOOD_QUALITY = Quality(0)
 
@@ -224,13 +231,24 @@ CGM_SCHEMA = CGMSchemaDefinition(
             "constraints": {"required": True}
         },
         {
+            "name": "original_glucose",
+            "dtype": pl.Float64,
+            "description": (
+                "Glucose as the device reported it, before any grid re-timing "
+                "(write-once, the value anchor beside original_datetime). Null "
+                "on rows that carry no glucose."
+            ),
+            "unit": "mg/dL",
+            "constraints": {"minimum": 0}
+        },
+        {
             "name": "quality",
             "dtype": pl.Int64,
             "description": (
                 "Data quality indicator — bitwise Quality flags stored as Int64 "
                 "(0=GOOD_QUALITY, 1=OUT_OF_RANGE, 2=SENSOR_CALIBRATION, "
                 "4=IMPUTATION, 8=TIME_DUPLICATE, 16=SYNCHRONIZATION, "
-                "32=TRACK_MERGE; combine with |, test with &)"
+                "32=TRACK_MERGE, 64=GRID_RETIMED; combine with |, test with &)"
             ),
             "constraints": {
                 "required": True,

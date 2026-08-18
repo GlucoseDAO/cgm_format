@@ -239,11 +239,11 @@ unified_df = FormatProcessor.interpolate_gaps(
 
 #### Timestamp Synchronization
 
-**Method:** `FormatProcessor.synchronize_timestamps(dataframe, expected_interval_minutes=5) -> UnifiedFormat`
+**Method:** `FormatProcessor.synchronize_timestamps(dataframe, expected_interval_minutes=5, retime_glucose=True) -> UnifiedFormat`
 
-Aligns timestamps to minute boundaries and creates fixed-frequency data with consistent intervals. This is a **lossless operation** - it keeps ALL source rows and only rounds their timestamps to the grid.
+Aligns timestamps to the sequence grid and re-times glucose onto it. **Row-count lossless** - it keeps ALL source rows, adds none and drops none.
 
-**When to call:** Should be called after `interpolate_gaps()` when sequences are created and small gaps are filled.
+**When to call:** Should be called after `interpolate_gaps()` when sequences are created and small gaps are filled. Order does not matter — the two stages share one grid and one interpolant.
 
 **Operations:**
 
@@ -251,7 +251,30 @@ Aligns timestamps to minute boundaries and creates fixed-frequency data with con
 2. Rounds timestamps to nearest minute using grid alignment
 3. Each source row independently maps to its nearest grid point
 4. Marks all rows with `Quality.SYNCHRONIZATION` flag
-5. Uses `original_datetime` for grid calculations (ensures idempotency)
+5. With `retime_glucose=True` (default), recomputes `glucose` on every `EGV_READ` row as the measured
+   series evaluated at that row's new grid instant, and adds `Quality.GRID_RETIMED`
+6. Uses `original_datetime` and `original_glucose` for every calculation (ensures idempotency)
+
+**Why re-timing.** A reading taken at 14:11:45 and re-labelled 14:11:00 is not a reading *of*
+14:11:00. Keeping the measured number under the new timestamp biases every value toward the previous
+reading — against the reference that produced our models' training data, systematically, by 0.78
+mg/dL. Re-timing brings that to 0.0002. See [LOGIC_RECONCILIATION.md](LOGIC_RECONCILIATION.md).
+
+**Opting out.** Pre-0.12.0 behaviour stays reachable, three ways, so nobody has to pin an old
+version to get it:
+
+| Where | How |
+|---|---|
+| One call | `FormatProcessor.synchronize_timestamps(df, retime_glucose=False)` |
+| A whole run | `FormatProcessor.retime_glucose = False` (the ClassVar every call defaults to) |
+| CLI | `--no-retime-glucose` on `pipeline`, `process` and `batch` |
+
+The device's own reading is in `original_glucose` either way, so opting out changes which number
+`glucose` holds — never whether the measurement is still available.
+
+**Interpolation is clamped, never extrapolated.** Grid instants before a sequence's first reading or
+after its last take that reading's value. A sequence exists because the gaps around it are too long
+to interpolate across, so a reading beyond one is not an anchor for these points.
 
 **Best Practice**: Call `detect_and_assign_sequences()` explicitly before this method:
 
@@ -357,14 +380,15 @@ Prepares processed data for machine learning inference. Returns full UnifiedForm
    - `OUT_OF_RANGE`: contains OUT_OF_RANGE quality flags (sensor errors)
    - `IMPUTATION`: contains IMPUTATION quality flags (imputed/interpolated data)
    - `TIME_DUPLICATES`: contains non-unique timestamps OR TIME_DUPLICATE quality flags
-   - `SYNCHRONIZATION`: contains SYNCHRONIZATION quality flags
+   - `SYNCHRONIZATION`: contains SYNCHRONIZATION or GRID_RETIMED quality flags — the value under a
+     given instant is not the value the device stamped with it
 
 #### Output
 
 Returns `InferenceResult` tuple: `(unified_format_dataframe, warnings)`
 
 - `unified_format_dataframe`: Full DataFrame with all columns including service columns
-  - `sequence_id`, `original_datetime`, `event_type`, `quality` - Service/metadata columns
+  - `sequence_id`, `original_datetime`, `original_glucose`, `event_type`, `quality` - Service/metadata columns
   - `datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise` - Data columns
 - `warnings`: `ProcessingWarning` flags combined with bitwise OR
 
@@ -377,7 +401,7 @@ Warnings are implemented as flags and can be combined:
 - `ProcessingWarning.OUT_OF_RANGE` - Contains sensor out-of-range errors ("High"/"Low" readings)
 - `ProcessingWarning.IMPUTATION` - Contains imputed/interpolated gaps
 - `ProcessingWarning.TIME_DUPLICATES` - Contains non-unique time entries
-- `ProcessingWarning.SYNCHRONIZATION` - Contains synchronized timestamps
+- `ProcessingWarning.SYNCHRONIZATION` - Contains synchronized timestamps and/or re-timed glucose
 - `ProcessingWarning.QUALITY` - Other quality issues
 
 Example:
@@ -400,7 +424,7 @@ Optional pipeline-terminating function that removes metadata columns for ML mode
 **Operations:**
 - Filter to glucose-only events if `glucose_only=True` (drops non-EGV events)
 - Drop duplicate timestamps if `drop_duplicates=True` (keeps first occurrence)
-- Strip service columns if `drop_service_columns=True`: removes `sequence_id`, `original_datetime`, `event_type`, `quality`
+- Strip service columns if `drop_service_columns=True`: removes `sequence_id`, `original_datetime`, `original_glucose`, `event_type`, `quality`
 - Keeps only data columns: `datetime`, `glucose`, `carbs`, `insulin_slow`, `insulin_fast`, `exercise`
 
 **Example:**
@@ -507,7 +531,7 @@ The unified format uses a robust schema system defined in `interface/schema.py` 
 
 The authoritative schema (`CGM_SCHEMA`) is defined in `formats/unified.py` and provides:
 
-- **Column definitions**: Service columns (sequence_id, original_datetime, event_type, quality) and data columns (datetime, glucose, carbs, insulin_slow, insulin_fast, exercise)
+- **Column definitions**: Service columns (sequence_id, original_datetime, original_glucose, event_type, quality) and data columns (datetime, glucose, carbs, insulin_slow, insulin_fast, exercise)
 - **Type safety**: Polars dtype enforcement for all columns
 - **Primary key**: Combination of all data columns for true duplicate detection
 - **Stable sorting**: Deterministic row ordering using all columns in priority order
@@ -716,8 +740,8 @@ and is lossy, so the caller passes `expected_interval_minutes`.
 
 All processing operations are idempotent through careful design:
 
-1. **Original Timestamp Preservation**: `original_datetime` column preserves original timestamps before any modifications
-2. **Grid Calculations**: Synchronization and interpolation use `original_datetime` for grid calculations
+1. **Anchor Preservation**: `original_datetime` and `original_glucose` preserve the source timestamp and reading before any modification
+2. **Grid Calculations**: Synchronization and interpolation compute from the anchors, never from the columns they write
 3. **Quality Flags**: Additive quality flags (bitwise OR) preserve operation history
 4. **Deterministic Sorting**: Stable sort keys ensure consistent row ordering
 5. **Sequence Reset**: `detect_and_assign_sequences()` resets existing sequences before reassignment
@@ -726,7 +750,7 @@ All processing operations are idempotent through careful design:
 
 Processing operations preserve all data:
 
-1. **Synchronization**: Keeps ALL source rows, only rounds timestamps to grid
+1. **Synchronization**: Keeps ALL source rows; rewrites `datetime` and (by default) `glucose`, both recoverable from the anchors
 2. **Interpolation**: Adds new rows, never removes existing data
 3. **Schema Enforcement**: Adds missing columns, preserves existing data
 4. **Sequence Detection**: Pure annotation, doesn't modify or remove data

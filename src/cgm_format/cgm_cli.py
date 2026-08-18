@@ -32,6 +32,7 @@ from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     ZeroValidInputError,
     ProcessingWarning,
+    WarningDescription,
 )
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
@@ -194,6 +195,7 @@ def process(
     output_file: Optional[Path] = typer.Option(None, "--output", "-o", help="Output CSV file"),
     interpolate: bool = typer.Option(True, "--interpolate/--no-interpolate", help="Interpolate gaps"),
     synchronize: bool = typer.Option(True, "--sync/--no-sync", help="Synchronize timestamps"),
+    retime_glucose: bool = typer.Option(True, "--retime-glucose/--no-retime-glucose", help="Recompute glucose at each grid instant when synchronizing"),
     interval: int = typer.Option(5, "--interval", "-i", help="Expected interval in minutes"),
     max_gap: int = typer.Option(15, "--max-gap", help="Maximum gap to interpolate (minutes)"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
@@ -240,9 +242,11 @@ def process(
             with console.status("[bold green]Synchronizing timestamps..."):
                 df = processor.synchronize_timestamps(
                     df,
-                    expected_interval_minutes=interval
+                    expected_interval_minutes=interval,
+                    retime_glucose=retime_glucose
                 )
-            console.print(f"[green]✓[/green] Synchronized timestamps to {interval}-minute grid")
+            retimed_note = ", glucose re-timed onto it" if retime_glucose else ""
+            console.print(f"[green]✓[/green] Synchronized timestamps to {interval}-minute grid{retimed_note}")
         
         if show_stats:
             _print_dataframe_stats(df, "Processed Data")
@@ -272,6 +276,7 @@ def pipeline(
     max_duration: int = typer.Option(1440, "--max-duration", help="Maximum sequence duration (minutes)"),
     glucose_only: bool = typer.Option(False, "--glucose-only", help="Keep only glucose events"),
     drop_duplicates: bool = typer.Option(True, "--drop-duplicates/--keep-duplicates", help="Merge events sharing a timestamp into one row"),
+    retime_glucose: bool = typer.Option(True, "--retime-glucose/--no-retime-glucose", help="Recompute glucose at each grid instant when synchronizing"),
     ml_ready: bool = typer.Option(False, "--ml-ready", help="Emit the SugarOne model input shape (display column names)"),
     show_warnings: bool = typer.Option(True, "--warnings/--no-warnings", help="Show processing warnings"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
@@ -324,9 +329,11 @@ def pipeline(
         with console.status("[bold green]Stage 4/6: Synchronizing timestamps..."):
             unified_df = processor.synchronize_timestamps(
                 unified_df,
-                expected_interval_minutes=interval
+                expected_interval_minutes=interval,
+                retime_glucose=retime_glucose
             )
-        console.print(f"[green]✓[/green] Stage 4: Synchronized timestamps")
+        retimed_note = " and re-timed glucose onto the grid" if retime_glucose else ""
+        console.print(f"[green]✓[/green] Stage 4: Synchronized timestamps{retimed_note}")
         
         # Stage 5: Prepare for inference
         with console.status("[bold green]Stage 5/6: Preparing for inference..."):
@@ -749,6 +756,7 @@ def batch(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     pattern: str = typer.Option("*.csv", "--pattern", "-p", help="File pattern to match"),
     command: str = typer.Option("parse", "--command", "-c", help="Command to run (parse, process, pipeline)"),
+    retime_glucose: bool = typer.Option(True, "--retime-glucose/--no-retime-glucose", help="Recompute glucose at each grid instant when synchronizing"),
     continue_on_error: bool = typer.Option(True, "--continue/--stop", help="Continue on errors"),
 ) -> None:
     """Batch process multiple CGM data files."""
@@ -800,7 +808,7 @@ def batch(
                         batch_processor = _processor_for(df)
                         df = batch_processor.detect_and_assign_sequences(df)
                         df = batch_processor.interpolate_gaps(df)
-                        df = batch_processor.synchronize_timestamps(df)
+                        df = batch_processor.synchronize_timestamps(df, retime_glucose=retime_glucose)
                         if output_path:
                             FormatParser.to_csv_file(df, str(output_path))
                     elif command == "pipeline":
@@ -808,7 +816,7 @@ def batch(
                         batch_processor = _processor_for(df)
                         df = batch_processor.detect_and_assign_sequences(df)
                         df = batch_processor.interpolate_gaps(df)
-                        df = batch_processor.synchronize_timestamps(df)
+                        df = batch_processor.synchronize_timestamps(df, retime_glucose=retime_glucose)
                         df, _ = batch_processor.prepare_for_inference(df)
                         df = batch_processor.to_data_only_df(df, drop_service_columns=True)
                         if output_path:
@@ -1070,15 +1078,21 @@ def _get_event_type_name(event_type_value: int) -> str:
 
 
 def _get_warning_description(warning: ProcessingWarning) -> str:
-    """Get human-readable warning description."""
-    descriptions = {
-        ProcessingWarning.TOO_SHORT: "Sequence duration below minimum threshold",
-        ProcessingWarning.CALIBRATION: "Contains calibration events or post-calibration period",
-        ProcessingWarning.OUT_OF_RANGE: "Contains out-of-range glucose readings",
-        ProcessingWarning.IMPUTATION: "Contains imputed/interpolated data points",
-        ProcessingWarning.TIME_DUPLICATES: "Contains duplicate timestamps",
-    }
-    return descriptions.get(warning, "Unknown warning")
+    """Get human-readable warning description.
+
+    Read off `WarningDescription`, which is declared beside `ProcessingWarning`
+    itself, rather than from a second table here. This used to be a hand-written
+    dict covering five of the seven members, so the first time
+    `prepare_for_inference` emitted `SYNCHRONIZATION` the CLI printed
+    "SYNCHRONIZATION: Unknown warning" at the user. A copy of a vocabulary goes
+    stale the moment the vocabulary grows; deriving from it cannot.
+    """
+    try:
+        return WarningDescription[warning.name].value
+    except KeyError:
+        # A ProcessingWarning member with no description declared beside it —
+        # name it rather than pretending we know what it means.
+        return f"no description declared for {warning.name}"
 
 
 class FrictionlessErrorDict(TypedDict, total=False):
