@@ -321,7 +321,7 @@ the ledger relative to its own path, and the watcher shells out to it the same w
 ./scripts/triage-state.py                          # every item: new / revised / unmarked-reply / current
 ./scripts/triage-state.py --pending                # only what needs work
 ./scripts/triage-state.py --next                   # next unclaimed id, over BOTH documents
-./scripts/triage-state.py --backfill               # stamp markers on replies written before the ledger
+./scripts/triage-state.py --backfill               # OLD replies only — see the caveat below
 ./scripts/triage-state.py docs/FEEDBACK_HISTORY.md # the post-archive lint: everything should read `current`
 ./scripts/triage-archive.py S1 S2                  # move answered items, verifying the prose moved verbatim
 FILE=docs/FEEDBACK.md ./scripts/watch-inbox.sh     # one stdout line when the inbox settles (150s cooldown)
@@ -331,8 +331,19 @@ FILE=docs/FEEDBACK.md ./scripts/watch-inbox.sh     # one stdout line when the in
 defaults are derived from this script directory rather than from `$PWD`, so the tools work from
 anywhere in the tree; that is the only local change to them.
 
-Two things worth knowing before using them:
+Four things worth knowing before using them:
 
+- **`--backfill` is for replies that predate the ledger, and only those.** Pointed at a reply just
+  written, it hashes paragraphs two onward of that reply as though the reporter had written them, and
+  stamps the marker inside the first paragraph — where the mistake reads `current` forever instead of
+  announcing itself. Write the marker by hand: stamp `sha 000000000000`, run the ledger, and paste back
+  the value its `revised` line prints. `docs/CONSUMER_TRIAGE_LOOP.md` §3 Step 3 has the recipe and §6
+  has why.
+- **The watcher only watches while the tree is on `BRANCH`, which defaults to `main`.** Off it — a
+  feature branch, or a detached HEAD — it idles at `BRANCH_PAUSE` (900s) and says so once, because a
+  pass permitted to commit should stay off somebody else's half-finished work. This pass does not commit
+  (`docs/CONSUMER_TRIAGE_LOOP.md` §5), so the guard is inert here and carried for the day that changes.
+  `BRANCH=` switches it off; outside a git work tree it never applies.
 - **The `.py` files are Python. Never `bash triage-state.py`** — bash ignores the shebang, executes
   the module docstring as commands, and `import hashlib` reaches ImageMagick's `import`, which
   silently writes 0-byte files named after each import into the working directory.

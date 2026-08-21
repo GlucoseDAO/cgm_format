@@ -68,10 +68,56 @@ incrementally — so `TaskStop` and re-arm after changing it. Nothing needs inst
 `entr`, `fswatch` and python `watchdog` are all absent from this machine, and `stat` polling is enough
 at this cadence.
 
-**Our watcher has no branch guard**, unlike the one in `just-dna-format`, and does not need one: this
-loop does not commit (§5), so it cannot put unattended work on top of whatever the user is mid-way
-through on a branch. If the commit rule here ever changes, the branch guard has to arrive in the same
-change.
+**The watcher pauses off `main`.** It was adopted with the guard upstream grew on 2026-08-18: off the
+branch named by `BRANCH` (default `main`, or a detached HEAD) it idles at `BRANCH_PAUSE` (900s), emits
+one line saying where the tree is, and one more when it comes back. It does not touch its `last` mtime
+while paused, so a report written during the pause is picked up on the way back rather than lost;
+outside a git work tree it never pauses, and `BRANCH=` — an empty value, which `${BRANCH-main}` and not
+`${BRANCH:-main}` is what makes reachable — switches it off. Here the guard is **inert**: this loop
+does not commit (§5), so there is nothing it can put on top of somebody's half-finished branch. It is
+carried anyway, because the day the commit rule changes is the day it is needed, and a guard that
+arrives with the rule change is a guard nobody tested.
+
+### Staying in sync with the gist
+
+**The published copy is an inbound channel, not only an outbound one.** More than one tree runs this
+loop now, and a defect in the *pattern* is usually met somewhere else first — the `**Status`
+front-matter collision in §6 was found while adopting the loop here, not in the tree it came from. A fix
+sitting upstream unadopted is then the same failure the whole loop is about: something answered
+somewhere nobody looks. What stays one-way is the **content** — the gist never reads our items, only our
+machinery.
+
+**Adopted through gist revision `fffbcc65653b0f46c3bb48808d5df14a4c28930b`, 2026-08-21.** That line is
+the baseline and it is ours to keep current: update it whenever an adoption lands, because a stale
+baseline silently re-diffs work already taken.
+
+**Check the digest before fetching anything.** A gist's own revision id is a digest of the whole thing
+and is public, so the check costs one unauthenticated request; the same sha back means nothing arrived:
+
+```sh
+GIST=54b94bda01812be937b892146d1bb254
+curl -sf "https://api.github.com/gists/$GIST" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["history"][0]["version"])'
+```
+
+`history[0]` is the newest entry — check it against the gist's `updated_at` rather than trusting it,
+because getting the orientation backwards does not announce itself: the check would read `unchanged`
+forever while the channel looked healthy. A different sha means clone the gist and read the diff, and
+read it **for logic, not for prose**: nearly every line differs because our copy is parameterized for
+this tree.
+
+**Auto-adopt is the default, and it has one gate: does adopting move a fingerprint?** A fix to the
+machinery was found by someone running the same loop, so there is rarely a local reason to differ. But a
+change to `fingerprint()` in `triage-state.py` re-scores every marker already stamped, and those
+sections then read `revised` — our own adoption impersonating a reporter's revision, which is the one
+signal the ledger exists to carry. Run the ledger over **both** documents immediately after adopting; if
+nothing moved, it is done. If something moved and the ledger read all-`current` immediately *before* the
+adoption, the whole delta is the function and no prose changed — restamp to the new values and say so in
+the commit message. `--backfill` will not do it, deliberately (§6).
+
+**What must never be adopted is our own parameterization**: the `INBOX` / `HISTORY` / `PREFIX` and
+`FILE` / `RUNBOOK` defaults repointed at this tree, and every pointer to this file under its local name.
+Taking those aims the tools at documents that do not exist here.
 
 **Hooks cannot do this job.** Claude Code hooks fire on the agent's own lifecycle (`PreToolUse`,
 `PostToolUse`, `SessionStart`, `Stop`); a consumer editing a file triggers none of them. The trigger
@@ -122,11 +168,14 @@ a reporter puts before their next section do not count as changes. Four verdicts
 
 ### Why not git
 
-Two reasons. The loop **must not commit** here (§5), so a `HEAD` baseline would never advance and
-every run would re-triage everything. And a consumer may well commit their own addition, at which
-point `git diff HEAD` is empty and the loop sees nothing at all — that one is fatal on its own and
-survives any change to the commit rule. `git diff` and `git log -p` stay useful for *reading what
-changed*; correctness never depends on them.
+One reason is fatal on its own; the other is contingent on a policy the user sets. The fatal one: a
+consumer may well commit their own addition, at which point `git diff HEAD` is empty and the loop sees
+nothing at all. The contingent one: the loop **must not commit** here (§5), so a `HEAD` baseline would
+never advance and every run would re-triage everything — true today, and it would expire the day a
+standing triage-commit permit exists, as one now does in the tree the pattern came from. The
+distinction is kept rather than quietly dropped, because a design defended by two reasons is worth
+re-checking when one of them goes; this one survives on the first alone. `git diff` and `git log -p`
+stay useful for *reading what changed*; correctness never depends on them.
 
 The in-document ledger has properties no side-car state has: it works on an uncommitted tree,
 survives anyone's commits, travels with the repo, is legible to a human scanning for the backlog, and
@@ -264,8 +313,26 @@ input, and what it did>. <Where the rest landed, and why any candidate repair wa
 <!-- triaged: <version> · sha <the 12 hex digits the ledger prints for this section> -->
 ```
 
-Take the sha from `./scripts/triage-state.py`, never by hand. Keep example ids as placeholders — a
-heading like `## S9` in a doc the ledger reads becomes a phantom section and pushes `--next` past it.
+**Stamp the fingerprint the section carried *before* the reply existed**, and do **not** copy the value
+the ledger prints once the reply is in place and the marker is not: with no marker to stop at,
+`reply_end()` falls back to the single-paragraph rule and paragraphs two onward of the reply leak into
+the hash. That is not an edge case — it is the normal state of every section at the moment you go to
+stamp it, and any reply longer than one paragraph is affected, which is most of the ones worth writing.
+
+**The recipe needs nothing remembered.** Stamp twelve zeros at the end of the reply as you write it:
+
+```
+<!-- triaged: <version> · sha 000000000000 -->
+```
+
+then run the ledger. With a marker present the reply is excluded whole, so the `revised` line prints the
+true fingerprint — `sha <real>  (was 000000000000)` — and that is the value to paste back. Re-run, and
+`current` is the confirmation. **Do not reach for `--backfill` here**: it computes the same contaminated
+hash and stamps it where the mistake reads `current` forever (§6). It is for replies that predate the
+ledger, and only those.
+
+Keep example ids as placeholders — a heading like `## S9` in a doc the ledger reads becomes a phantom
+section and pushes `--next` past it.
 
 **Append, never edit.** The reporter's prose is evidence and stays byte-for-byte; the reply is added
 above it, and nothing in the report is re-wrapped, corrected or trimmed, not even a factual error —
@@ -399,6 +466,36 @@ in, and every one of them is still live in the scripts here because they are the
 - **A marker can carry a sha that never matched its section.** Establish that the prose is unchanged
   before restamping by hand; `--backfill` deliberately refuses to, because silently restamping a
   `revised` section is how a genuine re-triage signal gets erased.
+- **A document footer after the last section is archived as that section's prose.** A body runs to the
+  next heading, so an inbox ending in a line like *One item is open: S13.* hands that line to the last
+  item — and the move **verifies clean**, because the footer sat inside the fingerprint on both sides of
+  it. It is the *"a document's own title is not a group heading"* entry at the other end of the file:
+  **document furniture inside a section span**, invisible to the check for the same reason both times.
+  Repair: delete the footer from the history file, re-run the ledger for the new value, hand-edit the
+  marker — the one case where `revised` over unchanged prose is expected, because the removed line was
+  never the reporter's — then restore the inbox's own footer, which the archived copy took with it.
+  Archiving the last item of a group also leaves that group's `# ` heading and dateline behind with
+  nothing under them; remove those by hand. The general shape: **a section span is bounded by headings,
+  and a document has furniture at both ends that is not a heading.**
+- **`--backfill` stamps the wrong sha on a reply you just wrote.** It computes the fingerprint from the
+  file as it stands, and with no marker present `reply_end()` falls back to the single-paragraph rule,
+  so paragraphs two onward of a fresh multi-paragraph reply are hashed as if the reporter had written
+  them. One root cause, two symptoms, and which one you get depends on where the marker lands.
+  Hand-copying the printed value puts the marker at the end of the reply, where it terminates the reply
+  properly: the next run recomputes over the reporter's prose alone and the section reads `revised`
+  forever against text nobody edited — loud, and self-announcing. `--backfill` instead appends the
+  marker to the end of the `**Status` *paragraph*, so `reply_end()` stops at paragraph one on every
+  later run exactly as it did on this one, the contamination is **stable**, and the section reads
+  `current`. Nothing ever reports it, and the stored fingerprint permanently covers our own reply prose.
+  So the reassuring advice — re-run the ledger and confirm `current` — is exactly the check that passes
+  in the worse case. **A stable wrong answer outranks an unstable one.** Use the twelve-zero placeholder
+  in §3 Step 3 instead.
+- **An off-switch spelled `${VAR:-default}` is not an off-switch.** The watcher's `BRANCH` knob accepts
+  an empty value meaning *never pause*, and `${BRANCH:-main}` silently turns that back into `main` — the
+  one setting an adopter reaches for to disable the behaviour enables it instead. `${BRANCH-main}`,
+  without the colon, is the whole fix, and it is what `scripts/watch-inbox.sh` carries. It surfaced only
+  because the off-switch was *run* rather than read: the two spellings behave identically for every
+  value except the empty one nobody tests.
 - **A preamble line beginning `**Status` is read as a block reply** and marks every id it names
   answered — `**Status:** intake for field notes — S1 and S2 are open` inverts the loop's one job by a
   line of prose nobody would look at twice. The block-reply rule is right, so the fix is on the

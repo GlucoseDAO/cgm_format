@@ -59,14 +59,17 @@ ledger's marker, which carries a fingerprint of the reporter's text and nothing 
 
 **Status — accepted; shipped in <version>.** Reproduced: <what was run and what it did>. <Where the
 rest landed, and why any candidate repair was rejected.>
-<!-- triaged: <version> · sha <the 12 hex digits the ledger prints for this section> -->
+<!-- triaged: <version> · sha <12 hex digits — stamp 000000000000 first, see below> -->
 ```
 
 Keep the placeholders as placeholders: an id that parses (`## S9`) makes the ledger see a phantom
 section and `--next` skip to 10.
 
-Take the sha from `./scripts/triage-state.py`, never by hand. A reply written before the marker
-existed reads as `unmarked-reply`; `--backfill` stamps those and only those. Once the reply is in,
+Stamp `sha 000000000000` as you write the reply, then run `./scripts/triage-state.py`: with a marker
+present the reply is excluded whole, so the `revised` line prints the section's true fingerprint and
+that is the value to paste back. Never copy the sha the ledger prints while the reply is in and the
+marker is not — the hash then covers your own paragraphs two onward. `--backfill` computes it the same
+way, so it is for replies that predate the ledger and only those. Once the reply is in,
 archive with `./scripts/triage-archive.py S<n>` and add the item's one-line contents entry to
 `FEEDBACK_HISTORY.md` — the archiver deliberately does not write that line, because naming what an
 item was and how it ended is editorial.

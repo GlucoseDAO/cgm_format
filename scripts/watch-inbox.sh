@@ -19,11 +19,22 @@
 # Nothing needs installing: `stat` polling is enough at this cadence, and it works where inotify-tools,
 # entr, fswatch and python watchdog are all absent.
 #
+# If your triage pass is permitted to commit, it should only watch while the tree is on the branch
+# that permit covers: a feature branch — or a detached HEAD — is somebody's own work, and unattended
+# triage commits would land on top of whatever they are mid-way through. Off that branch the watcher
+# idles at BRANCH_PAUSE instead of POLL, says so once, and says so again when it resumes. It does not
+# touch `last` while paused, so an edit written during the pause is still picked up on the way back
+# rather than lost. Set BRANCH to your own name for it, or to the empty string to switch the whole
+# behaviour off; outside a git work tree there is no branch to speak of and it never pauses. In
+# cgm-format the pass does not commit (CONSUMER_TRIAGE_LOOP.md §5), so the guard is inert on `main`
+# and is carried for the day that rule changes.
+#
 # This is the only one of the three that is really bash. The ledger is Python and is invoked through
 # $PYTHON below rather than as a bare path, so neither its exec bit nor its shebang is load-bearing
 # (TRIAGE_LOOP.md § 5 — the extension gotcha).
 #
-#   FILE=<path> COOLDOWN=<seconds> POLL=<seconds> RUNBOOK=<path> CAP=<n> ./watch-inbox.sh
+#   FILE=<path> COOLDOWN=<seconds> POLL=<seconds> BRANCH=<name|empty> BRANCH_PAUSE=<seconds> \
+#     RUNBOOK=<path> CAP=<n> ./watch-inbox.sh
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -35,14 +46,48 @@ LEDGER=${LEDGER:-$HERE/triage-state.py}
 RUNBOOK=${RUNBOOK:-docs/CONSUMER_TRIAGE_LOOP.md}
 COOLDOWN=${COOLDOWN:-150}
 POLL=${POLL:-10}
+BRANCH=${BRANCH-main}          # `-`, not `:-`: BRANCH= is an explicit "never pause", not an unset
+BRANCH_PAUSE=${BRANCH_PAUSE:-900}
 CAP=${CAP:-8}
 
+# The tree to ask about is the one holding the watched file, not the one holding this script — the
+# three scripts may live anywhere, including outside the repo they serve.
+REPO=$(cd "$(dirname "$FILE")" 2>/dev/null && pwd || echo "$PWD")
+# Answered once: a directory does not become a work tree while the watcher runs, and if it is not one
+# now then `branch` means nothing here and the pause must never fire.
+if [ -n "$BRANCH" ] && git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    watch_branch=1
+else
+    watch_branch=0
+fi
+
 mtime() { stat -c %Y "$FILE" 2>/dev/null || stat -f %m "$FILE" 2>/dev/null || echo 0; }
+# A detached HEAD has no symbolic ref, and is no more a place to commit unattended than a branch is.
+current_branch() { git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached HEAD)"; }
 
 last=$(mtime)
 dirty=0
+paused=""
 
 while true; do
+    if [ "$watch_branch" = 1 ]; then
+        on=$(current_branch)
+        if [ "$on" != "$BRANCH" ]; then
+            # Announce the transition once. A pause nobody can see reads as a dead watcher, and
+            # repeating it every quarter hour would be the noise the event filter exists to avoid.
+            if [ "$paused" != "$on" ]; then
+                paused=$on
+                echo "${FILE##*/} watch paused: tree is on $on, not $BRANCH — a branch is the human's own work"
+            fi
+            sleep "$BRANCH_PAUSE"
+            continue
+        fi
+        if [ -n "$paused" ]; then
+            paused=""
+            echo "${FILE##*/} watch resumed: back on $BRANCH"
+        fi
+    fi
+
     sleep "$POLL"
     now=$(mtime)
 
