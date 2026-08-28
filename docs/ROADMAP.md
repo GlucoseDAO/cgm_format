@@ -248,3 +248,42 @@ on a path that already behaved this way. Nothing removed, renamed or retyped; `C
 So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ---
+
+## RM15 — network failures escape as third-party exceptions
+
+**Severity:** medium · **Status:** open · **Owner:** unassigned
+
+Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
+
+`download_nightscout` and `from_nightscout_url` let every transport failure escape raw: connect
+errors, timeouts, `httpx.HTTPStatusError` and `json.JSONDecodeError`. So a caller must import `httpx`
+itself to catch them — which means taking a dependency the library deliberately keeps behind the
+`cli` extra, in order to handle errors from a library that hides it. `sugar-sugar` does exactly this
+and reports having to match on `type(exc).__name__` substrings to classify a failure, which is what
+an absent contract looks like from the outside.
+
+Everything else in the interface raises a typed error from `interface/cgm_interface.py`
+(`MalformedDataError`, `UnknownFormatError`, `ZeroValidInputError`, `MultiTrackSourceError`). The
+network path is the one surface that does not, and it is the surface most likely to fail in normal
+use.
+
+**Surfaced rather than repaired**, because the shape is a design decision:
+
+- A new `NightscoutNetworkError` hierarchy is additive and would be the obvious answer, but it has to
+  decide whether it wraps *transport* failures only or also HTTP status failures, and whether the
+  original exception is chained or swallowed. Chaining keeps `httpx` in the traceback, which is most
+  of what the wrapper was meant to spare the caller.
+- Reusing `MalformedDataError` is wrong: a 502 is not malformed data, and collapsing the two loses
+  the distinction a caller needs to decide whether retrying makes sense.
+- A generic `CGMDownloadError` covering every future downloader is the most useful shape and the one
+  hardest to get right before a second downloader exists. Nightscout is the only one today.
+
+The token-redaction half of this shipped already (`_raise_for_status_without_token`), because a
+credential in a log line is a defect rather than a design question. That fix deliberately preserves
+`httpx.HTTPStatusError` as the type, so whatever this item decides is not constrained by it.
+
+**Legality:** additive — new exception types beside the existing ones, nothing removed or retyped. So
+**minor**. Changing what an existing call already raises would be major, and that is the version to
+avoid.
+
+---

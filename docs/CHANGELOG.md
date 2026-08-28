@@ -11,6 +11,61 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.12.2 — 2026-08-28
+
+**Patch.** Nightscout repairs, all of them defects on paths that already behaved this way. Nothing
+added that a consumer reads, nothing removed, nothing retyped; `CGM_SCHEMA` untouched. **If you use
+`from_nightscout_url` or `parse_nightscout`, upgrade** — on 0.12.0 the URL import fails outright on
+most real instances.
+
+Reported by `sugar-sugar` as S2–S5 (`docs/FEEDBACK_HISTORY.md`), each reproduced against the code
+before being touched, each fix carrying a test that was run against the unfixed code and watched to
+fail.
+
+### The URL import was broken for most instances
+
+`_parse_nightscout_treatments_json` handed heterogeneous dicts to `pl.DataFrame` with no schema, so
+polars inferred dtypes from the first 100 records. Treatments are heterogeneous by design — a Temp
+Basal carries `rate` and no `carbs`, a Meal Bolus the reverse — so a column is routinely null for a
+long opening run, types as `Null`, and raises `ComputeError` on the first real value. Any closed-loop
+user who logs carbs rarely hit it. `NIGHTSCOUT_TREATMENTS_JSON_DTYPES` now declares the six fields,
+and `_nightscout_number()` coerces the numeric ones — which also recovers the events some uploaders
+send as numeric strings, previously cast to null and dropped without a word.
+
+`download_nightscout` now passes `follow_redirects=True`. httpx defaults it to `False`, unlike
+requests, so every redirecting host — `http://` to `https://`, apex to `www`, a PaaS hostname to its
+canonical domain — failed rather than working.
+
+### Errors now say what actually happened
+
+Routing between the JSON and CSV branches asked whether `"sgv"` appeared in the first 2000
+characters. An empty account returns `[]` and an auth failure returns an object; neither contains it,
+so both were parsed as CSV and reported as a missing `'Glucose (mg/dL)'` column. Routing now asks
+whether the payload parses as JSON, and a Nightscout error object raises `MalformedDataError`
+carrying the server's own message. The `ZeroValidInputError` for an empty account is reachable for
+the first time.
+
+### Data that should not have left the machine, and readings that should not have been dropped
+
+`from_nightscout_url` without `output_dir` used `mkdtemp` and never cleaned up, leaving a patient's
+full CGM record in `/tmp` after every call. It now uses `TemporaryDirectory`; passing `output_dir`
+still keeps the files.
+
+httpx builds `HTTPStatusError` messages from the full request URL, and the Nightscout read token
+travels as `?token=`, so any caller logging a failed download wrote a live credential to its logs.
+The token is now redacted, and the exception type is preserved so existing `except
+httpx.HTTPStatusError` handlers keep working.
+
+Entries omitting `type` — normal for some xDrip+ and Loop uploaders — had every row skipped, and an
+`sgv` of `0` was treated as absent rather than as the sensor-error value it is. Both are fixed. A
+profile endpoint that refuses no longer fails the whole import, since the profile is discarded
+anyway; it warns and names what was skipped.
+
+`[project.urls]` is set, so `pip show cgm-format` gives a repository link.
+
+**Not in this release:** wrapping network failures in a library exception type, filed as RM15. It is
+a design decision rather than a defect — see the item for why each candidate shape is wrong.
+
 ## 0.12.1 — 2026-08-28
 
 **Patch.** Documentation only: no code, schema or CLI change, and emitted frames are byte-identical

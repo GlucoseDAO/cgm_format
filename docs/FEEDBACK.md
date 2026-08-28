@@ -140,6 +140,29 @@ package. Every claim here was reproduced by running the code, not by reading it.
 
 ## S2 — Nightscout URL import fails outright on any real instance — `ComputeError` on treatments
 
+**Status — accepted; fixed in 0.12.2.** Reproduced before anything was changed, with a control: your
+106-record payload raises `ComputeError` on the current code, and the same payload with the null run
+shortened to 50 parses. So it is the inference window, confirmed, and not the int/float mix that also
+occurs in this data.
+
+Fixed as you proposed. `NIGHTSCOUT_TREATMENTS_JSON_DTYPES` (`formats/nightscout.py`) declares the six
+fields and `_parse_nightscout_treatments_json` passes it; `Float64` is what
+`_treatments_json_to_unified` already casts the four numeric ones to, so no downstream semantics
+move. The empty returns carry the same schema, so column presence no longer depends on whether any
+row survived — the `if "insulin" in columns` guards were doing that work by accident.
+
+`_nightscout_number()` is in, and your argument for it over `infer_schema_length=None` is the reason:
+a numeric string infers as `String`, the downstream `cast(Float64, strict=False)` nulls it, and the
+event disappears with no warning, which our own §5 forbids. Your `bool` exclusion turned out to
+matter more than it reads — the old path *did* coerce `True` into a dose, and the test for it fails
+on the pre-fix code.
+
+Four tests in `tests/test_nightscout.py::TestTreatmentsJsonSchema`, built in-test rather than from a
+fixture because the defect is a property of record ordering and no committed fixture pins that. All
+four were run against the unfixed code and watched to fail first.
+
+<!-- triaged: 0.12.2 · sha 2a82a4449dff -->
+
 **Severity: blocking.** This is the bug a player actually hit; it takes down the whole
 "paste your Nightscout URL" feature. Reported against a live Nightscout 15.0.3 instance
 (URL withheld — it serves a real patient's data).
@@ -257,6 +280,18 @@ without it.
 
 ## S3 — Redirects are not followed, so `http://` and apex→www instances fail
 
+**Status — accepted; fixed in 0.12.2.** Confirmed against the pinned httpx 0.28.1:
+`follow_redirects` defaults to `False`, and `download_nightscout` was not passing it.
+`nightscout_downloader.py` now passes `follow_redirects=True`.
+
+No integration test, because exercising a real redirect needs either a live redirecting host or a
+mocked transport, and mocking the thing under test is what our §6 forbids. What is pinned instead is
+the argument itself: `TestDownloaderRedirects` captures the client's construction kwargs and asserts
+`follow_redirects is True`. It fails on the pre-fix downloader, where the kwargs were `timeout` and
+`headers` alone.
+
+<!-- triaged: 0.12.2 · sha 96491a896133 -->
+
 **Severity: high, one-line fix.**
 
 `nightscout_downloader.py:115` constructs the client as:
@@ -279,6 +314,26 @@ Fix: `httpx.Client(timeout=timeout, headers=headers, follow_redirects=True)`.
 ---
 
 ## S4 — An empty or non-JSON API response is misrouted into the CSV parser
+
+**Status — accepted; fixed in 0.12.2.** Both cases reproduced exactly as you reported them, including
+the mangled column names: `[]` came back as `Missing required column: 'Glucose (mg/dL)'. Got columns:
+['[]']`, and the 401 body split on commas into two.
+
+Routing now asks whether the payload parses as JSON rather than whether `"sgv"` appears in the first
+2000 characters. `_nightscout_json_array` unwraps it: an error object raises `MalformedDataError`
+carrying the server's own message, so an operator debugging a 401 is told `Unauthorized` instead of
+being shown a CSV column, and the empty case reaches the `ZeroValidInputError` that was unreachable.
+
+One thing your suggested fix would have broken, so it is worth naming: "parses as JSON" alone lets a
+CSV through, because `json.loads("123")` succeeds and a vendor CSV can start with a number. The check
+requires a `[` or `{` opener as well, and two tests pin that boundary in both directions — one on the
+committed exporter CSV, one on a bare number.
+
+Your latent variant is fixed by the same change and had a test written for it: an entries array whose
+first records are `cal` or `mbg` was misrouted identically, and since the downloader writes with
+`indent=2`, 2000 characters is only about five records.
+
+<!-- triaged: 0.12.2 · sha b0dcf440e70f -->
 
 **Severity: medium (bad diagnostics, unreachable guard).**
 
@@ -319,6 +374,32 @@ and let the empty case reach the existing `ZeroValidInputError`.
 ---
 
 ## S5 — Smaller things noticed in the same code
+
+**Status — accepted in part; five fixed in 0.12.2, one filed as
+[RM15](ROADMAP.md).** Each was reproduced before being touched, and each fix has a test that fails on
+the pre-fix code.
+
+Fixed: the temp directory (now `TemporaryDirectory`, parsed inside the context — a test asserts the
+directory is gone afterwards and another asserts `output_dir` still keeps the files); the token leak
+(`_raise_for_status_without_token` redacts the `?token=` parameter and re-raises the *same* exception
+type, so your existing `except httpx.HTTPStatusError` keeps working); records omitting `type`; `sgv`
+of `0`, which is now kept as the sensor-error value it is rather than falling through `or` to
+`glucose`; and the profile endpoint, which now warns and continues instead of failing an import on a
+result that is thrown away. `[project.urls]` is added, so `pip show` gives a repository link.
+
+Filed rather than fixed: wrapping network failures in a library exception type. You are right that
+matching on `type(exc).__name__` is what an absent contract looks like from outside, and right that
+it is ours — the network path is the only surface here that does not raise a typed error. But the
+repair is a design decision rather than a defect: it has to settle whether it covers transport
+failures only or HTTP status too, and whether it chains the original (which keeps `httpx` in the
+traceback, defeating most of the point) or swallows it. Reusing `MalformedDataError` is wrong — a 502
+is not malformed data — and the genuinely useful shape, a downloader-agnostic error, is the one
+hardest to get right while Nightscout is the only downloader. RM15 has the argument written out.
+
+The token redaction deliberately preserves `httpx.HTTPStatusError` rather than introducing a type, so
+RM15 is not pre-empted by it.
+
+<!-- triaged: 0.12.2 · sha 7449a052106f -->
 
 - **`entry.get("sgv") or entry.get("glucose")`** (`format_parser.py:1443`) — an `sgv` of `0`
   is falsy, so the row falls through to `glucose`/`None` and is dropped. `0` is not a
