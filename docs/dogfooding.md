@@ -234,3 +234,31 @@ no longer regenerating the reference so much as re-deciding it.
 
 What would settle it: which `glucose_data_processing` tree actually produced the committed CSV, and
 whether it is reachable from a clean checkout.
+
+### F17 — the abstract parser's signatures omit selectors its own docstrings name
+
+Found while probing `parse_tracks` for S1 (now `docs/FEEDBACK_HISTORY.md`), on 0.12.0.
+
+`CGMParser.parse_tracks(cls, file_path)` and `CGMParser.parse_corpus(cls, root)` in
+`interface/cgm_interface.py:702` and `:737` take a path and nothing else. The concrete
+implementations take more: `FormatParser.parse_tracks(file_path, track=None)` and
+`FormatParser.parse_corpus(root, track=None, subjects=None)`. The abstract docstrings already talk
+about the missing parameters — `CGMParser.list_subjects` at `:773` calls itself "the companion to
+`parse_corpus(root, subjects=[...])`", a call its own base class cannot express — and
+`docs/USAGE.md` documents `parse_tracks(path, track="mean")` as the way to reach the synthetic mean,
+which is the only way to reach it at all.
+
+Nothing breaks: Python does not enforce a subclass signature, and every caller uses the concrete
+class. What it costs is the thing the ABC is for — a reader taking `CGMParser` as the contract sees
+an API without subject or track selection, and the charter's *"selecting a subject is part of the
+category, not a convenience"* is exactly the claim the abstract signature contradicts.
+
+**Surfaced rather than repaired**, because the repair is a decision about what the ABC is: the
+minimal category contract (path in, frames out) with the selectors as concrete-only conveniences, or
+the full published API. Both readings are defensible and the code currently reads as neither
+deliberately — the divergence is repeated twice and documented nowhere. Adding the parameters is
+additive and would be a minor; declaring the minimum in the class docstring is a patch. Picking one
+is a maintainer call.
+
+What would settle it: whether any implementation of `CGMParser` other than `FormatParser` is
+expected to exist. If not, the ABC is documentation, and it should read like the API it documents.

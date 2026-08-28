@@ -11,6 +11,34 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## 0.12.1 — 2026-08-28
+
+**Patch.** Documentation only: no code, schema or CLI change, and emitted frames are byte-identical
+to 0.12.0. This is the first consumer-triage batch (`docs/CONSUMER_TRIAGE_LOOP.md`), answering **S1**
+from `sugar-sugar`.
+
+### `track="mean"` reports composition, not validity
+
+`docs/USAGE.md` now says so where it documents `parse_tracks`. `Quality.TRACK_MERGE` marks which rows
+were synthesized from two readings, and for that it is correct; nothing in the API says whether the
+two sensors were measuring the same quantity, which is a per-subject property and the one that
+decides whether averaging them is honest.
+
+Measured through `parse_tracks` on the published CGMacros corpus (45 subjects, 629,605 overlapping
+samples), fitting `libre = slope · dexcom + intercept` per subject: median slope 0.70 over a
+0.10–1.16 range, median Pearson r 0.82. Thirty-one subjects sit under slope 0.8 and 15 under r 0.7;
+exactly two fall inside slope 0.9–1.1 with r > 0.9. For the rest the mean is not two reads of one
+truth averaged, and the frame looks no different.
+
+The API half — a `TrackAgreement` measurement and a warning on `mean` when the tracks disagree — is
+filed as **RM14** in `docs/ROADMAP.md`, additive and sized minor. It is not in this release; until it
+lands the check is the caller's to run, which is what `USAGE.md` now tells them.
+
+S1 is archived verbatim in `docs/FEEDBACK_HISTORY.md`. A separate observation from probing it —
+`CGMParser.parse_tracks` / `parse_corpus` omitting selectors their own docstrings name — is recorded
+as **F17** in `docs/dogfooding.md`, surfaced rather than repaired because the repair is a decision
+about what the ABC is.
+
 ## 0.12.0 — 2026-08-18
 
 **Minor.** A new `original_glucose` service column, a new `Quality.GRID_RETIMED` member, a new

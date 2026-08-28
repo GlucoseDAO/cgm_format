@@ -686,6 +686,17 @@ Every row it synthesizes from two readings is flagged `Quality.TRACK_MERGE`. Row
 sensor reported are deliberately **not** flagged — they are that sensor's real reading, unaltered —
 so the composition is inspectable per row rather than something you have to infer.
 
+**Composition is not validity, and the library reports only the first.** `TRACK_MERGE` says a row was
+built from two readings; it does not say the two sensors were measuring the same quantity, which is a
+per-subject property and the one that decides whether averaging them is honest. It often is not:
+fitting `libre = slope · dexcom + intercept` per subject on the published CGMacros corpus (45
+subjects, 629,605 overlapping samples, measured through `parse_tracks` on 2026-08-21) gives a median
+slope of 0.70 with a range of 0.10–1.16 and a median Pearson r of 0.82 — 31 subjects under slope 0.8,
+15 under r 0.7, and only two inside slope 0.9–1.1 with r > 0.9. For the rest, `mean` is not two reads
+of one truth averaged; it is two different estimators blended into a third matching neither, and the
+frame looks exactly as clean as any other. Compare the tracks yourself before opting in — an API for
+asking is filed as RM14 in [ROADMAP.md](ROADMAP.md), and until it lands the check is yours to run.
+
 ### Native cadence
 
 Neither corpus parser resamples. CGMacros ships on a 1-minute grid, so pass the interval explicitly
