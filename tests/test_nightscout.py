@@ -453,3 +453,40 @@ class TestTreatmentsJsonSchema:
         from cgm_format.formats.nightscout import NIGHTSCOUT_TREATMENTS_JSON_DTYPES
         empty = FormatParserPrime._parse_nightscout_treatments_json("[]")
         assert set(empty.columns) == set(NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
+
+
+class TestDownloaderRedirects:
+    """download_nightscout must follow redirects — S3 (docs/FEEDBACK.md).
+
+    httpx defaults ``follow_redirects`` to False (unlike requests), so an
+    instance that redirects — http to https, apex to www, a PaaS hostname to its
+    canonical domain — failed at ``raise_for_status`` instead of working.
+
+    This captures the client's construction kwargs rather than mocking the parse:
+    the transformation under test is untouched, and the boundary being pinned is
+    exactly the argument that was missing.
+    """
+
+    def test_client_is_constructed_with_follow_redirects(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        httpx = pytest.importorskip("httpx", reason="httpx is an optional (cli/dev) dependency")
+        from cgm_format import nightscout_downloader
+
+        captured: dict[str, object] = {}
+
+        def spy(*args: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            raise RuntimeError("stop before any network call")
+
+        # httpx is imported inside download_nightscout (the guarded optional-dependency
+        # pattern), so the name to patch lives on httpx itself, not on the downloader.
+        monkeypatch.setattr(httpx, "Client", spy)
+
+        with pytest.raises(RuntimeError, match="stop before any network call"):
+            nightscout_downloader.download_nightscout(
+                "https://example.invalid", output_dir=Path("/tmp"), days=1
+            )
+
+        assert captured.get("follow_redirects") is True, (
+            "download_nightscout must pass follow_redirects=True; httpx defaults it to False, "
+            f"so a redirecting instance fails. Client kwargs were: {sorted(captured)}"
+        )
