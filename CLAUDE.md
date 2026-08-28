@@ -654,8 +654,11 @@ same applies when the user corrects a preference: it goes in §10, in their word
   directory — the archiver now **imports** the ledger's span helpers by path (`importlib`, because of
   the hyphen), not merely resolving it, and the watcher shells out to it the same way. Moving either
   file alone breaks the archiver at import time. Their only local divergence from the gist is the
-  default `INBOX` / `FILE`, derived from the script's own location instead of `$PWD`. Nothing arms the
-  watcher; that is a deliberate operational choice, not an oversight.
+  default `INBOX` / `FILE`, derived from the script's own location instead of `$PWD`.
+- **Arm the watcher at the start of a triage session** — `Monitor` on `scripts/watch-inbox.sh`,
+  `persistent: true` (2026-08-28). It used to say here that nothing arms it and that this was a
+  deliberate choice; that line was read as an instruction not to, and it was wrong. An unarmed
+  watcher means a report that lands mid-session is not seen until somebody runs the ledger by hand.
 - Section spans in both scripts are fence-aware since the 2026-08-28 sync: a `#` at column 1 inside a
   fenced block is a reporter's comment, not a heading. The ledger prints `STRUCTURE` lines on stderr
   for an unclosed fence or a `## Sn` swallowed by one, and the archiver **refuses to move anything**

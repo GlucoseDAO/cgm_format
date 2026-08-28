@@ -51,8 +51,8 @@ what they need, and a `uv run` wrapper around them only adds a way to fail.
 
 ### Arming the watcher
 
-Nothing arms it for you. Under this harness the `Monitor` tool turns each stdout line into a
-notification that re-invokes the agent:
+**Arm it at the start of a triage session.** Under this harness the `Monitor` tool turns each stdout
+line into a notification that re-invokes the agent:
 
 ```
 Monitor({
