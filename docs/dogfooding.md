@@ -262,3 +262,46 @@ is a maintainer call.
 
 What would settle it: whether any implementation of `CGMParser` other than `FormatParser` is
 expected to exist. If not, the ABC is documentation, and it should read like the API it documents.
+
+### F18 — importing the core eagerly imports pandas and pyarrow when they are present
+
+Found on 0.12.2 while checking that this session's parser edits had not breached the minimal-core
+tier. They had not; this is pre-existing, and dates to the first MVP commit (`68b9a45`).
+
+`interface/cgm_interface.py:22-27` probes optional-dependency availability at module import:
+
+```python
+try:
+    import pyarrow as pa
+    import pandas as pd
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
+```
+
+`import cgm_format` therefore pulls pandas and pyarrow into the process of every consumer that has
+them installed, whether or not `to_pandas()` is ever called. Measured: `import polars` alone leaves
+`sys.modules` free of both; `import cgm_format` does not.
+
+**This is legal and it still costs something.** §5 permits exactly this shape — a guarded import of
+an optional dependency — and the charter's requirement is that the core import *cleanly* with only
+Polars, which it does: the `except ImportError` is what makes that true. So this is not a violation
+and not a bug. What it is: a minimal-core library making every consumer pay pandas' import time and
+memory for a conversion helper most of them never call, which is the cost the tier exists to avoid.
+
+**Surfaced rather than repaired**, because the obvious repair has a wrinkle worth a decision. Moving
+the import inside `to_pandas()` fixes the eagerness but changes what `_PANDAS_AVAILABLE` means — it
+is currently a module-level fact other code can branch on, and a lazy probe makes it a function call
+with different timing. Whether anything should branch on availability at all, rather than just
+letting `to_pandas()` raise its `ImportError` with install instructions, is the actual question.
+
+Checked while writing this, so it is settled: `_PANDAS_AVAILABLE` has exactly two readers,
+`to_pandas()` (`:1103`) and `to_polars()` (`:1115`), and nothing outside this module reads it. So the
+flag can go entirely and the import moves into the two functions that need it — a patch, no API
+change, and the `ImportError` those two already raise is the same one the guard would produce.
+
+One thing to fix in the same pass rather than after: both messages are *"pandas and pyarrow are
+required for this function."* with no install instructions, which §5 asks for by name — the rule is a
+clear `ImportError` **with install instructions**, as `nightscout_downloader._ensure_httpx` does it.
+`to_polars` also documents itself as raising *"If arrow and pandas are not installed"* while checking
+a flag named for pandas; the names should agree.
