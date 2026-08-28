@@ -34,8 +34,8 @@ Three scripts, all in `scripts/`, none packaged and none importable:
 | | |
 |---|---|
 | `scripts/watch-inbox.sh` | debounced watcher: one line of stdout when the file stops changing. The only one that is really bash |
-| `scripts/triage-state.py` | the ledger: which sections are new, revised, or already answered. Takes a path, so it reads the history file too; `--next` prints the next unclaimed `Sn` |
-| `scripts/triage-archive.py` | moves answered sections into the history file and **verifies** each fingerprint survived the move |
+| `scripts/triage-state.py` | the ledger: which sections are new, revised, or already answered. Takes a path, so it reads the history file too; `--next` prints the next unclaimed `Sn`. Also prints `STRUCTURE` lines on stderr when a fenced block breaks the section boundaries |
+| `scripts/triage-archive.py` | moves answered sections into the history file and **verifies** each fingerprint survived the move. **Refuses outright** on a `STRUCTURE` finding, before writing — a span ending at the wrong line moves the wrong bytes, and the verification cannot see that |
 
 They must stay in one directory: the archiver resolves the ledger relative to its own path, and the
 watcher shells out to it the same way. Their only divergence from the gist is that `INBOX` / `FILE`
@@ -87,7 +87,7 @@ sitting upstream unadopted is then the same failure the whole loop is about: som
 somewhere nobody looks. What stays one-way is the **content** — the gist never reads our items, only our
 machinery.
 
-**Adopted through gist revision `fffbcc65653b0f46c3bb48808d5df14a4c28930b`, 2026-08-21.** That line is
+**Adopted through gist revision `fd7c3b5e462fcc27c8f597b24f466738c1b42991`, 2026-08-28.** That line is
 the baseline and it is ours to keep current: update it whenever an adoption lands, because a stale
 baseline silently re-diffs work already taken.
 
@@ -105,6 +105,18 @@ because getting the orientation backwards does not announce itself: the check wo
 forever while the channel looked healthy. A different sha means clone the gist and read the diff, and
 read it **for logic, not for prose**: nearly every line differs because our copy is parameterized for
 this tree.
+
+**Clone, or pin the fetch to the revision the digest check just returned — the bare raw URL lies for a
+while after a write.** `<gist>/raw/<name>` is CDN-cached, so immediately after a push the API reports
+the new revision while every unversioned raw URL still serves the previous one, and `Cache-Control:
+no-cache` does not shift it. The two halves then disagree in the worst direction: the digest says
+*something arrived*, the files say *nothing changed*, and the natural reading is that the digest check
+is broken. `git clone` of the gist sidesteps it entirely and gives you `git diff <base>..<new>` for
+free, which is what the 2026-08-28 adoption used; `<gist>/raw/<version>/<name>` is correct straight
+away if you fetch instead.
+
+**Diff baseline-to-newest in one step.** Intermediate revisions are covered by the single range, so
+there is no reason to walk them one at a time.
 
 **Auto-adopt is the default, and it has one gate: does adopting move a fingerprint?** A fix to the
 machinery was found by someone running the same loop, so there is rarely a local reason to differ. But a
@@ -463,6 +475,35 @@ in, and every one of them is still live in the scripts here because they are the
   could not see it, because fingerprints cover the reporter's prose alone. The general lesson is worth
   more than the fix: **a verifier that checks one property will report success while a different
   property is being broken.**
+- **A `#` at column 1 inside a fenced code block used to end the section, and it splits reports in
+  half.** `BOUNDARY_RE` is `^#{1,2} ` and knew nothing about fences, so a comment written flush left in
+  a reporter's snippet — `# Parser(path) returns` above a commented expected value, the natural way to
+  label one — read as a heading. Same shape as the two *document furniture* entries above, reached from
+  the middle of a section rather than from either end, and it was the expensive one because **both
+  tools carried their own copy of the boundary scan**: the ledger hashed a truncated body, and the
+  archiver cut at the same line, moved half a section, and reported *"every fingerprint intact"* —
+  correctly, because a fingerprint covers the reporter's prose and both halves hash the same truncated
+  body. Upstream it happened twice before anyone noticed; the second time the stranded half began with
+  an unmatched **closer**, which inverted fence parity for the rest of the file and silently disabled an
+  unrelated guard below it. **The writing-side rule — *indent the comment* — was tried first and was
+  wrong**, because it has no owner for the case that matters: a `#` in your own reply you can indent,
+  one in a reporter's snippet you may not touch, and not editing their prose is the rule this loop will
+  not break. So `fenced_lines()` now tracks triple-backtick and `~~~` openers indented up to three
+  spaces, and **every span in both tools derives from it**; `triage-archive.py` imports them from the
+  ledger rather than keeping its own regex, because the two tools disagreeing about a boundary is the
+  whole mechanism. `fence_findings()` is the backstop for what it cannot parse — an unclosed block, or
+  a `## Sn` swallowed by one, which makes a section vanish from the roster rather than report a bad
+  verdict. Adopted here 2026-08-28; **no fingerprint in either document moved**, so this repo never
+  carried the damage. Verified on a copy rather than reasoned about: a section whose snippet holds a
+  flush-left comment hashes `1c1a0bfbf62f` under the new ledger and `5f32771c2fb4` under the old one,
+  the old value covering a body that stopped at the comment.
+- **`--next` must scan every file an id can be sitting in, and a hard-coded pair stops being one.** A
+  history file that grows past reading gets split — this document describes doing exactly that — and the
+  moment `FEEDBACK_HISTORY_PRE_1_0.md` exists beside `FEEDBACK_HISTORY.md`, a `--next` naming two files
+  cannot see the split-off half. It then hands out an id that is already taken and already has a reply
+  attached, which is what *"ids are never reused"* exists to prevent, and it fails silently in the worst
+  direction: the number looks freshly computed. `corpus()` globs on the history file's own stem instead,
+  subdirectories included, so a split needs no configuration.
 - **A marker can carry a sha that never matched its section.** Establish that the prose is unchanged
   before restamping by hand; `--backfill` deliberately refuses to, because silently restamping a
   `revised` section is how a genuine re-triage signal gets erased.
@@ -534,11 +575,13 @@ Read these off the tools rather than off this sentence, which is exactly the kin
 ./scripts/triage-state.py --next                   # the next unclaimed Sn, over BOTH files
 ```
 
-As of 2026-08-17: **S1 is open and unanswered** — filed on behalf of `sugar-sugar` against 0.10.0,
-about `parse_tracks(track="mean")` offering no way to learn whether averaging a subject's two sensor
-series is defensible. The next consumer id is **S2** and the next roadmap item is **RM14**, both
-computed rather than remembered. `FEEDBACK_HISTORY.md` is empty: no item has been answered yet, so no
-pass of this loop has run here.
+As of 2026-08-28 the inbox is **empty**, so nothing is owed. The first pass of this loop ran on
+2026-08-21 and answered S1 — `parse_tracks(track="mean")` offering no way to learn whether averaging a
+subject's two sensor series is defensible — as accepted, filing `RM14` and shipping the documentation
+half into `USAGE.md`; it is archived in `FEEDBACK_HISTORY.md` and reads `current` there. That batch's
+changelog entry is **0.12.1**, written on 2026-08-28 when the pass was found to have skipped Step 5.
+The next consumer id is **S2** and the next roadmap item is **RM15**, both computed rather than
+remembered; eight roadmap items are open, below the ten that would trigger the dev-start question.
 
 **An emptied inbox breaks id numbering unless the next id is pinned, and this is the one hazard the
 split introduces.** Once answered items move out, the live file's highest visible id is not the

@@ -314,8 +314,9 @@ this section; the generalized pattern it adapts is
 
 These three are the one part of the repo that does **not** run under `uv`: stdlib-only Python 3.11+
 and bash, importing nothing from the package, so the reason behind the always-`uv run` rule (the
-workspace environment) does not apply. They must stay in the same directory — the archiver resolves
-the ledger relative to its own path, and the watcher shells out to it the same way.
+workspace environment) does not apply. They must stay in the same directory — the archiver **imports**
+the ledger's span helpers by path rather than keeping its own copy of the boundary scan, and the
+watcher shells out to it the same way. Move one without the other and the archiver fails at import.
 
 ```sh
 ./scripts/triage-state.py                          # every item: new / revised / unmarked-reply / current
@@ -331,7 +332,7 @@ FILE=docs/FEEDBACK.md ./scripts/watch-inbox.sh     # one stdout line when the in
 defaults are derived from this script directory rather than from `$PWD`, so the tools work from
 anywhere in the tree; that is the only local change to them.
 
-Four things worth knowing before using them:
+Five things worth knowing before using them:
 
 - **`--backfill` is for replies that predate the ledger, and only those.** Pointed at a reply just
   written, it hashes paragraphs two onward of that reply as though the reporter had written them, and
@@ -347,6 +348,14 @@ Four things worth knowing before using them:
 - **The `.py` files are Python. Never `bash triage-state.py`** — bash ignores the shebang, executes
   the module docstring as commands, and `import hashlib` reaches ImageMagick's `import`, which
   silently writes 0-byte files named after each import into the working directory.
+- **A `STRUCTURE` line means a fenced block broke the section boundaries — repair the document, do
+  not work around it.** Spans are fence-aware (a `#` at column 1 inside a fence is a reporter's
+  comment, not a heading), and the ledger prints `STRUCTURE` on stderr for the two cases it cannot
+  parse: an unclosed fence, or a `## Sn` swallowed by one. The archiver refuses to move anything while
+  either holds, before it writes, because a span ending at the wrong line moves the wrong bytes and the
+  fingerprint check cannot see it — both halves of a cut report hash the same truncated body. Never
+  edit a reporter's prose to satisfy the tool; a missing fence usually means an earlier pass already
+  split a report.
 - **Rehearse an archive on copies, not with `--dry-run`.** The dry run returns before the write, so
   it never reaches the before/after fingerprint comparison that is the thing worth rehearsing:
   `INBOX=/tmp/copy.md HISTORY=/tmp/copy_HISTORY.md ./scripts/triage-archive.py S1`.

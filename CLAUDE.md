@@ -645,11 +645,17 @@ same applies when the user corrects a preference: it goes in §10, in their word
 - `data/.gitignore` ignores `input/` outright (F2); new vendor fixtures are not auto-tracked. The
   mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it is absent.
 - The triage-loop scripts (`scripts/triage-state.py`, `scripts/triage-archive.py`,
-  `scripts/watch-inbox.sh`, adopted 2026-08-17) must stay in one directory — the archiver resolves the
-  ledger relative to its own path and the watcher shells out to it the same way. Their only local
-  divergence from the gist is the default `INBOX` / `FILE`, derived from the script's own location
-  instead of `$PWD`. Nothing arms the watcher; that is a deliberate operational choice, not an
-  oversight.
+  `scripts/watch-inbox.sh`, adopted 2026-08-17, re-synced with the gist 2026-08-28) must stay in one
+  directory — the archiver now **imports** the ledger's span helpers by path (`importlib`, because of
+  the hyphen), not merely resolving it, and the watcher shells out to it the same way. Moving either
+  file alone breaks the archiver at import time. Their only local divergence from the gist is the
+  default `INBOX` / `FILE`, derived from the script's own location instead of `$PWD`. Nothing arms the
+  watcher; that is a deliberate operational choice, not an oversight.
+- Section spans in both scripts are fence-aware since the 2026-08-28 sync: a `#` at column 1 inside a
+  fenced block is a reporter's comment, not a heading. The ledger prints `STRUCTURE` lines on stderr
+  for an unclosed fence or a `## Sn` swallowed by one, and the archiver **refuses to move anything**
+  while either holds — the fingerprint check cannot see a span that ends at the wrong line. Neither
+  of this repo's two documents was affected; no stored fingerprint moved.
 
 ---
 
