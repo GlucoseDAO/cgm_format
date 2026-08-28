@@ -31,9 +31,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_httpx():  # type: ignore[no-untyped-def]
@@ -74,6 +78,34 @@ def _build_headers(api_secret: Optional[str]) -> dict[str, str]:
     return headers
 
 
+_TOKEN_QUERY_RE = re.compile(r"([?&]token=)[^&\s]*")
+
+
+def _raise_for_status_without_token(response: "httpx.Response") -> None:
+    """``raise_for_status`` with the read token stripped from the message.
+
+    httpx builds ``HTTPStatusError`` messages containing the full request URL, and the
+    Nightscout read token travels as a ``?token=`` query parameter. So any caller that
+    logs the exception -- which is the normal thing to do with a failed download --
+    writes a live credential into its logs (S5).
+
+    The exception type is preserved deliberately: callers already catching
+    ``httpx.HTTPStatusError`` keep working, and this is a redaction rather than a new
+    error contract.
+    """
+    if not response.is_error:
+        return
+    httpx = _ensure_httpx()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise httpx.HTTPStatusError(
+            _TOKEN_QUERY_RE.sub(r"\1<redacted>", str(exc)),
+            request=exc.request,
+            response=exc.response,
+        ) from None
+
+
 def download_nightscout(
     base_url: str,
     output_dir: Path = Path("."),
@@ -112,15 +144,28 @@ def download_nightscout(
 
     headers = _build_headers(api_secret)
 
-    with httpx.Client(timeout=timeout, headers=headers) as client:
+    # follow_redirects=True is not httpx's default (it is requests'), and every shape of
+    # Nightscout host redirects: http:// -> https://, apex -> www, a PaaS hostname 301ing to
+    # its canonical domain, trailing-slash normalisation. Without it those all die on the
+    # raise_for_status below with "Redirect response '301 Moved Permanently'" instead of
+    # working, and users type bare hostnames constantly (S3).
+    with httpx.Client(timeout=timeout, headers=headers, follow_redirects=True) as client:
         entries_resp = client.get(f"{base}/api/v1/entries.json", params=entry_params)
-        entries_resp.raise_for_status()
+        _raise_for_status_without_token(entries_resp)
 
         treatments_resp = client.get(f"{base}/api/v1/treatments.json", params=treatment_params)
-        treatments_resp.raise_for_status()
+        _raise_for_status_without_token(treatments_resp)
 
+        # The profile is fetched and then discarded -- it holds settings, not readings.
+        # So a permission that allows entries but denies profile must not fail the whole
+        # import on an endpoint whose result is thrown away (S5).
         profile_resp = client.get(f"{base}/api/v1/profile.json", params=profile_params)
-        profile_resp.raise_for_status()
+        if profile_resp.is_error:
+            logger.warning(
+                "Nightscout profile endpoint returned %s; continuing without it. "
+                "The profile holds settings rather than readings and is not used.",
+                profile_resp.status_code,
+            )
 
     entries_path = output_dir / "nightscout_entries.json"
     treatments_path = output_dir / "nightscout_treatments.json"

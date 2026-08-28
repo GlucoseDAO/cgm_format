@@ -3,6 +3,7 @@
 import csv
 import json
 import logging
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Union, ClassVar, Optional
 from io import StringIO
@@ -1506,10 +1507,20 @@ class FormatParser(CGMParser):
 
         rows: list[dict] = []
         for entry in records:
-            if entry.get("type") != "sgv":
+            # Skip a record that declares itself something else; keep one that declares
+            # nothing. Some xDrip+/Loop uploaders omit `type` entirely, and requiring it
+            # dropped every row of a payload carrying sgv and dateString on each record,
+            # reporting "No SGV entries found" on data that was entirely readings (S5).
+            entry_type = entry.get("type")
+            if entry_type is not None and entry_type != "sgv":
                 continue
             date_str = entry.get("dateString") or entry.get("sysTime")
-            sgv = entry.get("sgv") or entry.get("glucose")
+            # Explicit None checks, not `or`: sgv 0 is falsy, and while 0 is not a
+            # physiological reading it is a real sensor-error value. Falling through to
+            # `glucose` on it, then dropping the row, is a silent substitution (§2, §5).
+            sgv = entry.get("sgv")
+            if sgv is None:
+                sgv = entry.get("glucose")
             if date_str is None or sgv is None:
                 continue
             rows.append({"dateString": str(date_str), "sgv": sgv})
@@ -2005,23 +2016,34 @@ class FormatParser(CGMParser):
             download_nightscout,
         )
 
-        if output_dir is None:
-            import tempfile
-            tmp = Path(tempfile.mkdtemp(prefix="nightscout_"))
-        else:
-            tmp = Path(output_dir)
+        if output_dir is not None:
+            entries_path, treatments_path, _ = download_nightscout(
+                base_url=base_url,
+                output_dir=Path(output_dir),
+                count=count,
+                token=token,
+                api_secret=api_secret,
+                days=days,
+                timeout=timeout,
+            )
+            return cls.from_nightscout_exports(entries_path, treatments_path)
 
-        entries_path, treatments_path, _ = download_nightscout(
-            base_url=base_url,
-            output_dir=tmp,
-            count=count,
-            token=token,
-            api_secret=api_secret,
-            days=days,
-            timeout=timeout,
-        )
-
-        return cls.from_nightscout_exports(entries_path, treatments_path)
+        # No output_dir means the caller did not ask to keep the raw files, and those
+        # files are a patient's entire CGM record. mkdtemp never removed them, so every
+        # call left entries, treatments and profile JSON in /tmp indefinitely (S5).
+        with tempfile.TemporaryDirectory(prefix="nightscout_") as tmpdir:
+            entries_path, treatments_path, _ = download_nightscout(
+                base_url=base_url,
+                output_dir=Path(tmpdir),
+                count=count,
+                token=token,
+                api_secret=api_secret,
+                days=days,
+                timeout=timeout,
+            )
+            # Parse inside the context: the frame is in memory, the files are not needed
+            # after it, and returning from here is what triggers the cleanup.
+            return cls.from_nightscout_exports(entries_path, treatments_path)
 
     # ===== Serialization Methods =====
     

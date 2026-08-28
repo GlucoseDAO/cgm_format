@@ -537,3 +537,94 @@ class TestJsonRouting:
         """json.loads("123") succeeds, so the opener check is what keeps CSV out."""
         assert FormatParserPrime._is_nightscout_entries_json("123") is False
         assert FormatParserPrime._is_nightscout_entries_json("Glucose (mg/dL)\n120") is False
+
+
+class TestNightscoutSafetyAndTolerance:
+    """S5 items (docs/FEEDBACK.md): what the download leaves behind, and what it drops."""
+
+    def test_read_token_is_not_in_the_error_message(self) -> None:
+        """httpx puts the request URL in HTTPStatusError, and the token rides the URL."""
+        httpx = pytest.importorskip("httpx", reason="httpx is an optional (cli/dev) dependency")
+        from cgm_format.nightscout_downloader import _raise_for_status_without_token
+
+        secret = "SUPERSECRET-abc123"
+        request = httpx.Request(
+            "GET", f"https://ns.example.invalid/api/v1/entries.json?count=10&token={secret}"
+        )
+        response = httpx.Response(401, request=request, text="Unauthorized")
+
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            _raise_for_status_without_token(response)
+
+        assert secret not in str(excinfo.value), "the read token leaked into the exception message"
+        assert "<redacted>" in str(excinfo.value)
+
+    def test_healthy_response_passes_through(self) -> None:
+        httpx = pytest.importorskip("httpx", reason="httpx is an optional (cli/dev) dependency")
+        from cgm_format.nightscout_downloader import _raise_for_status_without_token
+        request = httpx.Request("GET", "https://ns.example.invalid/api/v1/entries.json")
+        _raise_for_status_without_token(httpx.Response(200, request=request, text="[]"))
+
+    def test_records_without_a_type_field_are_kept(self) -> None:
+        """Some xDrip+/Loop uploaders omit `type`; every row used to be skipped."""
+        import json
+        records = [{"dateString": f"2026-08-28T{h:02d}:00:00.000Z", "sgv": 100 + h}
+                   for h in range(6)]
+        expected = sorted(float(r["sgv"]) for r in records)
+
+        df = FormatParserPrime.parse_nightscout(json.dumps(records))
+        assert sorted(df["glucose"].drop_nulls().to_list()) == expected
+
+    def test_sgv_zero_is_not_treated_as_absent(self) -> None:
+        """0 is a sensor-error value, not a missing reading; `or` dropped it silently."""
+        import json
+        records = [{"type": "sgv", "dateString": "2026-08-28T00:00:00.000Z", "sgv": 0},
+                   {"type": "sgv", "dateString": "2026-08-28T00:05:00.000Z", "sgv": 120}]
+
+        df = FormatParserPrime.parse_nightscout(json.dumps(records))
+        assert sorted(df["glucose"].drop_nulls().to_list()) == [0.0, 120.0]
+
+    def test_raw_download_is_not_left_behind(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Without output_dir the raw JSON is a patient's record and must not survive."""
+        import json
+        seen: dict[str, Path] = {}
+
+        def fake_download(base_url: str, output_dir: Path, **kwargs: object) -> tuple[Path, Path, Path]:
+            seen["dir"] = Path(output_dir)
+            entries = Path(output_dir) / "nightscout_entries.json"
+            entries.write_text(json.dumps(
+                [{"type": "sgv", "dateString": f"2026-08-28T{h:02d}:00:00.000Z", "sgv": 110}
+                 for h in range(6)]))
+            treatments = Path(output_dir) / "nightscout_treatments.json"
+            treatments.write_text("[]")
+            profile = Path(output_dir) / "nightscout_profile.json"
+            profile.write_text("{}")
+            return entries, treatments, profile
+
+        monkeypatch.setattr(
+            "cgm_format.nightscout_downloader.download_nightscout", fake_download
+        )
+        df = FormatParserPrime.from_nightscout_url("https://ns.example.invalid")
+
+        assert len(df) > 0, "the parse must still work"
+        assert not seen["dir"].exists(), f"raw patient JSON left behind in {seen['dir']}"
+
+    def test_output_dir_is_still_honoured(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """A caller who asks to keep the files must still get them."""
+        import json
+
+        def fake_download(base_url: str, output_dir: Path, **kwargs: object) -> tuple[Path, Path, Path]:
+            entries = Path(output_dir) / "nightscout_entries.json"
+            entries.write_text(json.dumps(
+                [{"type": "sgv", "dateString": "2026-08-28T00:00:00.000Z", "sgv": 110}]))
+            treatments = Path(output_dir) / "nightscout_treatments.json"
+            treatments.write_text("[]")
+            profile = Path(output_dir) / "nightscout_profile.json"
+            profile.write_text("{}")
+            return entries, treatments, profile
+
+        monkeypatch.setattr(
+            "cgm_format.nightscout_downloader.download_nightscout", fake_download
+        )
+        FormatParserPrime.from_nightscout_url("https://ns.example.invalid", output_dir=tmp_path)
+        assert (tmp_path / "nightscout_entries.json").exists()

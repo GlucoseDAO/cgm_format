@@ -22,6 +22,14 @@ dependencies = [
     "polars>=1.39.3",
 ]
 
+# Without these, `pip show cgm-format` gives no repository link and the only pointer to
+# the project is a CI badge in the README body (S5).
+[project.urls]
+Homepage = "https://github.com/GlucoseDAO/cgm_format"
+Repository = "https://github.com/GlucoseDAO/cgm_format"
+Changelog = "https://github.com/GlucoseDAO/cgm_format/blob/main/docs/CHANGELOG.md"
+Issues = "https://github.com/GlucoseDAO/cgm_format/issues"
+
 [project.optional-dependencies]
 cli = [
     "typer>=0.24.1",
