@@ -107,6 +107,25 @@ forever while the channel looked healthy. A different sha means clone the gist a
 read it **for logic, not for prose**: nearly every line differs because our copy is parameterized for
 this tree.
 
+**The API half of that check runs out of quota, and `curl -sf` reports the exhaustion as nothing at
+all.** Unauthenticated requests share one small hourly budget per IP with everything else on the
+machine, so the call returns `403` with `x-ratelimit-remaining: 0` — and `-f` makes curl exit
+non-zero while printing no body, which is a blank digest rather than an error anyone would read as
+one. It happened here on 2026-08-28, twice inside one session. **`git ls-remote` is the check that
+does not share the budget**, because it speaks the git protocol rather than the REST API, and it
+needs no clone:
+
+```sh
+git ls-remote https://gist.github.com/54b94bda01812be937b892146d1bb254.git HEAD
+```
+
+The sha it prints is the same revision id `history[0].version` carries, so it answers the same
+question with no quota and no orientation hazard — there is no `history` array to index backwards.
+Prefer it; keep the API call for when you also want `updated_at`, and **never let a failed digest
+check read as `unchanged`** — that is the *inbound channel that looks healthy while nothing comes
+through* hazard, one layer below where this section already warns about it. If you have already
+cloned the gist, `git fetch` plus `git rev-parse origin/HEAD` is the same check for free.
+
 **Clone, or pin the fetch to the revision the digest check just returned — the bare raw URL lies for a
 while after a write.** `<gist>/raw/<name>` is CDN-cached, so immediately after a push the API reports
 the new revision while every unversioned raw URL still serves the previous one, and `Cache-Control:
