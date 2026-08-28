@@ -1434,17 +1434,65 @@ class FormatParser(CGMParser):
 
     @classmethod
     def _is_nightscout_entries_json(cls, data: str) -> bool:
-        """Check if data looks like Nightscout entries JSON (array with sgv keys)."""
+        """True if the payload is JSON — the entries branch owns it either way.
+
+        The test is *whether it parses*, not whether ``"sgv"`` appears in the first
+        2000 characters. That substring sniff misrouted every JSON payload the
+        library most needs to explain: an account with no data returns ``200`` with
+        body ``[]``, and an auth failure returns an object — neither contains
+        ``"sgv"``, so both fell through to the CSV parser and were reported as a
+        missing ``'Glucose (mg/dL)'`` column, naming a column nobody asked for. It
+        also made the ``ZeroValidInputError`` guard below unreachable from a real
+        API response, and misrouted any export whose first few records are ``cal``
+        or ``mbg`` rather than ``sgv`` (S4).
+
+        Still requires a JSON container opener, because a bare scalar is valid JSON
+        — ``json.loads("123")`` succeeds — and a CSV file starting with a number
+        must keep going to the CSV parser.
+        """
         stripped = data.strip()
-        return stripped.startswith("[") and '"sgv"' in stripped[:2000]
+        if not stripped.startswith(("[", "{")):
+            return False
+        try:
+            json.loads(stripped)
+        except ValueError:
+            return False
+        return True
 
     @classmethod
     def _is_nightscout_treatments_json(cls, data: str) -> bool:
-        """Check if data looks like Nightscout treatments JSON (array with eventType keys)."""
-        stripped = data.strip()
-        return stripped.startswith("[") and '"eventType"' in stripped[:2000]
+        """True if the payload is JSON. Same reasoning as the entries sniff above.
+
+        A treatments array with no boluses in its opening records carries no
+        ``"eventType"`` in the first 2000 characters either.
+        """
+        return cls._is_nightscout_entries_json(data)
 
     # ----- JSON parsing (Nightscout REST API) -----
+
+    @classmethod
+    def _nightscout_json_array(cls, json_data: str, what: str) -> list:
+        """Parse a Nightscout JSON payload that must be an array of records.
+
+        Nightscout reports failures as a JSON *object* — ``{"status": 401,
+        "message": "Unauthorized"}`` — on the same endpoint that serves the array.
+        Surfacing that message is the whole point: the caller sees why the server
+        refused instead of a parser error about a column, and §2 forbids serving a
+        substitute as though it were the real thing.
+        """
+        records = json.loads(json_data)
+        if isinstance(records, dict):
+            detail = records.get("message") or records.get("description") or records.get("status")
+            raise MalformedDataError(
+                f"Nightscout returned an error object instead of {what}: {detail}"
+                if detail is not None
+                else f"Nightscout returned a JSON object instead of an array of {what}"
+            )
+        if not isinstance(records, list):
+            raise MalformedDataError(
+                f"Nightscout {what} JSON must be an array, got {type(records).__name__}"
+            )
+        return records
 
     @classmethod
     def _parse_nightscout_entries_json(cls, json_data: str) -> pl.DataFrame:
@@ -1452,7 +1500,7 @@ class FormatParser(CGMParser):
 
         Returns a DataFrame with columns ``dateString`` and ``sgv``.
         """
-        records = json.loads(json_data)
+        records = cls._nightscout_json_array(json_data, "entries")
         if not records:
             raise ZeroValidInputError("Nightscout entries JSON is empty")
 
@@ -1477,7 +1525,7 @@ class FormatParser(CGMParser):
         Returns a DataFrame with JSON API field names (``created_at``,
         ``eventType``, ``insulin``, ``carbs``, ``rate``, ``duration``).
         """
-        records = json.loads(json_data)
+        records = cls._nightscout_json_array(json_data, "treatments")
         if not records:
             return pl.DataFrame(schema=NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
 

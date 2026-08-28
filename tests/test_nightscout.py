@@ -25,8 +25,10 @@ import polars as pl
 from cgm_format import FormatParser as FormatParserPrime
 from cgm_format import FormatProcessor
 from cgm_format.interface.cgm_interface import (
+    MalformedDataError,
     SupportedCGMFormat,
     ValidationMethod,
+    ZeroValidInputError,
 )
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
@@ -490,3 +492,48 @@ class TestDownloaderRedirects:
             "download_nightscout must pass follow_redirects=True; httpx defaults it to False, "
             f"so a redirecting instance fails. Client kwargs were: {sorted(captured)}"
         )
+
+
+class TestJsonRouting:
+    """A JSON payload must reach the JSON parser — S4 (docs/FEEDBACK.md).
+
+    Routing used to turn on whether ``"sgv"`` appeared in the first 2000
+    characters, so the payloads most in need of explanation — an empty account,
+    an auth failure — fell through to the CSV parser and were reported as a
+    missing ``'Glucose (mg/dL)'`` column.
+    """
+
+    def test_empty_account_reaches_the_zero_input_guard(self) -> None:
+        """`[]` is what a Nightscout account with no data returns, with a 200."""
+        with pytest.raises(ZeroValidInputError, match="empty"):
+            FormatParserPrime.parse_nightscout("[]")
+
+    def test_auth_failure_surfaces_the_server_message(self) -> None:
+        with pytest.raises(MalformedDataError, match="Unauthorized") as excinfo:
+            FormatParserPrime.parse_nightscout('{"status":401,"message":"Unauthorized"}')
+        # The old failure named a CSV column instead of the server's reason.
+        assert "Glucose (mg/dL)" not in str(excinfo.value)
+
+    def test_entries_without_sgv_in_the_first_records_still_parse(self) -> None:
+        """`cal`/`mbg` records ahead of the first sgv used to misroute the array."""
+        import json
+        records = [{"type": "cal", "dateString": "2026-08-28T00:00:00.000Z", "slope": 1.0}
+                   for _ in range(30)]
+        records += [{"type": "sgv", "dateString": f"2026-08-28T{h:02d}:10:00.000Z", "sgv": 100 + h}
+                    for h in range(6)]
+        expected = sorted(float(r["sgv"]) for r in records if r["type"] == "sgv")
+
+        df = FormatParserPrime.parse_nightscout(json.dumps(records))
+        assert sorted(df.filter(pl.col("glucose").is_not_null())["glucose"].to_list()) == expected
+
+    def test_exporter_csv_is_still_routed_to_the_csv_parser(self) -> None:
+        """The JSON branch must not swallow the CSV path it shares an entry point with."""
+        exporter_csv = DATA_DIR / "nightscout-data-with-treatments.csv"
+        if not exporter_csv.exists():
+            pytest.skip(f"{exporter_csv.name} not present")
+        assert FormatParserPrime._is_nightscout_entries_json(exporter_csv.read_text()) is False
+
+    def test_a_bare_number_is_not_mistaken_for_json(self) -> None:
+        """json.loads("123") succeeds, so the opener check is what keeps CSV out."""
+        assert FormatParserPrime._is_nightscout_entries_json("123") is False
+        assert FormatParserPrime._is_nightscout_entries_json("Glucose (mg/dL)\n120") is False
