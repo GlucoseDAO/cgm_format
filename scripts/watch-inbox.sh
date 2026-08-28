@@ -26,8 +26,9 @@
 # touch `last` while paused, so an edit written during the pause is still picked up on the way back
 # rather than lost. Set BRANCH to your own name for it, or to the empty string to switch the whole
 # behaviour off; outside a git work tree there is no branch to speak of and it never pauses. In
-# cgm-format the pass does not commit (CONSUMER_TRIAGE_LOOP.md §5), so the guard is inert on `main`
-# and is carried for the day that rule changes.
+# cgm-format the pass gained a standing commit grant on 2026-08-28 (CONSUMER_TRIAGE_LOOP.md §5), so
+# this guard is LIVE here, not inert — it was carried through the period when the loop could not
+# commit precisely so it would already exist, and already be tested, on the day that rule changed.
 #
 # This is the only one of the three that is really bash. The ledger is Python and is invoked through
 # $PYTHON below rather than as a bare path, so neither its exec bit nor its shebang is load-bearing
