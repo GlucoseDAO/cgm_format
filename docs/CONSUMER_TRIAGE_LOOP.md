@@ -73,10 +73,11 @@ branch named by `BRANCH` (default `main`, or a detached HEAD) it idles at `BRANC
 one line saying where the tree is, and one more when it comes back. It does not touch its `last` mtime
 while paused, so a report written during the pause is picked up on the way back rather than lost;
 outside a git work tree it never pauses, and `BRANCH=` — an empty value, which `${BRANCH-main}` and not
-`${BRANCH:-main}` is what makes reachable — switches it off. Here the guard is **inert**: this loop
-does not commit (§5), so there is nothing it can put on top of somebody's half-finished branch. It is
-carried anyway, because the day the commit rule changes is the day it is needed, and a guard that
-arrives with the rule change is a guard nobody tested.
+`${BRANCH:-main}` is what makes reachable — switches it off. **Since 2026-08-28 this guard is live,
+not inert.** It was carried while the loop could not commit precisely so that it would already be here
+and already be tested on the day the rule changed; the standing grant in §5 is that day. A triage pass
+now lands commits, so a watcher firing while the tree sits on somebody's half-finished feature branch
+is a pass committing on top of their work — which is the thing the pause exists to prevent.
 
 ### Staying in sync with the gist
 
@@ -180,13 +181,14 @@ a reporter puts before their next section do not count as changes. Four verdicts
 
 ### Why not git
 
-One reason is fatal on its own; the other is contingent on a policy the user sets. The fatal one: a
-consumer may well commit their own addition, at which point `git diff HEAD` is empty and the loop sees
-nothing at all. The contingent one: the loop **must not commit** here (§5), so a `HEAD` baseline would
-never advance and every run would re-triage everything — true today, and it would expire the day a
-standing triage-commit permit exists, as one now does in the tree the pattern came from. The
-distinction is kept rather than quietly dropped, because a design defended by two reasons is worth
-re-checking when one of them goes; this one survives on the first alone. `git diff` and `git log -p`
+One reason is fatal on its own; the other was contingent on a policy the user sets, **and it has now
+expired exactly as this paragraph predicted**. The fatal one, unchanged: a consumer may well commit
+their own addition, at which point `git diff HEAD` is empty and the loop sees nothing at all. The
+contingent one was that the loop must not commit here, so a `HEAD` baseline would never advance and
+every run would re-triage everything; the standing grant of 2026-08-28 (§5) ended that, and the loop
+now commits its own passes. Keeping the two reasons apart is what made this cheap to re-check instead
+of a rewrite, which is the argument for keeping a distinction a single reason would have blurred —
+**the design survives on the fatal reason alone.** `git diff` and `git log -p`
 stay useful for *reading what changed*; correctness never depends on them.
 
 The in-document ledger has properties no side-car state has: it works on an uncommitted tree,
@@ -389,9 +391,10 @@ move**: every fingerprint is compared before and after, and the write is rejecte
 
 - **Serial, one item at a time.** `RMn` is a shared counter and two concurrent triages both claim it.
   Read it off the two roadmap files during a long pass, never from memory.
-- **Do not commit.** Leave the changes in the tree; committing, branching, tagging and publishing are
-  the user's domain (§5). This differs from the same loop in `just-dna-format`, which has a standing
-  commit grant — do not carry that grant across repos.
+- **Commit as you go** (§5). Land each coherent block as it completes rather than piling a pass into
+  one tree-wide commit at the end, and stage explicit paths. Pushing, tagging, branching and
+  publishing remain the user's domain. `just-dna-format` runs the same loop under the same grant now;
+  that convergence is a fact about both repos, not a licence to assume the next one matches.
 - **Say what was skipped.** Leave an untriaged item `new` rather than writing a placeholder reply. An
   empty verdict is honest; a hedged one is not. Name the skipped ids in the final report.
 - **Run the suite after each code fix.** `uv sync --extra dev` once, then `uv run pytest` — the full
@@ -437,15 +440,25 @@ not yet calibrated here. They are a trigger, not a law; update them when they dr
 
 ## 5. What the loop agent may do unattended
 
-**No standing grant exists in this repo**, and the absence is deliberate rather than an oversight.
-`CLAUDE.md` §2 and the user's global preferences both hold in full during a triage pass:
+**A standing commit grant exists in this repo as of 2026-08-28.** It replaces the earlier
+leave-it-in-the-tree rule, which was a remnant of an older pattern and was revoked for impairing the
+pace of a pass: a batch that ends in a pile of unstaged files makes the next agent reconstruct which
+edit belonged to which item before it can do anything. Everything else in `CLAUDE.md` §2 and the
+user's global preferences still holds in full.
 
 **May**: read anything; run the ledger, the archiver and the test suite; edit source, tests and docs;
-write replies; file roadmap items; leave everything in the working tree.
+write replies; file roadmap items; **and commit as you go** — one coherent block per commit, staged by
+explicit path.
 
-**May not**: `git commit` unless the pass was explicitly asked for one, `git push`, tag, release,
-publish, branch, rewrite history, or run any `git stash` operation. Never `git add -A` or `git add .`
-— stage explicit paths if staging is asked for at all.
+**May not**: `git push`, tag, release, publish, manage branches, rewrite history (no `--amend`,
+rebase, `reset --hard`, cherry-pick over published history, or force-anything), or run any `git stash`
+operation. Never `git add -A` or `git add .` — it sweeps in `.env` files and editor swap files; stage
+explicit paths, always. A mistake is fixed forward with a new commit, never by editing the last one.
+
+**Commit the way the work divides, not the way the files divide.** One item's reply, its roadmap
+entry, the doc it fixed and the changelog line that covers it are *one* intertwined block and belong
+in one commit; two items that merely shared a working tree get two. Conventional-commit prefixes are
+not wanted here.
 
 If you corner yourself, say so plainly and offer fix-forward options. A mistake left visible is
 auditable; a tidied one is not.

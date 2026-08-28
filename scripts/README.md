@@ -342,8 +342,9 @@ Five things worth knowing before using them:
   has why.
 - **The watcher only watches while the tree is on `BRANCH`, which defaults to `main`.** Off it — a
   feature branch, or a detached HEAD — it idles at `BRANCH_PAUSE` (900s) and says so once, because a
-  pass permitted to commit should stay off somebody else's half-finished work. This pass does not commit
-  (`docs/CONSUMER_TRIAGE_LOOP.md` §5), so the guard is inert here and carried for the day that changes.
+  pass permitted to commit should stay off somebody else's half-finished work. **That is live here as of
+  2026-08-28**, when the loop gained a standing commit grant (`docs/CONSUMER_TRIAGE_LOOP.md` §5) — it was
+  carried inert beforehand so it would already exist, and already be tested, on the day the rule changed.
   `BRANCH=` switches it off; outside a git work tree it never applies.
 - **The `.py` files are Python. Never `bash triage-state.py`** — bash ignores the shebang, executes
   the module docstring as commands, and `import hashlib` reaches ImageMagick's `import`, which

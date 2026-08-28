@@ -180,7 +180,9 @@ reason gets rationalised away at 2 a.m.
 - **Never run tree operations.** No `git push`, tags, releases, branch management or history
   rewriting — the user's domain. **Never `git stash drop` / `git stash clear`**, even on explicit
   request. **Never `git add -A` or `git add .`** — it sweeps in `.env` files, editor swap files and
-  junk; stage explicit paths. Commit only when asked.
+  junk; stage explicit paths. **Committing is not a tree operation and needs no permission** (since
+  2026-08-28): land each coherent block as it completes, structured by what the work is rather than by
+  file category, and fix a mistake forward with a new commit rather than amending.
 - **Never silently fall back when primary data is missing.** If a vendor column, a metadata row or a
   Nightscout treatments pull is absent, do not quietly serve a substitute as if it were the real
   thing. Either refuse with a typed error or warn prominently, naming the substitute. The caller
@@ -617,8 +619,11 @@ same applies when the user corrects a preference: it goes in §10, in their word
 - **Layout changes are their own task.** The `data/` → `assets/` + `interim`/`output` reorg was
   approved in principle but explicitly deferred out of a docs-only change — plan it, don't smuggle it
   (2026-08-13).
-- Committing is occasionally delegated but never assumed: leave changes unstaged unless a commit was
-  asked for. Tree operations, pushing and releases are the user's domain.
+- ~~Committing is occasionally delegated but never assumed: leave changes unstaged unless a commit
+  was asked for.~~ **Superseded 2026-08-28: commit as you go.** The block was "a remnant of an older
+  pattern", revoked "due to pace impairment reasons" — leaving a pass piled up in the tree costs more
+  than it protects, because the next agent has to reconstruct which edit served which item before it
+  can act. Tree operations, pushing and releases remain the user's domain; only the commit half moved.
 - **Any typehints is slack.** Name the type — `TypedDict`, `Protocol`, a Union of the members — not
   `Any`. `Dict[str, Any]` is the same refusal with extra words. Why: Any turns the annotation into a
   comment the checker will never catch (2026-08-13).
