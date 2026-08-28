@@ -244,6 +244,27 @@ NIGHTSCOUT_ENTRIES_SCHEMA = CGMSchemaDefinition(
     metadata_lines=NIGHTSCOUT_METADATA_LINES,
 )
 
+# Dtypes for the treatments **JSON API** payload, which is a different shape from the
+# nightscout-exporter CSV that NIGHTSCOUT_TREATMENTS_SCHEMA below describes.
+#
+# Declared rather than inferred, and that is the whole point. Nightscout treatments are
+# heterogeneous by design -- a Temp Basal carries `rate`/`duration` and no `carbs`, a Meal Bolus
+# the reverse -- so a column can be null for a long opening run. polars infers from the first
+# `infer_schema_length=100` records only, types such a column `Null`, and then raises
+# ComputeError on the first real value. Any closed-loop user who logs carbs rarely has a null
+# run longer than 100 in at least one of these; it took down every URL import (S2).
+#
+# Float64 for the four numeric fields matches what `_treatments_json_to_unified` casts them to
+# anyway, so declaring it changes no downstream semantics -- it only stops inference guessing.
+NIGHTSCOUT_TREATMENTS_JSON_DTYPES: dict[str, pl.DataType] = {
+    "created_at": pl.String,
+    "eventType": pl.String,
+    "insulin": pl.Float64,
+    "carbs": pl.Float64,
+    "rate": pl.Float64,
+    "duration": pl.Float64,
+}
+
 NIGHTSCOUT_TREATMENTS_SCHEMA = CGMSchemaDefinition(
     service_columns=(
         {

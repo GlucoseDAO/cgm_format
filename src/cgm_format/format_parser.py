@@ -1,6 +1,7 @@
 """Format converter for CGM vendor formats working on text data."""
 
 import csv
+import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Union, ClassVar, Optional
@@ -11,6 +12,26 @@ from pathlib import Path
 from base64 import b64decode
 
 logger = logging.getLogger(__name__)
+
+
+def _nightscout_number(value: object) -> float | None:
+    """Coerce one Nightscout JSON numeric field to float, or None if it is not a number.
+
+    Nightscout uploaders are inconsistent about types: the same field arrives as an int from
+    one, a float from another and a numeric *string* (``"carbs": "47"``) from a third. A
+    declared Float64 column rejects the string, and letting inference see it types the column
+    String, after which the downstream ``.cast(pl.Float64, strict=False)`` turns it into a null
+    and the event is dropped without a word. Coercing here is what keeps those readings.
+
+    `bool` is excluded deliberately: it is an `int` subclass in Python, so a stray ``true``
+    would otherwise become ``1.0`` -- a fabricated dose. Unknown stays unknown (§5).
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 from cgm_format.formats.bigideas import (
     BIGIDEAS_DATE_FORMATS,
@@ -119,6 +140,7 @@ from cgm_format.formats.nightscout import (
     NightscoutTreatmentEventType,
     NIGHTSCOUT_TIMESTAMP_FORMATS,
     NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS,
+    NIGHTSCOUT_TREATMENTS_JSON_DTYPES,
 )
 
 # Common encoding artifacts and their fixes 
@@ -1430,8 +1452,7 @@ class FormatParser(CGMParser):
 
         Returns a DataFrame with columns ``dateString`` and ``sgv``.
         """
-        import json as json_mod
-        records = json_mod.loads(json_data)
+        records = json.loads(json_data)
         if not records:
             raise ZeroValidInputError("Nightscout entries JSON is empty")
 
@@ -1456,10 +1477,9 @@ class FormatParser(CGMParser):
         Returns a DataFrame with JSON API field names (``created_at``,
         ``eventType``, ``insulin``, ``carbs``, ``rate``, ``duration``).
         """
-        import json as json_mod
-        records = json_mod.loads(json_data)
+        records = json.loads(json_data)
         if not records:
-            return pl.DataFrame()
+            return pl.DataFrame(schema=NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
 
         rows: list[dict] = []
         for t in records:
@@ -1470,14 +1490,16 @@ class FormatParser(CGMParser):
             rows.append({
                 "created_at": str(created_at),
                 "eventType": str(event_type),
-                "insulin": t.get("insulin"),
-                "carbs": t.get("carbs"),
-                "rate": t.get("rate"),
-                "duration": t.get("duration"),
+                "insulin": _nightscout_number(t.get("insulin")),
+                "carbs": _nightscout_number(t.get("carbs")),
+                "rate": _nightscout_number(t.get("rate")),
+                "duration": _nightscout_number(t.get("duration")),
             })
         if not rows:
-            return pl.DataFrame()
-        return pl.DataFrame(rows)
+            return pl.DataFrame(schema=NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
+        # Explicit schema, never inference: see NIGHTSCOUT_TREATMENTS_JSON_DTYPES for why a
+        # null run longer than infer_schema_length used to raise ComputeError here.
+        return pl.DataFrame(rows, schema=NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
 
     @classmethod
     def _entries_json_to_unified(cls, entries_df: pl.DataFrame) -> pl.DataFrame:

@@ -377,3 +377,79 @@ class TestNightscoutPipeline:
         inference_df, warnings = FormatProcessor.prepare_for_inference(processed)
         assert isinstance(inference_df, pl.DataFrame)
         assert len(inference_df) > 0
+
+
+# =============================================================================
+# Heterogeneous treatments JSON — S2 (docs/FEEDBACK.md)
+# =============================================================================
+
+class TestTreatmentsJsonSchema:
+    """Treatments JSON must not depend on polars' 100-row dtype inference window.
+
+    Nightscout treatments are heterogeneous by design, so a column is routinely
+    null for a long opening run. Inference typed such a column ``Null`` and the
+    first real value raised ``ComputeError``, which took down every Nightscout
+    URL import on 0.12.0. These build the payload in the test rather than reading
+    a fixture, because the defect is a property of the *record ordering* and no
+    committed fixture pins that.
+    """
+
+    NULL_RUN: ClassVar[int] = 105  # > polars' infer_schema_length default of 100
+
+    @staticmethod
+    def _entries(count: int = 5) -> list[dict]:
+        return [
+            {"type": "sgv", "dateString": f"2026-08-28T{h:02d}:00:00.000Z", "sgv": 120}
+            for h in range(count)
+        ]
+
+    def _treatments(self, carbs: object, insulin: object) -> list[dict]:
+        """A long carbs-free basal run, then one meal bolus carrying the values."""
+        rows: list[dict] = [
+            {"eventType": "Temp Basal", "created_at": "2026-08-28T00:00:00.000Z",
+             "rate": 0.5, "duration": 30, "carbs": None, "insulin": None}
+            for _ in range(self.NULL_RUN)
+        ]
+        rows.append({"eventType": "Meal Bolus", "created_at": "2026-08-28T05:00:00.000Z",
+                     "carbs": carbs, "insulin": insulin})
+        return rows
+
+    def _parse(self, treatments: list[dict]) -> pl.DataFrame:
+        import json
+        return FormatParserPrime.parse_nightscout(
+            json.dumps(self._entries()), json.dumps(treatments)
+        )
+
+    def test_null_run_longer_than_inference_window_parses(self) -> None:
+        """The reported failure: 105 null carbs, then a real one."""
+        df = self._parse(self._treatments(carbs=47, insulin=2.5))
+
+        # The carb entry must survive, with the value the payload carried.
+        carbs = df.filter(pl.col("carbs").is_not_null())["carbs"].to_list()
+        assert carbs == [47.0], f"expected the meal's 47 g to survive, got {carbs}"
+
+        # And the basal run must not have been dropped to make that work.
+        assert df.filter(pl.col("insulin_slow").is_not_null().and_(pl.col("insulin_slow") > 0)).height \
+            == self.NULL_RUN
+
+    def test_numeric_strings_are_kept_not_silently_dropped(self) -> None:
+        """Some uploaders send numbers as strings; those events are real events.
+
+        Inference types such a column String, after which the downstream
+        ``cast(Float64, strict=False)`` nulls it and the event vanishes with no
+        warning — a silent loss, which §5 forbids.
+        """
+        df = self._parse(self._treatments(carbs="47", insulin="2.5"))
+        assert df.filter(pl.col("carbs").is_not_null())["carbs"].to_list() == [47.0]
+        assert df.filter(pl.col("insulin_fast").is_not_null())["insulin_fast"].to_list() == [2.5]
+
+    def test_booleans_do_not_become_doses(self) -> None:
+        """bool is an int subclass in Python; coercing it would fabricate a dose."""
+        df = self._parse(self._treatments(carbs=True, insulin=True))
+        assert df.filter(pl.col("carbs").is_not_null()).height == 0
+        assert df.filter(pl.col("insulin_fast").is_not_null()).height == 0
+
+    def test_empty_treatments_still_carry_the_declared_columns(self) -> None:
+        from cgm_format.formats.nightscout import NIGHTSCOUT_TREATMENTS_JSON_DTYPES
+        empty = FormatParserPrime._parse_nightscout_treatments_json("[]")
+        assert set(empty.columns) == set(NIGHTSCOUT_TREATMENTS_JSON_DTYPES)
