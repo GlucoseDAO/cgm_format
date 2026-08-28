@@ -112,7 +112,12 @@ def download_nightscout(
 
     headers = _build_headers(api_secret)
 
-    with httpx.Client(timeout=timeout, headers=headers) as client:
+    # follow_redirects=True is not httpx's default (it is requests'), and every shape of
+    # Nightscout host redirects: http:// -> https://, apex -> www, a PaaS hostname 301ing to
+    # its canonical domain, trailing-slash normalisation. Without it those all die on the
+    # raise_for_status below with "Redirect response '301 Moved Permanently'" instead of
+    # working, and users type bare hostnames constantly (S3).
+    with httpx.Client(timeout=timeout, headers=headers, follow_redirects=True) as client:
         entries_resp = client.get(f"{base}/api/v1/entries.json", params=entry_params)
         entries_resp.raise_for_status()
 
