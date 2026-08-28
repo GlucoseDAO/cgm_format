@@ -607,13 +607,22 @@ Read these off the tools rather than off this sentence, which is exactly the kin
 ./scripts/triage-state.py --next                   # the next unclaimed Sn, over BOTH files
 ```
 
-As of 2026-08-28 the inbox is **empty**, so nothing is owed. The first pass of this loop ran on
-2026-08-21 and answered S1 — `parse_tracks(track="mean")` offering no way to learn whether averaging a
-subject's two sensor series is defensible — as accepted, filing `RM14` and shipping the documentation
-half into `USAGE.md`; it is archived in `FEEDBACK_HISTORY.md` and reads `current` there. That batch's
-changelog entry is **0.12.1**, written on 2026-08-28 when the pass was found to have skipped Step 5.
-The next consumer id is **S2** and the next roadmap item is **RM15**, both computed rather than
-remembered; eight roadmap items are open, below the ten that would trigger the dev-start question.
+As of 2026-08-28 the inbox is **empty**, so nothing is owed. Two passes have run. The first, on
+2026-08-21, answered S1 — `parse_tracks(track="mean")` offering no way to learn whether averaging a
+subject's two sensor series is defensible — filing `RM14` and shipping the documentation half into
+`USAGE.md`; its changelog entry is **0.12.1**, written on 2026-08-28 when the pass was found to have
+skipped Step 5. The second answered **S2–S5** as **0.12.2**, four Nightscout defects including a
+blocking one, filing `RM15` for the single item whose repair is a design decision. The next consumer
+id is **S6** and the next roadmap item is **RM16**, both computed rather than remembered; nine
+roadmap items are open, just under the ten that trigger the dev-start question.
+
+**S2–S5 arrived by a route this loop cannot see, and that is the standing hazard.** The reporter
+wrote them into `sugar-sugar`'s own tree rather than into this inbox, so the ledger read empty and
+`--pending` said nothing was owed while a blocking defect sat unanswered for a day. Nothing in the
+mechanism catches that: the watcher watches this file, and the ledger reads this file. Until
+consumers write here directly — or the watcher is pointed at the siblings' feedback files too — an
+empty inbox means *nothing was filed here*, which is weaker than *nothing is owed*. When a consumer
+repo is known to be using a release, grep it before trusting the empty state.
 
 **An emptied inbox breaks id numbering unless the next id is pinned, and this is the one hazard the
 split introduces.** Once answered items move out, the live file's highest visible id is not the
