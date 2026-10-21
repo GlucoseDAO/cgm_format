@@ -269,6 +269,12 @@ boluses on one grid point stop losing the second.
   (counting basal through a stop the pump reported) and null (the pump did say: it was stopped).
 - **Priming is not insulin to the body.** A cannula fill puts a fraction of a unit under the skin, but
   no export records which fraction. Excluded and counted.
+- **A `Percent` temp basal delivers scheduled × percent ÷ 100**, which is how the pump's manual
+  describes the feature; the export logs only the schedule, so nothing in it can confirm this.
+- **A cancelled square bolus reports its actual delivery time in `Bolus Duration`**, so its delivered
+  volume is spread over that. The parser warns, naming the count, on any square part whose delivered
+  volume is below its selected volume while its duration equals the programmed one: the case where
+  this assumption would be false shows up on the data that falsifies it.
 - **A clock change is reported, not corrected.** The pump and CGM clocks are independent; aligning
   them needs a reference neither export carries. A pump-to-CGM offset is not detectable by any check
   this plan has (a total-insulin check gives the same total under any shift).
@@ -340,10 +346,6 @@ Answered 2026-10-21:
   where std deviation is larger than expected with values" (§3.2). Rejected: pump only (the
   recommendation), a carb-matching heuristic, and summing both. The default, `PUMP`, is the plan's
   pick, reversible, for review.
-
-Two facts to confirm with the person who wears the pump: that a `Percent` temp delivers scheduled ×
-percent (the export logs only the schedule), and that a cancelled square bolus reports its *actual*
-duration in `Bolus Duration`.
 
 ---
 

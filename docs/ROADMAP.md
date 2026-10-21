@@ -34,7 +34,8 @@ new extended `basal_rate` (U/h). Priming and rows after a clock change left out,
 warning. A synthetic 720G fixture from a new scrub script, expected values written by
 hand.
 
-Before code: the two pump facts in the plan's §6, to confirm with the person who wears the pump.
+Two pump behaviours are assumptions, stated in the plan's §3.4 (a percent temp delivers schedule ×
+percent; a cancelled square bolus reports its actual duration), the second watched by a warning.
 
 **Legality:** additive (a new format, two extended columns, two event types), so **minor**.
 `insulin_slow` losing the Medtronic basal rate, and fingersticks leaving `glucose`, are repairs with
