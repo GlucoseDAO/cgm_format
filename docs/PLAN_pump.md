@@ -384,8 +384,9 @@ Answered 2026-10-21:
 - **Q4, the source of insulin and carbs: an option**, "pump, cgm, merge-as mean; merge strategy must
   see 0s as none, i.e. 0;5 is not 2.5, it's 5, mean only for two non-zero vals in both sources. Warn
   where std deviation is larger than expected with values" (§3.2). Rejected: pump only (the
-  recommendation), a carb-matching heuristic, and summing both. The default, `PUMP`, is the plan's
-  pick, reversible, for review.
+  recommendation), a carb-matching heuristic, and summing both. The default is `MERGE`, by the
+  person's word before the release ("set merge to default"): on the real overlap `PUMP` left 24 of the
+  CGM app's 30 meals off every row. Rejected: `PUMP` as default (the plan's first pick).
 
 ---
 

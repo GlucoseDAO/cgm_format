@@ -606,8 +606,8 @@ wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
 - Nulls mean "not known": `basal_rate` where the pump's rate does not cover the whole bin,
   `insulin_fast` where no source covers it, `carbs` where no entry was recorded. A suspended pump is a
   measured 0.
-- **`source`** says where boluses and carbs come from: `FoldSource.PUMP` (default), `FoldSource.CGM`
-  (entries logged in the CGM app), or `FoldSource.MERGE`, which pairs each CGM entry with a pump entry
+- **`source`** says where boluses and carbs come from: `FoldSource.MERGE` (default), `FoldSource.PUMP`
+  or `FoldSource.CGM` (entries logged in the CGM app). `MERGE` pairs each CGM entry with a pump entry
   at most `merge_pair_slots` slots away (default 1), takes a 0 on either side as "did not say",
   averages two non-zero values, and warns with both where they differ.
 - `FormatProcessor.to_sugarone_ready_df(wide)` renders this in the trained models' input columns,

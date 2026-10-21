@@ -73,7 +73,7 @@ def pump() -> pl.DataFrame:
 
 @pytest.fixture(scope="module")
 def folded(cgm: pl.DataFrame, pump: pl.DataFrame) -> pl.DataFrame:
-    return FormatProcessor.fold_insulin_onto_grid(cgm, pump)
+    return FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP)
 
 
 class TestBasal:
@@ -98,7 +98,7 @@ class TestBasal:
         assert bins(folded, "00:57")["00:57"]["insulin_fast"] == 0.0
 
     def test_fold_basal_adds_the_dose(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
-        got = bins(FormatProcessor.fold_insulin_onto_grid(cgm, pump, fold_basal=True), "00:57", "07:02", "16:02")
+        got = bins(FormatProcessor.fold_insulin_onto_grid(cgm, pump, fold_basal=True, source=FoldSource.PUMP), "00:57", "07:02", "16:02")
         assert got["00:57"]["insulin_fast"] == pytest.approx(1.0 * 5 / 60)
         assert got["07:02"]["insulin_fast"] == pytest.approx(3.0 + 1.1 * 5 / 60)
         assert got["16:02"]["insulin_fast"] is None
@@ -173,6 +173,13 @@ class TestSources:
 
 
 class TestContract:
+    def test_merge_is_the_default(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
+        """The person's call (2026-10-21): a meal or dose logged in only one source still reaches its row."""
+        assert FormatProcessor.fold_source == FoldSource.MERGE
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, pump).equals(
+            FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.MERGE)
+        )
+
     def test_glucose_and_grid_are_the_cgm_frames(self, cgm: pl.DataFrame, folded: pl.DataFrame) -> None:
         readings = cgm.filter(pl.col("event_type") == UnifiedEventType.GLUCOSE.value).select("datetime", "glucose")
         assert folded.filter(pl.col("glucose").is_not_null()).select("datetime", "glucose").sort("datetime").equals(
@@ -181,28 +188,28 @@ class TestContract:
 
     def test_inputs_untouched_and_output_deterministic(self, cgm: pl.DataFrame, pump: pl.DataFrame, folded: pl.DataFrame) -> None:
         cgm_before, pump_before = cgm.clone(), pump.clone()
-        again = FormatProcessor.fold_insulin_onto_grid(cgm, pump)
+        again = FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP)
         assert again.equals(folded)
         assert cgm.equals(cgm_before) and pump.equals(pump_before)
 
     def test_overlapping_exports_count_once(self, cgm: pl.DataFrame, pump: pl.DataFrame, folded: pl.DataFrame) -> None:
-        assert FormatProcessor.fold_insulin_onto_grid(cgm, [pump, pump]).equals(folded)
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, [pump, pump], source=FoldSource.PUMP).equals(folded)
 
     def test_order_of_grid_ops_does_not_matter(self, dexcom: pl.DataFrame, pump: pl.DataFrame) -> None:
         a = FormatProcessor.synchronize_timestamps(FormatProcessor.interpolate_gaps(dexcom))
         b = FormatProcessor.interpolate_gaps(FormatProcessor.synchronize_timestamps(dexcom))
-        assert FormatProcessor.fold_insulin_onto_grid(a, pump).equals(FormatProcessor.fold_insulin_onto_grid(b, pump))
+        assert FormatProcessor.fold_insulin_onto_grid(a, pump, source=FoldSource.PUMP).equals(FormatProcessor.fold_insulin_onto_grid(b, pump, source=FoldSource.PUMP))
 
     def test_a_folded_frame_cannot_be_folded_again(self, folded: pl.DataFrame, pump: pl.DataFrame) -> None:
         with pytest.raises(ValueError, match="cannot be folded again"):
-            FormatProcessor.fold_insulin_onto_grid(folded, pump)
+            FormatProcessor.fold_insulin_onto_grid(folded, pump, source=FoldSource.PUMP)
 
     def test_unsynchronized_cgm_is_refused(self, dexcom: pl.DataFrame, pump: pl.DataFrame) -> None:
         with pytest.raises(ValueError, match="synchronize_timestamps"):
             FormatProcessor.fold_insulin_onto_grid(FormatProcessor.detect_and_assign_sequences(dexcom), pump)
 
     def test_extended_processor_folds_the_same(self, cgm: pl.DataFrame, pump: pl.DataFrame, folded: pl.DataFrame) -> None:
-        assert ExtendedFormatProcessor.fold_insulin_onto_grid(cgm, pump).equals(folded)
+        assert ExtendedFormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP).equals(folded)
 
 
 REAL_CGM = DATA_DIR / "Clarity_Export__Patient_2026-07-17_215123.csv"
@@ -250,7 +257,7 @@ def test_real_pair_accounts_for_every_bolus_unit(caplog: pytest.LogCaptureFixtur
     pumps = [FormatParser.parse_file(p) for p in _real_pumps()]
     cgm = FormatProcessor.synchronize_timestamps(FormatParser.parse_file(REAL_CGM))
     with caplog.at_level(logging.WARNING, logger="cgm_format.format_processor"):
-        wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
+        wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps, source=FoldSource.PUMP)
     message = " ".join(r.getMessage() for r in caplog.records)
     outside = re.search(r"([\d.]+) U of bolus insulin outside every glucose sequence", message)
     delivered = _raw_delivered_units(_real_pumps())
@@ -286,7 +293,7 @@ class TestSugarOneShape:
         gone = readings["original_datetime"][100:102].implode()
         holed = dexcom.filter(~pl.col("original_datetime").is_in(gone))
         cgm = FormatProcessor.synchronize_timestamps(FormatProcessor.interpolate_gaps(holed))
-        out = FormatProcessor.to_sugarone_ready_df(FormatProcessor.fold_insulin_onto_grid(cgm, pump))
+        out = FormatProcessor.to_sugarone_ready_df(FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP))
         assert out.filter(pl.col("Event Type") == "Interpolated").height == 2
 
     def test_refuses_a_unified_frame(self, cgm: pl.DataFrame) -> None:
@@ -315,7 +322,7 @@ class TestOverlappingExports:
         # bolus 1 was programmed (07:00) but before it finished (07:01:30).
         a, b = export_slice("00:00:00", "08:30:00"), export_slice("07:01:00", "23:59:59")
         for order in ([a, b], [b, a]):
-            wide = FormatProcessor.fold_insulin_onto_grid(cgm, order)
+            wide = FormatProcessor.fold_insulin_onto_grid(cgm, order, source=FoldSource.PUMP)
             day = wide.filter(pl.col("datetime").dt.date() == pl.date(1961, 4, 12))
             assert day["insulin_fast"].sum() == pytest.approx(13.5)
             assert bins(wide, "07:02")["07:02"]["insulin_fast"] == pytest.approx(3.0)
@@ -324,9 +331,9 @@ class TestOverlappingExports:
     def test_exports_that_disagree_give_the_earlier_ones_answer_in_any_order(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
         # B starts at 01:20, inside the percent temp it never saw begin: its 01:30 rate is the schedule.
         b = export_slice("01:20:00", "23:59:59")
-        alone = FormatProcessor.fold_insulin_onto_grid(cgm, pump)
-        assert FormatProcessor.fold_insulin_onto_grid(cgm, [pump, b]).equals(alone)
-        assert FormatProcessor.fold_insulin_onto_grid(cgm, [b, pump]).equals(alone)
+        alone = FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP)
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, [pump, b], source=FoldSource.PUMP).equals(alone)
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, [b, pump], source=FoldSource.PUMP).equals(alone)
 
 
 class TestAuditCases:
@@ -335,7 +342,7 @@ class TestAuditCases:
             FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.CGM, fold_basal=True)
 
     def test_folded_basal_is_not_also_given_apart(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
-        wide = FormatProcessor.fold_insulin_onto_grid(cgm, pump, fold_basal=True)
+        wide = FormatProcessor.fold_insulin_onto_grid(cgm, pump, fold_basal=True, source=FoldSource.PUMP)
         assert wide["basal_rate"].null_count() == wide.height
 
     def test_a_zero_takes_no_partner(self, dexcom: pl.DataFrame, pump: pl.DataFrame) -> None:

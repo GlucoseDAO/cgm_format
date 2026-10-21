@@ -56,7 +56,9 @@ its own.
 - **Basal stays out of `insulin_fast` by default**: every model trained in
   `glucose_forecasting_metabonet` reads basal (U/h) and bolus (U) as separate channels.
   `fold_basal=True` folds the bin's basal dose in.
-- **`FoldSource`** (`PUMP`, `CGM`, `MERGE`) picks where boluses and carbs come from. `MERGE` pairs
+- **`FoldSource`** (`MERGE`, the default; `PUMP`; `CGM`) picks where boluses and carbs come from:
+  under `PUMP`, on the real overlap, 24 of 30 meals logged only in the CGM app never reached a row.
+  `MERGE` pairs
   entries at most `merge_pair_slots` grid slots apart (default `MERGE_PAIR_SLOTS = 1`), a 0 meaning
   the source did not say, two non-zeros averaged and warned with both values beyond
   `FOLD_MERGE_INSULIN_TOLERANCE_U` / `FOLD_MERGE_CARBS_TOLERANCE_G`.

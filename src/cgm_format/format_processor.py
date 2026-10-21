@@ -56,7 +56,7 @@ class FoldSource(EnumLiteral):
     """
     PUMP = "pump"    # the device that delivered the dose and timed the meal
     CGM = "cgm"      # what was logged in the CGM's app
-    MERGE = "merge"  # both, paired within a slot threshold (see the method)
+    MERGE = "merge"  # both, paired within a slot threshold (see the method); the default
 
 
 class FormatProcessor(CGMProcessor):
@@ -91,7 +91,7 @@ class FormatProcessor(CGMProcessor):
     snap_to_grid: ClassVar[bool] = True
     retime_glucose: ClassVar[bool] = True
     validation_mode_default: ClassVar[ValidationMethod] = ValidationMethod.INPUT
-    fold_source: ClassVar[FoldSource] = FoldSource.PUMP
+    fold_source: ClassVar[FoldSource] = FoldSource.MERGE
     fold_basal: ClassVar[bool] = False
     merge_pair_slots: ClassVar[int] = MERGE_PAIR_SLOTS
 
@@ -1644,8 +1644,9 @@ class FormatProcessor(CGMProcessor):
         - `carbs`: summed in the bin; null where no entry was recorded.
         - `insulin_slow`: the CGM frame's long-acting doses in the bin.
 
-        `source` picks where boluses and carbs come from (`FoldSource`): the pump
-        (default), the CGM frame's own entries, or both merged. Under `MERGE`,
+        `source` picks where boluses and carbs come from (`FoldSource`): the pump,
+        the CGM frame's own entries, or both merged (the default: a meal or dose
+        logged in only one of them still reaches its row). Under `MERGE`,
         each CGM entry pairs with at most one pump entry of the same kind at
         most `merge_pair_slots` grid slots away, nearest in time first; a pair
         lands on the pump entry's slot, and beyond the threshold both are kept.
