@@ -2279,6 +2279,35 @@ def test_to_data_only_df_merges_covariates_sharing_a_timestamp():
     ).equals(FormatProcessor._coalesce_duplicate_timestamps(unified_df))
 
 
+def test_collapse_sums_amounts_sharing_a_grid_point():
+    """Two doses or two meals on one grid point are both counted (RM18); an amount nobody recorded stays null."""
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+
+    def row(event_type, **values):
+        record = {
+            'sequence_id': 0, 'event_type': event_type, 'quality': GOOD_QUALITY.value, 'datetime': base_time,
+            'glucose': None, 'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
+        }
+        record.update(values)
+        return record
+
+    unified_df = create_test_dataframe([
+        row(UnifiedEventType.GLUCOSE.value, glucose=120.0),
+        row(UnifiedEventType.INSULIN_FAST.value, insulin_fast=4.0),
+        row(UnifiedEventType.INSULIN_FAST.value, insulin_fast=1.5),
+        row(UnifiedEventType.CARBOHYDRATES.value, carbs=30.0),
+        row(UnifiedEventType.CARBOHYDRATES.value, carbs=15.0),
+        row(UnifiedEventType.GLUCOSE.value, datetime=base_time + timedelta(minutes=5), glucose=130.0),
+    ])
+
+    result = FormatProcessor.to_data_only_df(unified_df, drop_duplicates=True)
+
+    assert result['insulin_fast'].to_list() == [5.5, None]
+    assert result['carbs'].to_list() == [45.0, None]
+    assert result['insulin_slow'].to_list() == [None, None]   # summing nothing is not 0
+    assert result['glucose'].to_list() == [120.0, 130.0]
+
+
 SUGAR_ONE_COLUMNS = [
     'sequence_id', 'Timestamp', 'Event Type', 'User ID', 'Glucose (mg/dL)',
     'Basal Rate (U/h)', 'Bolus Insulin (U)', 'Carbohydrates (g)',

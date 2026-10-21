@@ -73,7 +73,7 @@ pump record overlap; no more exports are coming.
 
 ## RM18 — the collapse keeps the first dose on a grid point and drops the rest
 
-**State:** queued · **Owner:** lead · **Severity:** medium
+**State:** building, by the lead: on main, ships in 0.13.0 · **Owner:** lead · **Severity:** medium
 
 `_coalesce_duplicate_timestamps`, behind `to_data_only_df(drop_duplicates=True)`, keeps the first
 non-null value per column per grid point, so a second bolus or carb entry on the same point is lost,

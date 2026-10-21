@@ -1170,23 +1170,34 @@ class FormatProcessor(CGMProcessor):
         #no Output validation - is not unified format
         return unified_df
 
+    # Columns holding an amount: two entries on one grid point add up. Every other column keeps its
+    # first non-null value.
+    COALESCE_SUMMED_COLUMNS: ClassVar[Tuple[str, ...]] = ("carbs", "insulin_slow", "insulin_fast")
+
     @classmethod
     def _coalesce_duplicate_timestamps(cls, unified_df: pl.DataFrame) -> pl.DataFrame:
-        """Merge rows sharing a datetime into one row, keeping the first non-null per column.
+        """Merge rows sharing a datetime into one row.
 
         Events are stored one per row, so a glucose reading and an insulin dose that fall on
-        the same grid point occupy two rows. Dropping one of them (the previous behaviour)
-        silently discarded whichever sorted second - insulin doses on some timestamps, glucose
-        readings on others. Merging keeps both in the single wide row that ML models expect.
+        the same grid point occupy two rows. Dropping one of them silently discarded whichever
+        sorted second; merging keeps both in the single wide row that ML models expect. An
+        amount (`COALESCE_SUMMED_COLUMNS`) is summed: two boluses on one grid point are both
+        given. A sum over nothing recorded stays null, never 0. Every other column keeps its
+        first non-null value.
         """
         if unified_df.height == 0:
             return unified_df
+
+        def merged(col: str) -> pl.Expr:
+            if col in cls.COALESCE_SUMMED_COLUMNS:
+                return pl.when(pl.col(col).is_not_null().any()).then(pl.col(col).sum()).otherwise(None).alias(col)
+            return pl.col(col).drop_nulls().first().alias(col)
 
         other_columns = [col for col in unified_df.columns if col != 'datetime']
         return (
             unified_df
             .group_by('datetime', maintain_order=True)
-            .agg([pl.col(col).drop_nulls().first().alias(col) for col in other_columns])
+            .agg([merged(col) for col in other_columns])
             .select(unified_df.columns)
             .sort('datetime')
         )

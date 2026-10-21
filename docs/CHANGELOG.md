@@ -71,6 +71,16 @@ release; the plan is `docs/PLAN_pump.md`.
 - `to_ml_ready_df` is unchanged, the legacy path for frames without a pump: it cannot carry a basal
   rate.
 
+### Two doses on one grid point are both kept (RM18)
+
+`to_data_only_df(drop_duplicates=True)` and `to_ml_ready_df` collapse the rows sharing a grid point
+into one. They kept the first non-null value of every column, so a second bolus or carb entry on the
+same point was silently dropped, for every vendor. Amounts (`carbs`, `insulin_slow`, `insulin_fast`,
+named in `COALESCE_SUMMED_COLUMNS`) are now summed, and a sum over nothing recorded stays null rather
+than becoming 0. A consumer reading those columns sees a larger value only where two entries shared a
+grid point, which is the repair. Shown failing on the old code first: 4.0 U and 1.5 U on one point
+came back as 1.5 U.
+
 ### Repairs on the Guardian Connect path (`MEDTRONIC`)
 
 - **Fingersticks no longer count as sensor readings.** `BG Reading (mg/dL)` was coalesced into
