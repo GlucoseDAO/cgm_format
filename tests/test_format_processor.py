@@ -4,6 +4,7 @@ import pytest
 import polars as pl
 from datetime import datetime, timedelta
 from cgm_format import FormatProcessor as FormatProcessorPrime
+from cgm_format import ExtendedFormatProcessor as ExtendedFormatProcessorPrime
 from cgm_format.interface.cgm_interface import (
     ProcessingWarning,
     ZeroValidInputError,
@@ -13,12 +14,17 @@ from cgm_format.interface.cgm_interface import (
     EXPECTED_INTERVAL_MINUTES,
     SMALL_GAP_MAX_MINUTES,
 )
-from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType, Quality, GOOD_QUALITY
+from cgm_format.formats.unified import CGM_SCHEMA, CGM_SCHEMA_EXTENDED, UnifiedEventType, Quality, GOOD_QUALITY
 from cgm_format.interface.cgm_interface import ValidationMethod
 from typing import ClassVar
 
 class FormatProcessor(FormatProcessorPrime):
     """Format processor for testing."""
+    validation_mode_default : ClassVar[ValidationMethod] = ValidationMethod.INPUT | ValidationMethod.OUTPUT
+
+
+class ExtendedFormatProcessor(ExtendedFormatProcessorPrime):
+    """Extended-schema processor for testing, validating the same way."""
     validation_mode_default : ClassVar[ValidationMethod] = ValidationMethod.INPUT | ValidationMethod.OUTPUT
 
 def create_test_dataframe(data: list[dict]) -> pl.DataFrame:
@@ -1847,8 +1853,14 @@ def test_synchronize_timestamps_is_lossless():
             unified_df = FormatParser.parse_file(file_path)
             original_row_count = len(unified_df)
             
-            # Synchronize timestamps
-            result = FormatProcessor.synchronize_timestamps(unified_df)
+            # Synchronize timestamps, with the processor for the frame's schema
+            # (a pump export parses into the extended one).
+            processor = (
+                ExtendedFormatProcessor
+                if set(CGM_SCHEMA_EXTENDED.get_column_names()) <= set(unified_df.columns)
+                else FormatProcessor
+            )
+            result = processor.synchronize_timestamps(unified_df)
             
             # ASSERTION 1: Number of rows should not change (lossless, no imputation)
             assert len(result) == original_row_count, (
