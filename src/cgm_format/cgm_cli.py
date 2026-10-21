@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
+from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor, FoldSource
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     MultiTrackSourceError,
@@ -33,6 +33,7 @@ from cgm_format.interface.cgm_interface import (
     ZeroValidInputError,
     ProcessingWarning,
     WarningDescription,
+    MERGE_PAIR_SLOTS,
 )
 from cgm_format.formats.unified import (
     CGM_SCHEMA,
@@ -602,6 +603,62 @@ def report(
         
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+# ===== A pump folded onto a CGM =====
+
+@app.command()
+def fold(
+    cgm: List[Path] = typer.Option(..., "--cgm", help="A CGM export; repeat for pieces of one series, joined with their overlap once"),
+    pump: List[Path] = typer.Option(..., "--pump", help="A pump export; repeat for monthly exports, overlapping ones are fine"),
+    out_wide: Optional[Path] = typer.Option(None, "--out-wide", help="Write the folded frame (one row per grid point)"),
+    out_sugarone: Optional[Path] = typer.Option(None, "--out-sugarone", help="Write it in the trained models' input columns"),
+    source: FoldSource = typer.Option(FoldSource.MERGE, "--source", help="Where boluses and carbs come from"),
+    merge_pair_slots: int = typer.Option(MERGE_PAIR_SLOTS, "--merge-pair-slots", help="Under merge: pair entries at most this many grid slots apart"),
+    fold_basal: bool = typer.Option(False, "--fold-basal/--no-fold-basal", help="Add basal into insulin_fast instead of basal_rate"),
+    interpolate: bool = typer.Option(True, "--interpolate/--no-interpolate", help="Fill small glucose gaps before folding"),
+    user_id: str = typer.Option("Subject 000", "--user-id", help="User ID for --out-sugarone"),
+) -> None:
+    """Fold pump insulin and carbs onto a CGM's 5-minute grid.
+
+    The CGM exports are joined (`FormatParser.parse_exports`), small gaps
+    interpolated, timestamps synchronized; the pump exports are folded on with
+    `FormatProcessor.fold_insulin_onto_grid`, and the result written as the
+    folded frame and/or in the models' input shape (`to_sugarone_ready_df`).
+    What lands on no row is said in the library's warnings, on stderr.
+    """
+    try:
+        for path in [*cgm, *pump]:
+            if not path.exists():
+                console.print(f"[red]Error: File not found: {path}[/red]")
+                raise typer.Exit(1)
+        joined = FormatParser.parse_exports(cgm)
+        processor = _processor_for(joined)
+        prepared = processor.interpolate_gaps(joined) if interpolate else joined
+        synced = processor.synchronize_timestamps(prepared)
+        pumps = [FormatParser.parse_file(path) for path in pump]
+        wide = FormatProcessor.fold_insulin_onto_grid(
+            synced, pumps, source=source, merge_pair_slots=merge_pair_slots, fold_basal=fold_basal
+        )
+        console.print(
+            f"[green]✓[/green] Folded {len(pump)} pump export(s) onto {len(cgm)} CGM export(s): "
+            f"{len(wide)} rows, {wide['sequence_id'].n_unique()} sequence(s), "
+            f"{wide['datetime'].min()} → {wide['datetime'].max()}"
+        )
+        if out_wide:
+            out_wide.parent.mkdir(parents=True, exist_ok=True)
+            wide.write_csv(out_wide)
+            console.print(f"[green]✓[/green] Wrote {out_wide}")
+        if out_sugarone:
+            out_sugarone.parent.mkdir(parents=True, exist_ok=True)
+            FormatProcessor.to_sugarone_ready_df(wide, user_id=user_id).write_csv(out_sugarone)
+            console.print(f"[green]✓[/green] Wrote {out_sugarone}")
+    except UnknownFormatError as e:
+        console.print(f"[red]✗ Unknown format: {e}[/red]")
+        raise typer.Exit(1)
+    except (MalformedDataError, ZeroValidInputError, ValueError) as e:
+        console.print(f"[red]✗ {e}[/red]")
         raise typer.Exit(1)
 
 

@@ -11,6 +11,8 @@ fold.
 import csv
 import logging
 import re
+import subprocess
+import sys
 from io import StringIO
 from datetime import datetime
 from pathlib import Path
@@ -364,3 +366,21 @@ class TestAuditCases:
         message = " ".join(r.getMessage() for r in caplog.records)
         assert "insulin: 3 U logged by the pump, 3 U by the CGM (one dose may be in both)" in message
         assert "U of bolus insulin outside every glucose sequence" not in message
+
+
+def test_cli_fold_writes_what_the_api_folds(tmp_path: Path) -> None:
+    """`cgm-cli fold` is the API's steps (join, interpolate, synchronize, fold) with the same defaults."""
+    wide, ready = tmp_path / "wide.csv", tmp_path / "ready.csv"
+    result = subprocess.run(
+        [sys.executable, "-m", "cgm_format.cgm_cli", "fold", "--cgm", str(DEXCOM), "--pump", str(PUMP),
+         "--out-wide", str(wide), "--out-sugarone", str(ready), "--user-id", "Synthetic"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    dexcom = FormatParser.parse_exports([DEXCOM])
+    cgm = FormatProcessor.synchronize_timestamps(FormatProcessor.interpolate_gaps(dexcom))
+    expected = FormatProcessor.fold_insulin_onto_grid(cgm, FormatParser.parse_file(PUMP))
+    assert wide.read_bytes() == expected.write_csv().encode()
+    assert ready.read_bytes() == FormatProcessor.to_sugarone_ready_df(expected, user_id="Synthetic").write_csv().encode()
+    # One value by hand: the pump's 07:00 bolus, logged by nobody else, at the 07:02 grid point.
+    assert bins(pl.read_csv(wide, try_parse_dates=True).with_columns(pl.col("datetime").cast(pl.Datetime("ms"))), "07:02")["07:02"]["insulin_fast"] == pytest.approx(3.0)

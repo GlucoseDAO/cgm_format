@@ -38,6 +38,14 @@ export does not say when that insulin was delivered. Any other unexpected sectio
 warning rather than merged. Found by a format survey; shown failing on 0.13.0 first. F20 in
 `docs/dogfooding.md` records what remains open for a 780G in auto mode.
 
+### `cgm-cli fold`
+
+The pump fold from a shell: `cgm-cli fold --cgm … --pump … --out-wide … --out-sugarone …` joins the
+CGM exports, interpolates small gaps, synchronizes, folds the pump exports and writes the folded frame
+and/or the models' input shape, with the API's options and defaults. Its output is byte-identical to
+the API's (a test holds it); built so a dataset made with the library can be rebuilt from a shell
+script.
+
 ### Several exports of one series join once (F21)
 
 `FormatParser.join_exports(frames)` / `parse_exports(paths)` join exports that are pieces of one

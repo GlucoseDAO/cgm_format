@@ -612,6 +612,10 @@ wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
   averages two non-zero values, and warns with both where they differ.
 - `FormatProcessor.to_sugarone_ready_df(wide)` renders this in the trained models' input columns,
   basal and bolus as separate channels. `to_ml_ready_df` is the legacy path for frames without a pump.
+- From a shell, the same steps in one command (repeat `--cgm` and `--pump`):
+  `cgm-cli fold --cgm part1.csv --cgm part2.csv --pump pump_jul.csv --pump pump_aug.csv
+  --out-wide wide.csv --out-sugarone sugarone.csv` (`--source`, `--merge-pair-slots`,
+  `--fold-basal`, `--no-interpolate`, `--user-id` as in the API).
 - A CGM exported in several pieces is joined first, its overlap once:
   `FormatParser.parse_exports([part1_csv, part2_csv])`, then synchronize and fold as above.
 - Overlapping monthly exports are fine in any order: the earlier keeps the span they share, and a
