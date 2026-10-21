@@ -2,16 +2,25 @@
 
 State, not rules: rewritten to the present before a reset (`README.md` here, "Notes files").
 
-**As of 2026-10-21, 22:00.** 0.14.0 is tagged (`v0.14.0` on `5bcd33f`, full suite 1,706 passed) and on
-GitHub with both dists; `dist/` holds 0.14.0 only. **Open: the person's PyPI publish of 0.14.0**
-(`uv publish dist/cgm_format-0.14.0*`). 0.13.0 is on PyPI. Kit pin at v0.1.87.
+**As of 2026-10-22, unattended.** 0.14.0 is tagged and on GitHub with both dists; `dist/` holds 0.14.0
+only. **Open: the person's PyPI publish of 0.14.0** (`uv publish dist/cgm_format-0.14.0*`).
+
+**Open: the next release, a patch (0.14.1).** On `main` since 0.14.0, full suite green (1,712 passed,
+2026-10-22): RM1 (`b4080c8`, logging instead of print, regen script's skip count) and RM22 (`ed6accc`,
+`5c2142d`, `cd2dc21`: US 12-hour Libre timestamps, the Libre patient-report header, US / older /
+mmol/L CareLink, carbs in exchanges). Cut it when the person is back, or tomorrow.
+
+**On the desk, asked 2026-10-22 while the person was away:** #63 which surveyed formats come next
+(default: the drift fixes, now built as RM22); #64 Excel behind the `cli` extra (default: no Excel);
+#65 split / study-group values in `to_sugarone_ready_df` (default: no).
 
 The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its repro scripts
-(`repro/` there, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output
-names match the person's uploaded names is unconfirmed.
+(`repro/`, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output names
+match the person's uploaded names is unconfirmed.
 
-**The plan's order** (`docs/ROADMAP.md`): RM20 (next major only), then RM1, RM3, RM4, RM6 (waits until
-2027-01-21), RM7, RM11 (after RM7), RM14, RM15. `docs/FORMAT_SURVEY.md` §5 proposes the next items
+**The plan's order** (`docs/ROADMAP.md`): RM22 and RM1 (built, unreleased), RM20 (next major only),
+then RM3 (the `data/` layout reorganisation: next to build, a large change, not started while the
+weekly quota stood at 87%), RM4, RM6 (waits until 2027-01-21), RM7, RM11 (after RM7), RM14, RM15. `docs/FORMAT_SURVEY.md` §5 proposes the next items
 (drift fixes, localized headers, Tidepool, AZT1D, Jaeb); none filed yet, the person to choose.
 
 **In flight:** nothing.
