@@ -37,7 +37,7 @@ hand them to `bash`**, which executes the module docstring as commands and reach
 
 ## Filing an item
 
-Append it at the bottom under a new `## S<n> — <what happened>` heading. **The next id is S6**, and
+Append it at the bottom under a new `## S<n> — <what happened>` heading. **The next id is S7**, and
 that pin is a convenience rather than the authority: `triage-state.py --next` computes it
 over this file **and** `FEEDBACK_HISTORY.md`. Take it from both, because once answered items move out
 the highest id visible here is not the highest ever used, and an empty inbox shows none at all. Ids
@@ -119,3 +119,30 @@ where *they* got stuck, which is a fact about the docs; what stuck them is often
 have told them.
 
 ---
+
+# sugar-sugar — filed 2026-08-28
+
+Routed into this inbox on 2026-10-21 by the triage seat. The report was written on 2026-08-28 into
+`sugar-sugar`'s own tree (`FEEDBACK.md` at its root, §5, commit `869dbc6`), after S2–S5 had been
+copied from the same file, so it never reached the ledger. The reporter's prose below is verbatim;
+only the heading carries this inbox's id. Their §1–§3 are S2–S4 here, and their §4 and §6 come
+from S5.
+
+## S6 — Still open: UK/EU exporter CSV dates, and one error-contract asymmetry
+
+**Neither is blocking, and neither affects this app** — Sugar Sugar takes Nightscout data as
+JSON, by URL or as an uploaded `entries.json`, and never through the exporter CSV path.
+
+- **UK/EU-locale nightscout-exporter CSVs still do not parse.** `_EXPORTER_DATETIME_FORMATS`
+  tries `%m/%d/%Y` before `%d/%m/%Y` with `strict=False`, and the probe returns on the first
+  format that does not *throw* rather than the first that *parses*, so an unambiguous UK date
+  never reaches the UK format. 0.12.2 improved this from **silent** data loss to a loud
+  failure — an all-UK file now raises `ZeroValidInputError: No valid data rows found after
+  processing` instead of returning a frame with the rows quietly missing — which is the more
+  important half. But a UK exporter CSV is still unreadable, and a *mixed* file would still
+  lose only the ambiguous rows. Probing which format parses the most rows, rather than which
+  one throws last, would settle it.
+- **`parse_nightscout` still lacks the `try/except -> MalformedDataError` wrapper that
+  `_process_nightscout` has.** The two public paths into the same parsing code therefore have
+  different error contracts. This is what made issue 1 surface as a raw polars `ComputeError`
+  rather than a library error; with issue 1 fixed it is cosmetic, but the asymmetry remains.
