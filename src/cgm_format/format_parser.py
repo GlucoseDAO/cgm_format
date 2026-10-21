@@ -1612,11 +1612,15 @@ class FormatParser(CGMParser):
 
     @classmethod
     def _medtronic_timed(cls, frame: pl.DataFrame) -> pl.DataFrame:
-        """Add `datetime` and the pump's own row order `_ix`, sorted by both.
+        """Add `datetime` and `_ix`, and sort rows into the order the pump logged them.
 
-        `Index` is the order the pump logged rows in, which is what breaks a tie
-        between two rows on one timestamp (two basal rates logged in the same
-        second: the later one is in force).
+        A CareLink export is written newest first: `Index` rises as time falls
+        (every strictly ordered pair in four real 720G exports). So within one
+        second the pump's own order is `Index` descending, and that order is what
+        breaks a tie between two rows on one timestamp: of two basal rates logged
+        in the same second, the later-logged one (the lower `Index`) is in force.
+        On real exports it matches the rate the same clock minute carries on other
+        days in 18 of 27 such ties, against 1 for the other row.
         """
         col = MedtronicPumpColumn
         frame = frame.with_columns(
@@ -1626,7 +1630,7 @@ class FormatParser(CGMParser):
         return frame.with_columns(
             pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
             cls._euro_number_to_float(pl.col(col.INDEX)).alias("_ix"),
-        ).sort("datetime", "_ix")
+        ).sort(["datetime", "_ix"], descending=[False, True])
 
     @staticmethod
     def _hms_to_minutes(expr: pl.Expr) -> pl.Expr:

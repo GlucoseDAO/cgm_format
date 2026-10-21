@@ -20,7 +20,8 @@ OUT = Path(__file__).resolve().parent.parent / "data" / "input" / "medtronic_pum
 DATE = "1961/04/12"
 DEVICE = "MiniMed 720G MMT-1810"
 
-# (time, {column: cell}) in the order the pump logged them; Index follows this order.
+# (time, {column: cell}) in the order the pump logged them, oldest first. The file is written newest
+# first, as real exports are, so Index runs the other way (see section()).
 PUMP_ROWS: list[tuple[str, dict[C, str]]] = [
     ("00:00:00", {C.BASAL_RATE: "1,000"}),
     # A Percent temp: the log keeps the scheduled 1,000; 50 % applies for an hour.
@@ -88,8 +89,9 @@ HEADER = ";".join(c.value for c in COLUMNS)
 
 
 def section(name: str, rows: list[tuple[str, dict[C, str]]], first_index: int) -> list[str]:
+    """A section written as CareLink writes it: newest row first, `Index` rising down the file."""
     lines = [f"-------;{DEVICE};{name}", HEADER]
-    for k, (time, cells) in enumerate(rows):
+    for k, (time, cells) in enumerate(reversed(rows)):
         base = {C.INDEX: f"{first_index + k},00000", C.DATE: DATE, C.TIME: time}
         lines.append(";".join({**base, **cells}.get(c, "") for c in COLUMNS))
     return lines
