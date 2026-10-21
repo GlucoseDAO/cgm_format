@@ -367,8 +367,7 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
   appears (a Nightscout response model behind the `cli` extra is the plausible one), that is a §1
   questionnaire, not a silent adoption.
 - **Standard-library `logging` for diagnostics — never `print`.** `print` is only for CLI output the
-  user asked to see. *(Tech debt: `interface/schema.py:519` prints from a schema-regen helper — RM1
-  in `docs/ROADMAP.md`.)*
+  user asked to see (the CLI and the scripts in `scripts/`).
 - **Polars idiom.** Prefer expressions (`with_columns`, `filter`, `group_by`, `join_asof`) over
   Python loops; lazyframes (`scan_*`) and streaming (`sink_*`) on large data paths — keep hot paths
   in the Rust engine. Pre-filter before joining so you never materialize more than needed. Always

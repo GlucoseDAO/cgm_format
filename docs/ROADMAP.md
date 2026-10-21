@@ -45,7 +45,7 @@ Nothing to build until a major is scheduled; it waits for one.
 
 ## RM1 — schema-regen helper prints instead of logging
 
-**State:** queued · **Owner:** lead · **Severity:** low
+**State:** building, by the lead: on main, ships in the next release · **Owner:** lead · **Severity:** low
 
 `interface/schema.py:519` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
 standard-library `logging` for library diagnostics; `print` belongs only to CLI output the user asked

@@ -4,6 +4,10 @@ This module defines the base types, enums, and schema builder classes
 that can be used to define any CGM data format schema.
 """
 
+import json
+import logging
+from pathlib import Path
+
 import polars as pl
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -17,6 +21,9 @@ from cgm_format.interface.cgm_interface import (
     ColumnTypeError,
     truncate_error_message,
 )
+
+logger = logging.getLogger(__name__)
+
 
 class EnumLiteral(str, Enum):
     """
@@ -508,15 +515,12 @@ class CGMSchemaDefinition:
             primary_key: Optional list/tuple of field names that form the primary key
             dialect: Optional dialect configuration for CSV parsing
         """
-        import json
-        from pathlib import Path
-        
         schema_file = Path(output_path)
         with open(schema_file, "w") as f:
             json.dump(self.to_frictionless_schema(primary_key=primary_key, dialect=dialect), f, indent=2)
             f.write("\n")  # Add trailing newline
         
-        print(f"✓ Regenerated {schema_file}")
+        logger.info("Regenerated %s", schema_file)
 
 
 def derive_schema(
@@ -605,11 +609,8 @@ def regenerate_schema_json(
         
     Example:
         >>> # In formats/unified.py
-        >>> regenerate_schema_json(CGM_SCHEMA, __file__)
-        ✓ Regenerated /path/to/formats/unified.json
+        >>> regenerate_schema_json(CGM_SCHEMA, __file__)   # writes formats/unified.json
     """
-    from pathlib import Path
-    
     # Derive JSON filename from module filename
     module_path = Path(calling_module_file)
     json_path = module_path.with_suffix('.json')

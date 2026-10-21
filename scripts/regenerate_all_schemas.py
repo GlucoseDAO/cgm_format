@@ -44,7 +44,7 @@ def discover_format_modules() -> list[tuple[str, Path]]:
     return sorted(format_modules)  # Sort for consistent ordering
 
 
-def regenerate_schema(module_name: str, module_path: Path) -> bool:
+def regenerate_schema(module_name: str, module_path: Path) -> bool | None:
     """Attempt to import a module and call its regenerate_schema_json() function.
     
     Args:
@@ -52,7 +52,7 @@ def regenerate_schema(module_name: str, module_path: Path) -> bool:
         module_path: Path to the module file
         
     Returns:
-        True if schema was regenerated successfully, False otherwise
+        True if regenerated, None if the module has no schema to regenerate, False on an error
     """
     try:
         # Import the module dynamically
@@ -62,7 +62,7 @@ def regenerate_schema(module_name: str, module_path: Path) -> bool:
         # Check if it has a regenerate_schema_json function
         if not hasattr(module, "regenerate_schema_json"):
             print(f"⊘ Skipping {module_name}: no regenerate_schema_json() function")
-            return False
+            return None
         
         # Call the regenerate function
         regenerate_func: Callable[[], None] = getattr(module, "regenerate_schema_json")
@@ -76,6 +76,7 @@ def regenerate_schema(module_name: str, module_path: Path) -> bool:
             extended_func: Callable[[], None] = getattr(module, "regenerate_extended_schema_json")
             extended_func()
 
+        print(f"✓ Regenerated {module_name}")
         return True
         
     except Exception as e:
@@ -98,11 +99,14 @@ def main() -> None:
     
     # Regenerate each schema
     successes = 0
+    skipped = 0
     failures = 0
-    
+
     for module_name, module_path in format_modules:
         result = regenerate_schema(module_name, module_path)
-        if result:
+        if result is None:
+            skipped += 1  # a module with no schema of its own (formats/supported.py): not a failure
+        elif result:
             successes += 1
         else:
             failures += 1
@@ -111,6 +115,8 @@ def main() -> None:
     print(f"\n{'='*60}")
     print(f"Summary:")
     print(f"  ✓ Successfully regenerated: {successes}")
+    if skipped > 0:
+        print(f"  ⊘ Skipped (no schema): {skipped}")
     if failures > 0:
         print(f"  ✗ Failed: {failures}")
     print(f"{'='*60}\n")

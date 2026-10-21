@@ -11,6 +11,15 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+### Diagnostics through logging only (RM1)
+
+`CGMSchemaDefinition.export_to_json` logged its "Regenerated" line with `print`; it now goes through
+`logging` (info), and its inline imports are module-level. `scripts/regenerate_all_schemas.py` prints
+its own line per module, and counts a module with no schema (`formats/supported.py`) as skipped
+instead of failed, so a clean run no longer reports "Failed: 1" and exits 0.
+
 ## 0.14.0 — 2026-10-21
 
 **Minor.** A caller can state a Nightscout exporter file's date order (RM19); exports that are pieces
