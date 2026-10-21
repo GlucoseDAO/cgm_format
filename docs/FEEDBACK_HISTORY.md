@@ -51,6 +51,7 @@ pointer onward.*
 - **S3** httpx not following redirects — fixed (0.12.2)
 - **S4** JSON payloads misrouted to the CSV parser — fixed (0.12.2)
 - **S5** temp-dir data, token in logs, dropped readings — fixed (0.12.2) + RM15
+- **S6** day-first exporter dates misread — fixed (0.12.3) + RM19, RM20
 
 ---
 
@@ -526,3 +527,54 @@ RM15 is not pre-empted by it.
   surfaces as a raw polars `ComputeError`.
 - **The package ships no `Project-URL` or `Home-page` metadata**, so `pip show cgm-format`
   gives no repository link. The only pointer is a CI badge in the README body.
+
+# sugar-sugar — filed 2026-08-28, relayed 2026-10-21
+
+Routed into this inbox on 2026-10-21 by the triage seat. The report was written on 2026-08-28 into
+`sugar-sugar`'s own tree (`FEEDBACK.md` at its root, §5, commit `869dbc6`), after S2–S5 had been
+copied from the same file, so it never reached the ledger. The reporter's prose below is verbatim;
+only the heading carries this inbox's id. Their §1–§3 are S2–S4 here, and their §4 and §6 come
+from S5.
+
+## S6 — Still open: UK/EU exporter CSV dates, and one error-contract asymmetry
+
+**Status — dates accepted and fixed in 0.12.3; the asymmetry filed as [RM20](ROADMAP.md) for a
+major; a stated date order queued as [RM19](ROADMAP.md).** Relayed here on 2026-10-21 from your
+own `FEEDBACK.md`, where it had sat since 2026-08-28 without reaching this inbox. Your second
+bullet was also in S5, and S5's reply did not address it; that was a miss, not a rejection.
+
+Dates, reproduced on day-first copies of the committed exporter fixture (no real non-US export is
+in this tree), and worse than you had it. With treatments in the file, a date past the 12th did
+not raise: its treatment rows came back with no time at all, and only an entries-only file raised
+the `ZeroValidInputError` you saw. A date up to the 12th was not lost but read with day and month
+swapped, silently. Your diagnosis of the probe was exact: `strict=False` never throws, so the first
+format always won. The `%d/%m/%Y %I:%M:%S %p` row it never reached was itself wrong for the UK:
+the exporter formats in the browser's locale, and en-GB writes a 24-hour clock
+(`07/04/2026 19:59:42`). In 0.12.3 one format is chosen per file, over both sections, as the one
+that reads every row; the 24-hour day-first shape is added. Rows no format reads are dropped and
+counted in one warning. A file on a 12-hour clock with no day past the 12th reads both ways, so it
+is still read month first, with one warning saying so; letting a caller state the order is RM19.
+
+The asymmetry is real, but the repair you suggest runs against the charter, which says to let
+exceptions propagate and wrap only where there is a real recovery path. The blanket
+`except Exception` in `_process_nightscout` is the deviation, not the missing one in
+`parse_nightscout`. Either repair changes what an existing call raises, which is a major, so RM20
+waits for one. Nothing for you to do: you never take the exporter path.
+<!-- triaged: 0.12.3 · sha f8cf10de84b6 -->
+
+**Neither is blocking, and neither affects this app** — Sugar Sugar takes Nightscout data as
+JSON, by URL or as an uploaded `entries.json`, and never through the exporter CSV path.
+
+- **UK/EU-locale nightscout-exporter CSVs still do not parse.** `_EXPORTER_DATETIME_FORMATS`
+  tries `%m/%d/%Y` before `%d/%m/%Y` with `strict=False`, and the probe returns on the first
+  format that does not *throw* rather than the first that *parses*, so an unambiguous UK date
+  never reaches the UK format. 0.12.2 improved this from **silent** data loss to a loud
+  failure — an all-UK file now raises `ZeroValidInputError: No valid data rows found after
+  processing` instead of returning a frame with the rows quietly missing — which is the more
+  important half. But a UK exporter CSV is still unreadable, and a *mixed* file would still
+  lose only the ambiguous rows. Probing which format parses the most rows, rather than which
+  one throws last, would settle it.
+- **`parse_nightscout` still lacks the `try/except -> MalformedDataError` wrapper that
+  `_process_nightscout` has.** The two public paths into the same parsing code therefore have
+  different error contracts. This is what made issue 1 surface as a raw polars `ComputeError`
+  rather than a library error; with issue 1 fixed it is cosmetic, but the asymmetry remains.

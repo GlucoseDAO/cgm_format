@@ -76,6 +76,65 @@ non-null, else null (Polars sums an all-null group to `0.0`, and a null amount m
 
 ---
 
+## RM19 — let a caller state the exporter CSV's date order
+
+**State:** queued · **Owner:** triage · **Severity:** medium
+
+Motivated by **S6** (`docs/FEEDBACK_HISTORY.md`), relayed from `sugar-sugar`. Queued by the
+person on 2026-10-21 for unattended work ("Add the fix to unattended to-dos"), answering the
+question whether a warning is enough or callers should be able to say the date order outright.
+
+0.12.3 reads a nightscout-exporter CSV in whichever locale reads every row. One case is left that
+the text cannot settle: a file on a 12-hour clock in which no day is past the 12th reads completely
+both month-first (en-US) and day-first (en-AU, en-NZ, en-IN). It is read month first, as before,
+with one warning. A day-first export of that shape therefore still comes back with day and month
+swapped on every row, and only the warning says it might have.
+
+Shape: an optional `date_order` parameter, a new `EnumLiteral` (`MONTH_FIRST`, `DAY_FIRST`) whose
+default `None` keeps 0.12.3's inference. Given, it restricts `_exporter_datetime_format` to the
+formats of that order, so an ambiguous file is read the way the caller says, with no warning, and
+rows that do not read that way are counted as now. It belongs on `parse_nightscout` and
+`from_nightscout_exports`. Open for the build: how `parse_to_unified` / `parse_file`, which take no
+vendor options, reach it (a dedicated exporter entry point rather than class state, since every
+method is a stateless classmethod), and whether `cgm-cli parse` grows a `--date-order` flag.
+
+Making the order **required** was the other answer, and it is rejected: it breaks every existing
+caller, which is a major, and most files (any US export, and any day-first one with a day past the
+12th) need no help.
+
+**Legality:** a new optional parameter and a new enum beside what exists, so **minor**.
+
+---
+
+## RM20 — `parse_nightscout` and `_process_nightscout` raise differently on the same failure
+
+**State:** queued, for the next major only · **Owner:** lead · **Severity:** low
+
+Motivated by **S6** (and S5 before it, whose reply did not address this bullet). The two public
+routes into the Nightscout parsing code have different error contracts. `_process_nightscout`,
+reached through `detect_format` / `parse_to_unified`, wraps its whole body in `except Exception`
+and re-raises as `MalformedDataError`. `parse_nightscout`, reached through `from_nightscout_url` and
+`from_nightscout_exports`, has no wrapper, so the same broken input raises a raw polars error
+there. That is why S2's defect surfaced as `ComputeError`. The reporter calls it cosmetic now.
+
+**The charter decides the direction, and it is the opposite of the reporter's.** `PHILOSOPHY.md`,
+*Error Handling*: "Let exceptions propagate … Recovery logic is reserved for cases where there is a
+real alternative path." `_process_nightscout`'s blanket `except Exception` is a wrapper with no
+recovery path, which is what the charter rules out; `CLAUDE.md` §2 forbids the same shape. So:
+
+- Adding the same wrapper to `parse_nightscout` is wrong: it doubles the pattern the charter forbids,
+  and it changes what an existing call raises.
+- Removing the wrapper from `_process_nightscout` is the charter-consistent repair, but it too
+  changes what an existing call raises (`MalformedDataError` becomes the underlying error), and a
+  caller catching `MalformedDataError` around `parse_to_unified` on a Nightscout file would stop
+  catching it.
+- Leaving both as they are costs only the asymmetry, which no consumer is blocked on.
+
+**Legality:** either repair changes the exception type an existing call raises, so **major**.
+Nothing to build until a major is scheduled; it waits for one.
+
+---
+
 ## RM1 — schema-regen helper prints instead of logging
 
 **State:** queued · **Owner:** lead · **Severity:** low
