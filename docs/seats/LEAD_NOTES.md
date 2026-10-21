@@ -5,7 +5,7 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 **As of 2026-10-21, 20:00.** 0.13.0 is released on GitHub (tag `v0.13.0` on `098a75f`, both dists
 attached): pump support (RM16, RM17, RM21), RM18, RM2, the pre-release audit's eleven fixes, and
 0.12.3's untagged Nightscout fix. Final full suite on the tagged commit: 1,656 passed, 16 skipped.
-**PyPI is the person's** and not done here. Kit pin at v0.1.87; the person still has to
+Published to PyPI by the person the same evening (0.13.0 is PyPI's latest, wheel and sdist). Kit pin at v0.1.87; the person still has to
 /reload-plugins in both sessions and paste the revised allow entry.
 
 **The plan's order** (`docs/ROADMAP.md`): RM19 (triage's), RM20 (next major only), then RM1, RM3, RM4,
