@@ -43,6 +43,7 @@ their own changelog lines.
 
 ---
 
+
 ## RM17 — fold pump insulin onto the glucose grid
 
 **State:** after RM16 · **Owner:** lead · **Severity:** high
@@ -140,6 +141,23 @@ recovery path, which is what the charter rules out; `CLAUDE.md` §2 forbids the 
 
 **Legality:** either repair changes the exception type an existing call raises, so **major**.
 Nothing to build until a major is scheduled; it waits for one.
+
+---
+
+## RM21 — `to_sugarone_ready_df`: pump basal in the models' input shape
+
+**State:** after RM17 · **Owner:** lead · **Severity:** high
+
+`to_ml_ready_df` leaves `Basal Rate (U/h)` empty unless `insulin_slow` is copied into it, and reads a
+unified frame the fold's output is not. The person: "keep this output as legacy, build a
+to_sugarone_ready_df output node meeting the format the trained models expect". A new classmethod
+renders RM17's output as the models in `glucose_forecasting_metabonet` read it (`sequence_id`, `User
+ID`, `Timestamp`, `Event Type`, `Glucose (mg/dL)`, `Basal Rate (U/h)` from `basal_rate`, `Bolus
+Insulin (U)` from `insulin_fast`, `Carbohydrates (g)`), the exact columns and order taken from that
+repo's `src/common/data/columns.py` and loader at build time; nulls stay null. `to_ml_ready_df` is
+unchanged. [PLAN_pump.md](PLAN_pump.md) §3.5.
+
+**Legality:** additive (a new classmethod), so **minor**, riding RM16's release.
 
 ---
 

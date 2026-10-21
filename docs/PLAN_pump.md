@@ -258,9 +258,10 @@ is larger than expected with values". Two different doses within the threshold (
 after a meal bolus) can be paired by mistake; the warning is where that shows, and `PUMP` or `CGM`
 avoids pairing altogether.
 
-**The output is a terminal view**, in the shape `to_data_only_df` returns: `datetime`, `glucose`,
-`carbs`, `insulin_slow` (null), `insulin_fast`, and `basal_rate` as the time-weighted mean U/h over
-the bin. That is a different meaning from the parsed `BASAL_RT` row's "in force from here",
+**The output is a terminal view**: `sequence_id` (the CGM sequence the grid point belongs to),
+`datetime`, `glucose`, `carbs`, `insulin_slow` (null), `insulin_fast`, and `basal_rate` as the
+time-weighted mean U/h over the bin. It is what `to_sugarone_ready_df` (RM21, §3.5) renders for the
+models. That is a different meaning from the parsed `BASAL_RT` row's "in force from here",
 which is why the wide view carries no `event_type` and the fold refuses a frame without one: a folded
 frame cannot be folded again, by construction rather than by luck. The inputs are not modified;
 losslessness holds because the parsed frames keep every row and the fold is a derived view.
@@ -276,6 +277,22 @@ Separate from the pump work because it changes `to_data_only_df(drop_duplicates=
 vendor. Amounts (`carbs`, `insulin_slow`, `insulin_fast`) are summed per grid point **when at least
 one is non-null, else null**; every other column keeps first-non-null. A Dexcom pen user's two
 boluses on one grid point stop losing the second.
+
+### 3.5 The models' input shape (RM21)
+
+`to_ml_ready_df` cannot carry pump basal: it fills `Basal Rate (U/h)` only from `insulin_slow` behind
+an opt-in, and it reads a unified frame with `event_type`, which the fold's output does not have. The
+person (2026-10-21): "keep this output as legacy, build a to_sugarone_ready_df output node meeting
+the format the trained models expect".
+
+So a new classmethod, `to_sugarone_ready_df(folded)`, renders the fold's output in the shape the
+models in `glucose_forecasting_metabonet` read, taken from that repo's own definitions at build time
+(`src/common/data/columns.py`: `sequence_id`, `User ID`, `Timestamp` in `%Y-%m-%dT%H:%M:%S`,
+`Event Type`, `Glucose (mg/dL)`, `Basal Rate (U/h)`, `Bolus Insulin (U)`, `Carbohydrates (g)`; the
+loader for which are required and in what order). `Basal Rate (U/h)` comes from `basal_rate`,
+`Bolus Insulin (U)` from `insulin_fast`; nulls stay null, because the training loader fills them
+itself (basal forward-filled, bolus zero-filled) and a 0 would claim none was given. `to_ml_ready_df`
+stays as it is, legacy, for frames without a pump.
 
 ### 3.4 Decided here, reversible, listed for review
 
@@ -307,6 +324,7 @@ boluses on one grid point stop losing the second.
 - RM16: a new format, two extended columns, two new `UnifiedEventType` members. **Minor.**
 - RM17: a new classmethod and a new `FoldSource` enum. **Minor.**
 - RM18: a repair of a silent loss, its own changelog line. **Patch**, riding the same release.
+- RM21: a new classmethod beside `to_ml_ready_df`, which is unchanged. **Minor.**
 - `insulin_slow` no longer carrying a Medtronic basal rate, and fingersticks leaving `glucose` (per
   Q2), are repairs of wrong output, each with its own changelog line saying what a consumer
   compensating for the old output sees change.
@@ -401,5 +419,6 @@ Answered 2026-10-21:
 1. **RM16**, the parser and the synthetic fixture, about 5 hours.
 2. **RM17**, the fold, about 4 hours, after RM16.
 3. **RM18**, the collapse, about 1 hour, independent.
+4. **RM21**, `to_sugarone_ready_df`, about 2 hours, after RM17.
 
 The full suite runs once at the end, in the background.
