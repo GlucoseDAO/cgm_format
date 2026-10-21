@@ -10,20 +10,22 @@ is). Everything committed is pushed.
 **The plan's order** (`docs/ROADMAP.md`): RM16 → RM17 (after RM16) → RM18, then RM1 onward. RM19 is
 triage's; RM20 waits for the next major.
 
-**In flight: the pump work, planned, not started.** `docs/PLAN_pump.md` is the proposal. The person's
-answers are recorded there (§6): fingersticks → `BG_METER`; the fold's `source` option
-`PUMP`/`CGM`/`MERGE` (merge reads 0 as "did not say"); basal **not** folded into `insulin_fast`,
-because every model in `glucose_forecasting_metabonet` reads basal U/h and bolus U as separate
-channels (spot-checked: `src/metabonet/adapter.py` ×12, `src/common/data/columns.py`). The build waits
-for the person's go: plans and builds are separate runs.
+**In flight: the pump work, 0.13.0.** RM16 (parser, `5d916df`) and RM17 (fold, `df57287`) are on main
+and pushed; RM21 (`to_sugarone_ready_df`, the models' input shape) and RM18 (the collapse sums
+amounts) are next, then a fresh audit of RM16/RM17/RM21 against `docs/PLAN_pump.md`, then the
+release. Decisions are in the plan's §6; the merge pairs within `merge_pair_slots` (default 1, the
+person's call), basal stays out of `insulin_fast` (the trained models read it apart).
 
 - Real data: four MiniMed 720G exports and an overlapping Dexcom export (five days, same person, no
   more coming) in the git-ignored `data/input/`. Never name the contributor in a tracked file.
-- The four 720G files make `test_validate_against_schema` fail in a local full run until RM16 lands
-  (the files are git-ignored, so CI does not see them).
+- A test that loops over every file in `data/input/` with the core processor breaks on an
+  extended-schema export: pick the processor by the frame's schema (done in the idempotency and
+  lossless-sync tests).
 - The leak list matches this machine's name, which is also a month: write months as ISO dates.
 - `/data/sources/glucosedao/glucose_forecasting_metabonet` is a partial clone (checkout failed on
   NTFS names); read it through `git show origin/main:<path>`, never repair it unasked.
+- Kit pin at v0.1.87 (moved by the lead); the person still has to /reload-plugins and paste the
+  revised allow entry.
 
 **Open with the person:** releasing 0.12.3 (triage's S6 exporter fix, version already bumped,
 pushed, not tagged).
