@@ -47,7 +47,8 @@ Delegation is for finding things, never for deciding them.
    [docs/UNIFIED_FORMAT.md](docs/UNIFIED_FORMAT.md) (schema),
    [docs/USAGE.md](docs/USAGE.md) (public API),
    [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist),
-   [docs/RESEARCH_CORPORA.md](docs/RESEARCH_CORPORA.md) (multi-subject / multi-device datasets).
+   [docs/RESEARCH_CORPORA.md](docs/RESEARCH_CORPORA.md) (multi-subject / multi-device datasets),
+   [docs/FORMAT_SURVEY.md](docs/FORMAT_SURVEY.md) (formats and datasets not yet parsed, ranked).
 7. **[docs/seats/README.md](docs/seats/README.md)** — the standing roles a session can take here
    (`lead`, `triage`) on the seats kit, each with its priming file and grant. Read it before
    `/seats:seat <seat>`; a session that takes no seat does the task it was given and no seat's work.

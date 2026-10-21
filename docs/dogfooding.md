@@ -338,8 +338,8 @@ Found on 0.13.0 by a format survey, on a public 780G CareLink sample whose value
 whose layout is real (github.com/madleina/aidR, `inst/extdata/carelink_example.csv`).
 
 In auto mode a 780G delivers basal as automatic micro-doses, and its CareLink export gives that
-insulin only as daily totals in a section of its own ("Aggregated Auto Insulin Data"). Since 0.13.1's
-fix the parser no longer reads those totals as boluses and warns with their units. What is not known
+insulin only as daily totals in a section of its own ("Aggregated Auto Insulin Data"). Since `faacbd1`
+(unreleased after 0.13.0) the parser no longer reads those totals as boluses and warns with their units. What is not known
 without a real 780G export worn in auto mode: whether the `Basal Rate (U/h)` rows it still logs are
 the manual-mode schedule, and so a rate the pump was not delivering during auto mode. If they are,
 `BASAL_RT` rows from such a file claim a basal the pump did not give.
