@@ -81,6 +81,13 @@ than becoming 0. A consumer reading those columns sees a larger value only where
 grid point, which is the repair. Shown failing on the old code first: 4.0 U and 1.5 U on one point
 came back as 1.5 U.
 
+### One source for the version (RM2)
+
+`cgm_format.__version__` comes from the installed metadata only. The fallback literal in
+`__init__.py` is gone: it had drifted again (it said 0.12.2 while `pyproject.toml` said 0.12.3). An
+import of the package without installing it now raises `PackageNotFoundError` rather than reporting a
+stale version; `uv sync` installs it, and CI does.
+
 ### Repairs on the Guardian Connect path (`MEDTRONIC`)
 
 - **Fingersticks no longer count as sensor readings.** `BG Reading (mg/dL)` was coalesced into

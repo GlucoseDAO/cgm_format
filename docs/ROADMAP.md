@@ -176,7 +176,7 @@ Legality: pure legibility, so a patch.
 
 ## RM2 — hardcoded version fallback in `__init__.py`
 
-**State:** queued · **Owner:** lead · **Severity:** low
+**State:** building, by the lead: on main, ships in 0.13.0 · **Owner:** lead · **Severity:** low
 
 `src/cgm_format/__init__.py:33` carries `__version__ = "0.10.0"` as a fallback when
 `importlib.metadata.version("cgm-format")` raises. That is a second source of truth for the version,

@@ -19,18 +19,12 @@ Quick Start:
     >>> inference_df, warnings = processor.prepare_for_inference(processed_df)
 """
 
-try:
-    # Aliased with a leading underscore so the package namespace holds only
-    # names that belong in __all__ (tests/test_package_exports.py asserts the
-    # two are equal).
-    from importlib.metadata import version as _package_version
-    __version__ = _package_version("cgm-format")
-except Exception:
-    # Fallback if package not installed (e.g., during development).
-    # Tech debt: RM2 in docs/ROADMAP.md. Two sources of truth drift, and the
-    # one you read is the wrong one -- the right fix is an editable install so
-    # metadata is always present, then dropping this branch.
-    __version__ = "0.12.2"  # Keep in sync with pyproject.toml
+# Aliased with a leading underscore so the package namespace holds only names
+# that belong in __all__ (tests/test_package_exports.py asserts the two are
+# equal). The version has one source, pyproject.toml, read from the installed
+# metadata; `uv sync` installs the package editable, so it is always present.
+from importlib.metadata import version as _package_version
+__version__ = _package_version("cgm-format")
 
 # Core classes
 from cgm_format.format_parser import FormatParser

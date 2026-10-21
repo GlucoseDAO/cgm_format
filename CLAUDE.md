@@ -406,9 +406,9 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. Internals are
   free to change. The exception is the *contract* — the schema shape, the CLI surface, the public
   API: breaking it is allowed, but deliberate and versioned (see the active-development note above).
-- **Version comes only from `importlib.metadata.version("cgm-format")`.** *(Tech debt:
-  `__init__.py:33` hardcodes a dev-fallback literal; the right fix is an editable install
-  (`uv sync`) so metadata is always present, then drop it — RM2 in `docs/ROADMAP.md`.)*
+- **Version comes only from `importlib.metadata.version("cgm-format")`.** There is no fallback
+  literal (dropped in 0.13.0, RM2): `uv sync` installs the package editable, so the metadata is
+  always present, and an uninstalled import fails loudly instead of serving a version that drifted.
 
 ### 5.1 Type system — this repo's idiom
 
