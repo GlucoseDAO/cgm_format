@@ -27,15 +27,16 @@ the shipped Medtronic path misreads two columns on any CareLink file: `Basal Rat
 Shape: a new variant format `MEDTRONIC_PUMP` (the `DEXCOM_EU` / `LIBRE_EU` pattern) targeting
 `CGM_SCHEMA_EXTENDED`, because the target schema is per format. Section-aware read, every column
 `Utf8`. Boluses paired by `Bolus Number`, placed at the programmed time with the delivered amount, a
-square part carrying a new extended `insulin_duration`. The effective basal rate (percent temps
+square part carrying a new extended `insulin_duration`. Fingersticks become a new `BG_METER` event
+type carrying the value (the person's answer to Q2), on the Guardian path too. The effective basal rate (percent temps
 applied, every suspend 0 until `NORMAL_PUMPING`, ties resolved by `Index`) as `BASAL_RT` rows in a
-new extended `basal_rate` (U/h). Priming, fingersticks and rows after a clock change left out, each
-counted in one warning. A synthetic 720G fixture from a new scrub script, expected values written by
+new extended `basal_rate` (U/h). Priming and rows after a clock change left out, each counted in one
+warning. A synthetic 720G fixture from a new scrub script, expected values written by
 hand.
 
-Before code: the plan's Q2 (fingersticks) and the two pump facts in its §6.
+Before code: the two pump facts in the plan's §6, to confirm with the person who wears the pump.
 
-**Legality:** additive (a new format, two extended columns, one event type), so **minor**.
+**Legality:** additive (a new format, two extended columns, two event types), so **minor**.
 `insulin_slow` losing the Medtronic basal rate, and fingersticks leaving `glucose`, are repairs with
 their own changelog lines.
 
@@ -50,15 +51,20 @@ frames apart, never bundles or re-synchronizes them (bundling first lets pump ro
 grid, F19), and returns one row per grid point of each CGM sequence: glucose as the CGM had it,
 `insulin_fast` = instant doses in the bin + spread doses' share + the basal rate integrated over the
 bin, which is `rate × I / 60` for a constant rate (`I` = `expected_interval_minutes`, no literal 12).
+Basal is **not** folded into `insulin_fast` by default until the training inputs say otherwise (the
+person: "Real training inputs take precedence"); it travels as the bin's mean `basal_rate`, with the
+fold one switch away. Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`, where
+merge takes a 0 as "did not say", averages only two non-zeros, and warns with both values beyond a
+tolerance.
 Null outside the pump's coverage, 0 where the pump was suspended; insulin outside every sequence
 reported with its total, never attached; overlapping monthly exports deduplicated. A terminal view:
 inputs untouched, the output refuses to be folded again.
 
-Before code: the plan's Q1 (keep `basal_rate` on the wide row, for SugarOne) and Q4 (which source
-the insulin and carbs come from). Checked on real data over the overlap of a Dexcom export and the
-pump record (Q3).
+Before code: the training repo's insulin inputs (an agent is reading `glucose_forecasting_metabonet`),
+which decide the basal default. Checked on real data over the five days where a Dexcom export and the
+pump record overlap; no more exports are coming.
 
-**Legality:** additive (a new classmethod), so **minor**, riding RM16's release.
+**Legality:** additive (a new classmethod, a new enum), so **minor**, riding RM16's release.
 
 ---
 

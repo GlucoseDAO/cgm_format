@@ -276,8 +276,8 @@ boluses on one grid point stop losing the second.
 
 ## 4. Legality
 
-- RM16: a new format, two extended columns, one new `UnifiedEventType` member. **Minor.**
-- RM17: a new classmethod. **Minor.**
+- RM16: a new format, two extended columns, two new `UnifiedEventType` members. **Minor.**
+- RM17: a new classmethod and a new `FoldSource` enum. **Minor.**
 - RM18: a repair of a silent loss, its own changelog line. **Patch**, riding the same release.
 - `insulin_slow` no longer carrying a Medtronic basal rate, and fingersticks leaving `glucose` (per
   Q2), are repairs of wrong output, each with its own changelog line saying what a consumer
@@ -331,13 +331,17 @@ duration in `Bolus Duration`.
   rows, never by running the parser.
 - Parser: every row kind in §2.2, including a percent temp across a schedule change, two rate rows on
   one timestamp, a dual bolus, a plain square bolus, a bolus with no volume, an alarm suspend, a
-  rewind, a priming, both fingerstick sources, a filled `New Device Time`.
+  rewind, a priming, both fingerstick sources as `BG_METER` rows (and none as `EGV_READ`), a filled
+  `New Device Time`. The Guardian fixture's `EGV_READ` count drops by exactly its fingerstick rows.
 - Fold: constant rate gives `rate × I / 60`; a mid-bin rate change integrates exactly; a square bolus
   spreads; two boluses in one bin sum; a bin outside pump coverage is null and one inside a suspend
   is 0; insulin between sequences is reported, not folded; overlapping pump exports fold to the same
   result as one; the CGM frame's glucose and grid are byte-identical before and after; the output is
   the same whichever order `interpolate_gaps` and `synchronize_timestamps` ran in; folding the output
-  is refused.
+  is refused. Basal: unfolded by default (`insulin_fast` = bolus, `basal_rate` = the bin mean), and
+  folded with the switch on (`insulin_fast` = bolus + `rate × I / 60`). Source: `PUMP`, `CGM`, and
+  `MERGE` with a 0 on one side (takes the other), two agreeing non-zeros (the mean), two disagreeing
+  beyond tolerance (the mean, and the bin in the warning with both values).
 - RM18: two boluses on one grid point sum; an all-null group stays null.
 - The real files: each of the four parses. Over the overlap with the Dexcom export, the folded total
   equals the pump's own total (basal integral + delivered boluses) minus what the warnings report,
