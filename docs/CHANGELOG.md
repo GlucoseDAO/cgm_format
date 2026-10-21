@@ -61,6 +61,16 @@ release; the plan is `docs/PLAN_pump.md`.
   the exports are absent). Not checked: the pump's clock against the CGM's, which no export
   records.
 
+### The models' input shape, with pump basal (RM21)
+
+- **`FormatProcessor.to_sugarone_ready_df(folded)`** renders the fold's output in the columns the
+  models trained in `glucose_forecasting_metabonet` read (`SUGARONE_COLUMNS`, from that repo's
+  `src/common/data/columns.py`): `Basal Rate (U/h)` from `basal_rate`, `Bolus Insulin (U)` from
+  `insulin_fast`, `Event Type` `EGV` / `Interpolated` (the label the trainer's `drop_interpolated`
+  filters on). Nulls stay null; the training loader fills them itself.
+- `to_ml_ready_df` is unchanged, the legacy path for frames without a pump: it cannot carry a basal
+  rate.
+
 ### Repairs on the Guardian Connect path (`MEDTRONIC`)
 
 - **Fingersticks no longer count as sensor readings.** `BG Reading (mg/dL)` was coalesced into

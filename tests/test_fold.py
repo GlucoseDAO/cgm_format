@@ -237,3 +237,39 @@ def test_real_pair_accounts_for_every_bolus_unit(caplog: pytest.LogCaptureFixtur
     )
     on_rows = wide["insulin_fast"].sum()
     assert on_rows + (float(outside.group(1)) if outside else 0.0) == pytest.approx(delivered, abs=0.01)
+
+
+class TestSugarOneShape:
+    """to_sugarone_ready_df (RM21): the fold's output in the trained models' input columns."""
+
+    def test_columns_are_the_models(self, folded: pl.DataFrame) -> None:
+        out = FormatProcessor.to_sugarone_ready_df(folded)
+        # src/common/data/columns.py in glucose_forecasting_metabonet, as SugarOne's trainer reads them.
+        assert out.columns == [
+            "sequence_id", "Timestamp", "Event Type", "User ID", "Glucose (mg/dL)",
+            "Basal Rate (U/h)", "Bolus Insulin (U)", "Carbohydrates (g)",
+            "Recommended Split", "Study Group",
+        ]
+
+    def test_basal_and_bolus_are_separate_channels(self, folded: pl.DataFrame) -> None:
+        out = FormatProcessor.to_sugarone_ready_df(folded).filter(
+            pl.col("Timestamp").is_in(["1961-04-12T01:02:00", "1961-04-12T07:02:00", "1961-04-12T17:37:00"])
+        )
+        rows = {r["Timestamp"][11:16]: (r["Basal Rate (U/h)"], r["Bolus Insulin (U)"], r["Event Type"]) for r in out.iter_rows(named=True)}
+        assert rows["01:02"][0] == pytest.approx(0.55) and rows["01:02"][1] == 0.0
+        assert rows["07:02"][0] == pytest.approx(1.1) and rows["07:02"][1] == 3.0
+        assert rows["17:37"][:2] == (None, None)   # beyond the pump: unknown stays null, never 0
+        assert {r[2] for r in rows.values()} == {"EGV"}
+
+    def test_interpolated_rows_are_labelled(self, dexcom: pl.DataFrame, pump: pl.DataFrame) -> None:
+        # Two consecutive readings removed leave a 15-minute gap, which interpolation fills with two rows.
+        readings = dexcom.filter(pl.col("event_type") == UnifiedEventType.GLUCOSE.value).sort("original_datetime")
+        gone = readings["original_datetime"][100:102].implode()
+        holed = dexcom.filter(~pl.col("original_datetime").is_in(gone))
+        cgm = FormatProcessor.synchronize_timestamps(FormatProcessor.interpolate_gaps(holed))
+        out = FormatProcessor.to_sugarone_ready_df(FormatProcessor.fold_insulin_onto_grid(cgm, pump))
+        assert out.filter(pl.col("Event Type") == "Interpolated").height == 2
+
+    def test_refuses_a_unified_frame(self, cgm: pl.DataFrame) -> None:
+        with pytest.raises(ValueError, match="fold_insulin_onto_grid"):
+            FormatProcessor.to_sugarone_ready_df(cgm)

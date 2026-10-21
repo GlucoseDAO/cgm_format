@@ -610,6 +610,8 @@ wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
   (entries logged in the CGM app), or `FoldSource.MERGE`, which pairs each CGM entry with a pump entry
   at most `merge_pair_slots` slots away (default 1), takes a 0 on either side as "did not say",
   averages two non-zero values, and warns with both where they differ.
+- `FormatProcessor.to_sugarone_ready_df(wide)` renders this in the trained models' input columns,
+  basal and bolus as separate channels. `to_ml_ready_df` is the legacy path for frames without a pump.
 - Do not `parse_bundle` the pump with the CGM before synchronizing: pump rows would move the glucose
   grid (F19 in `docs/dogfooding.md`). The fold reads the CGM's grid and leaves both inputs untouched.
 

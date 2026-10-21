@@ -146,7 +146,7 @@ Nothing to build until a major is scheduled; it waits for one.
 
 ## RM21 — `to_sugarone_ready_df`: pump basal in the models' input shape
 
-**State:** after RM17 · **Owner:** lead · **Severity:** high
+**State:** building, by the lead: on main, ships in 0.13.0 with RM16 and RM17 · **Owner:** lead · **Severity:** high
 
 `to_ml_ready_df` leaves `Basal Rate (U/h)` empty unless `insulin_slow` is copied into it, and reads a
 unified frame the fold's output is not. The person: "keep this output as legacy, build a

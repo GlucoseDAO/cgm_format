@@ -1713,6 +1713,76 @@ class FormatProcessor(CGMProcessor):
             logger.warning("fold_insulin_onto_grid: not attached to any row: %s.", "; ".join(notes))
         return out
 
+    # The input columns of the models trained in GlucoseDAO/glucose_forecasting_metabonet, in order, from
+    # that repo's src/common/data/columns.py (COL_SEQ, COL_TS_SHORT, COL_EVENT, COL_USER, COL_GLU,
+    # COL_BASAL, COL_BOLUS, COL_CARB, COL_SPLIT, COL_GROUP) as SugarOne's trainer reads them.
+    SUGARONE_COLUMNS: ClassVar[Tuple[str, ...]] = (
+        "sequence_id", "Timestamp", "Event Type", "User ID", "Glucose (mg/dL)",
+        "Basal Rate (U/h)", "Bolus Insulin (U)", "Carbohydrates (g)",
+        "Recommended Split", "Study Group",
+    )
+
+    @classmethod
+    def to_sugarone_ready_df(
+        cls,
+        folded: pl.DataFrame,
+        user_id: str = "Subject 000",
+        round_precision: int = 3,
+    ) -> pl.DataFrame:
+        """Render `fold_insulin_onto_grid` output in the models' input shape.
+
+        The columns and their order are those the models trained in
+        `glucose_forecasting_metabonet` read (`SUGARONE_COLUMNS`), with basal and
+        bolus as separate channels: `Basal Rate (U/h)` from `basal_rate`, `Bolus
+        Insulin (U)` from `insulin_fast`. Nulls stay null, because the training
+        loader fills them itself (basal carried forward, bolus zero-filled as an
+        event) and a 0 would claim none was given. `Event Type` is `EGV` for a
+        reading, `Interpolated` for an imputed one (the trainer's
+        `drop_interpolated` filters on it), and empty where the grid point has no
+        glucose. `Recommended Split` and `Study Group` are training bookkeeping,
+        emitted empty.
+
+        `to_ml_ready_df` stays for frames without a pump: it reads a unified frame
+        and cannot carry a basal rate.
+
+        Args:
+            folded: Output of `fold_insulin_onto_grid`
+            user_id: Value for the `User ID` column
+            round_precision: Decimal places for glucose
+
+        Returns:
+            DataFrame with `SUGARONE_COLUMNS`, one row per grid point
+
+        Raises:
+            ValueError: If `folded` is not a fold's output
+        """
+        needed = {"sequence_id", "datetime", "quality", "glucose", "carbs", "insulin_fast", "basal_rate"}
+        missing = needed - set(folded.columns)
+        if missing or "event_type" in folded.columns:
+            raise ValueError(
+                "to_sugarone_ready_df takes the output of fold_insulin_onto_grid; "
+                + (f"missing {sorted(missing)}" if missing else "got a unified frame (it has event_type)")
+            )
+        imputed = (pl.col("quality").fill_null(0) & Quality.IMPUTATION.value) != 0
+        event = (
+            pl.when(pl.col("glucose").is_null()).then(pl.lit(""))
+            .when(imputed).then(pl.lit("Interpolated"))
+            .otherwise(pl.lit("EGV"))
+        )
+        names = cls.SUGARONE_COLUMNS
+        return folded.sort("sequence_id", "datetime").select(
+            pl.col("sequence_id").alias(names[0]),
+            pl.col("datetime").dt.strftime("%Y-%m-%dT%H:%M:%S").alias(names[1]),
+            event.alias(names[2]),
+            pl.lit(user_id).alias(names[3]),
+            pl.col("glucose").round(round_precision).alias(names[4]),
+            pl.col("basal_rate").alias(names[5]),
+            pl.col("insulin_fast").alias(names[6]),
+            pl.col("carbs").alias(names[7]),
+            pl.lit("").alias(names[8]),
+            pl.lit("").alias(names[9]),
+        )
+
     @classmethod
     def _fold_bins(cls, cgm: UnifiedFormat, interval: int) -> pl.DataFrame:
         """Every grid point of every CGM sequence, with the glucose row there if any."""
