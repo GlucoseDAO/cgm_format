@@ -16,7 +16,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ## RM19 — let a caller state the exporter CSV's date order
 
-**State:** queued · **Owner:** triage · **Severity:** medium
+**State:** building · **Owner:** triage · **Severity:** medium
 
 Motivated by **S6** (`docs/FEEDBACK_HISTORY.md`), relayed from `sugar-sugar`. Queued by the
 person on 2026-10-21 for unattended work ("Add the fix to unattended to-dos"), answering the
