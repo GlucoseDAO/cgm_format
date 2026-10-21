@@ -18,6 +18,7 @@ import pytest
 from cgm_format.format_parser import FormatParser
 from cgm_format.format_processor import FormatProcessor
 from cgm_format.interface.cgm_interface import (
+    SupportedCGMFormat,
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
@@ -61,8 +62,13 @@ class TestFullPipelineIntegration:
         """
         # Skip unsupported formats using format_supported
         with open(file_path, 'rb') as f:
-            if not FormatParser.format_supported(f.read()):
-                pytest.skip(f"Unsupported format: {file_path.name}")
+            raw = f.read()
+        if not FormatParser.format_supported(raw):
+            pytest.skip(f"Unsupported format: {file_path.name}")
+        if FormatParser.detect_format(FormatParser.decode_raw_data(raw)) == SupportedCGMFormat.MEDTRONIC_PUMP:
+            # A pump export has no glucose series to prepare for inference; its pipeline is
+            # fold_insulin_onto_grid with a CGM export, run end to end in tests/test_fold.py.
+            pytest.skip(f"Pump export, folded onto a CGM export in tests/test_fold.py: {file_path.name}")
 
         print(f"\n{'='*70}")
         print(f"Testing: {file_path.name}")
