@@ -8,6 +8,111 @@ changed and where, so a later reader can find the code without a git archaeology
 
 ---
 
+## RM16 — MiniMed 720G pump exports parse
+
+**Severity:** high · **Status:** shipped 2026-10-21 in 0.13.0 (`5d916df`, `f991caa` (tie order), `e6c48f1` (audit)) · **Owner:** lead
+
+The proposal is [PLAN_pump.md](PLAN_pump.md) §2 and §3.1; this item is the parser half. All four real
+720G CareLink exports in the tree fail to parse today (`MalformedDataError` on dtype inference), and
+the shipped Medtronic path misreads two columns on any CareLink file: `Basal Rate (U/h)` becomes an
+`insulin_slow` dose, and fingersticks become `EGV_READ` glucose (255 of the Guardian fixture's
+22,404 "readings" are fingersticks).
+
+Shape: a new variant format `MEDTRONIC_PUMP` (the `DEXCOM_EU` / `LIBRE_EU` pattern) targeting
+`CGM_SCHEMA_EXTENDED`, because the target schema is per format. Section-aware read, every column
+`Utf8`. Boluses paired by `Bolus Number`, placed at the programmed time with the delivered amount, a
+square part carrying a new extended `insulin_duration`. Fingersticks become a new `BG_METER` event
+type carrying the value (the person's answer to Q2), on the Guardian path too. The effective basal rate (percent temps
+applied, every suspend 0 until `NORMAL_PUMPING`, ties resolved by `Index`) as `BASAL_RT` rows in a
+new extended `basal_rate` (U/h). Priming and rows after a clock change left out, each counted in one
+warning. A synthetic 720G fixture from a new scrub script, expected values written by
+hand.
+
+Two pump behaviours are assumptions, stated in the plan's §3.4 (a percent temp delivers schedule ×
+percent; a cancelled square bolus reports its actual duration), the second watched by a warning.
+
+**Legality:** additive (a new format, two extended columns, two event types), so **minor**.
+`insulin_slow` losing the Medtronic basal rate, and fingersticks leaving `glucose`, are repairs with
+their own changelog lines.
+
+---
+
+## RM17 — fold pump insulin onto the glucose grid
+
+**Severity:** high · **Status:** shipped 2026-10-21 in 0.13.0 (`df57287`, `e6c48f1` (audit)) · **Owner:** lead
+
+The proposal is [PLAN_pump.md](PLAN_pump.md) §3.2. `fold_insulin_onto_grid(cgm, pump)` takes the two
+frames apart, never bundles or re-synchronizes them (bundling first lets pump rows move the CGM's
+grid, F19), and returns one row per grid point of each CGM sequence: glucose as the CGM had it,
+`insulin_fast` = instant doses in the bin + spread doses' share + the basal rate integrated over the
+bin, which is `rate × I / 60` for a constant rate (`I` = `expected_interval_minutes`, no literal 12).
+Basal is **not** folded into `insulin_fast`: every model trained in `glucose_forecasting_metabonet`
+reads basal (U/h) and bolus (U) as separate channels, and the person ruled that real training inputs
+take precedence. It travels as the bin's mean `basal_rate`; the fold is an opt-in `fold_basal=True`.
+Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`. Merge pairs entries at most
+`merge_pair_slots` apart (default 1, the person's choice; beyond it both are kept), one-to-one, onto
+the pump's slot; it takes a 0 as "did not say", averages only two non-zeros, and warns with both
+values beyond a tolerance.
+Null outside the pump's coverage, 0 where the pump was suspended; insulin outside every sequence
+reported with its total, never attached; overlapping monthly exports deduplicated. A terminal view:
+inputs untouched, the output refuses to be folded again.
+
+Checked on real data over the five days where a Dexcom export and the
+pump record overlap; no more exports are coming.
+
+**Legality:** additive (a new classmethod, a new enum), so **minor**, riding RM16's release.
+
+---
+
+## RM21 — `to_sugarone_ready_df`: pump basal in the models' input shape
+
+**Severity:** high · **Status:** shipped 2026-10-21 in 0.13.0 (`4622f51`) · **Owner:** lead
+
+`to_ml_ready_df` leaves `Basal Rate (U/h)` empty unless `insulin_slow` is copied into it, and reads a
+unified frame the fold's output is not. The person: "keep this output as legacy, build a
+to_sugarone_ready_df output node meeting the format the trained models expect". A new classmethod
+renders RM17's output as the models in `glucose_forecasting_metabonet` read it (`sequence_id`, `User
+ID`, `Timestamp`, `Event Type`, `Glucose (mg/dL)`, `Basal Rate (U/h)` from `basal_rate`, `Bolus
+Insulin (U)` from `insulin_fast`, `Carbohydrates (g)`), the exact columns and order taken from that
+repo's `src/common/data/columns.py` and loader at build time; nulls stay null. `to_ml_ready_df` is
+unchanged. [PLAN_pump.md](PLAN_pump.md) §3.5.
+
+**Legality:** additive (a new classmethod), so **minor**, riding RM16's release.
+
+---
+
+## RM18 — the collapse keeps the first dose on a grid point and drops the rest
+
+**Severity:** medium · **Status:** shipped 2026-10-21 in 0.13.0 (`9bb3447`, `e6c48f1` (sensor-only glucose)) · **Owner:** lead
+
+`_coalesce_duplicate_timestamps`, behind `to_data_only_df(drop_duplicates=True)`, keeps the first
+non-null value per column per grid point, so a second bolus or carb entry on the same point is lost,
+for every vendor. Amounts (`carbs`, `insulin_slow`, `insulin_fast`) are summed when at least one is
+non-null, else null (Polars sums an all-null group to `0.0`, and a null amount means "not recorded").
+[PLAN_pump.md](PLAN_pump.md) §2.6 and §3.3.
+
+**Legality:** a repair of a silent loss, so a **patch**, with its own changelog line.
+
+---
+
+## RM2 — hardcoded version fallback in `__init__.py`
+
+**Severity:** low · **Status:** shipped 2026-10-21 in 0.13.0 (`b9b4304`) · **Owner:** lead
+
+`src/cgm_format/__init__.py:33` carries `__version__ = "0.10.0"` as a fallback when
+`importlib.metadata.version("cgm-format")` raises. That is a second source of truth for the version,
+and it is the one that gets read when the package is not installed — exactly when it is most likely
+to be stale. It already has been: the literal still said `0.9.0` at the moment the 0.10.0 bump
+landed, which is finding F3's second half.
+
+The fix is an editable install (`uv sync`) so metadata is always present, then dropping the literal.
+Worth confirming first that nothing in CI or the docs build imports the package without installing
+it.
+
+Legality: patch.
+
+---
+
 ## RM5 — European Libre mmol/L variant, and Libre scan/strip parsing
 
 **Severity:** medium · **Status:** shipped 2026-08-13 in 0.9.0 · **Owner:** —

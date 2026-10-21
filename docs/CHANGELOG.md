@@ -11,11 +11,17 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.13.0 — 2026-10-21
 
-**Minor, planned as 0.13.0.** Insulin pumps: MiniMed pump CareLink exports parse (RM16). The fold
-that joins them with a CGM export (RM17) and the models' input shape (RM21) follow in the same
-release; the plan is `docs/PLAN_pump.md`.
+**Minor.** Insulin pumps: MiniMed pump CareLink exports parse (RM16), fold onto a CGM export's
+5-minute grid (RM17), and render in the trained models' input shape with basal and bolus as separate
+channels (RM21). Two silent losses repaired on the way: a second dose on one grid point (RM18) and
+fingersticks counted as sensor readings on the Guardian path. The plan is `docs/PLAN_pump.md`.
+Additive for a consumer of the core schema: `CGM_SCHEMA` is unchanged; the extended schema gains two
+columns before `annotations`; `UnifiedEventType` gains `BG_METER` and `BASAL_RT`.
+
+This release also carries 0.12.3's Nightscout exporter date fix (below), which was never tagged on
+its own.
 
 ### MiniMed pump exports parse (RM16)
 
@@ -140,7 +146,7 @@ stale version; `uv sync` installs it, and CI does.
 - New `tests/test_fold.py`: every expected bin value worked out by hand from the synthetic Dexcom and
   pump exports, plus the real-pair accounting identity above.
 
-## 0.12.3 — 2026-10-21
+## 0.12.3 — 2026-10-21 (not tagged; shipped in 0.13.0)
 
 **Patch.** Nightscout exporter CSVs written in a day-first locale now parse, and one written so
 that the order cannot be told says so. Nothing added that a consumer reads, nothing removed, nothing
