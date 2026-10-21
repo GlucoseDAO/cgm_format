@@ -54,9 +54,11 @@ grid, F19), and returns one row per grid point of each CGM sequence: glucose as 
 bin, which is `rate × I / 60` for a constant rate (`I` = `expected_interval_minutes`, no literal 12).
 Basal is **not** folded into `insulin_fast`: every model trained in `glucose_forecasting_metabonet`
 reads basal (U/h) and bolus (U) as separate channels, and the person ruled that real training inputs
-take precedence. It travels as the bin's mean `basal_rate`; the fold is an opt-in `fold_basal=True`. Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`, where
-merge takes a 0 as "did not say", averages only two non-zeros, and warns with both values beyond a
-tolerance.
+take precedence. It travels as the bin's mean `basal_rate`; the fold is an opt-in `fold_basal=True`.
+Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`. Merge pairs entries across a
+15-minute window, one-to-one, onto the pump's slot (on the real pair, 4 of 12 matching entries sat in
+different slots); it takes a 0 as "did not say", averages only two non-zeros, and warns with both
+values beyond a tolerance.
 Null outside the pump's coverage, 0 where the pump was suspended; insulin outside every sequence
 reported with its total, never attached; overlapping monthly exports deduplicated. A terminal view:
 inputs untouched, the output refuses to be folded again.
