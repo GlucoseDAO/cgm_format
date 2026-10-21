@@ -224,9 +224,11 @@ partly duplicate the pump's (§2.5):
 - `PUMP` (the default): boluses and carbs from the pump frame; the CGM frame's insulin and carb rows
   are reported in a warning with their totals, not folded.
 - `CGM`: boluses and carbs from the CGM frame; the pump contributes basal only.
-- `MERGE`: both, **paired across a window, then placed on one slot**. Per quantity (insulin, carbs),
-  each CGM-side entry is paired with at most one pump-side entry within `FOLD_MERGE_WINDOW_MINUTES`
-  (default `SMALL_GAP_MAX_MINUTES`, 15, three slots), nearest in time first, one-to-one. A pair lands
+- `MERGE`: both, **paired within a slot threshold, then placed on one slot**. Per quantity (insulin,
+  carbs), each CGM-side entry is paired with at most one pump-side entry whose slot is at most
+  `merge_pair_slots` slots from its own (an argument, default from the class attribute
+  `merge_pair_slots = 1`, the person's choice), nearest in time first, one-to-one. **Beyond the
+  threshold nothing merges and both are kept**, each on its own slot. A pair lands
   on the pump entry's slot (the device that delivered the dose and timed the meal); an entry with no
   partner stays on its own slot. The pair's value follows the person's rule: **a 0 or null on either
   side is "this source did not say"**, so the other side's value is taken as it is (a pump 5 U against
@@ -243,12 +245,18 @@ overlapping days), among entries within 15 minutes of each other and equal in am
 | insulin | 6 | 5 | 1, two slots apart (7 min) |
 | carbs | 6 | 3 | 3, one, one and three slots apart (up to 10 min) |
 
-Per-slot matching would count 1 of 6 doses and 3 of 6 meals twice. The window catches all 12. It also
-pairs entries whose amounts differ (6 insulin and 2 carb pairs within 15 minutes here): those take
+Same-slot matching (`merge_pair_slots=0`) would count 1 of 6 doses and 3 of 6 meals twice. The
+default of 1 slot catches 5 doses and 5 meals and still keeps two pairs apart: the dose two slots
+apart (exactly equal amounts, logged in the CGM app 7 minutes after the pump started it, with no other
+dose on either side within 30 minutes, so almost certainly one dose) and the meal three slots apart.
+Those count twice at the default and merge at `merge_pair_slots=2` and `3`. The person chose 1 (2026-10-21:
+"1 slot is to be default threshold, more = no merge, keep both"). The fold's warning gives the number
+of unpaired entries that have a same-kind entry from the other source within three slots, so a run can
+see what a wider threshold would merge. A pair also forms between entries whose amounts differ (6 insulin and 2 carb pairs within 15 minutes here): those take
 the mean and land in the warning with both values, which is the person's "warn where std deviation
-is larger than expected with values". Two different doses minutes apart (a correction after a meal
-bolus) can be paired by mistake; the warning is where that shows, and `PUMP` or `CGM` avoids pairing
-altogether.
+is larger than expected with values". Two different doses within the threshold (a correction right
+after a meal bolus) can be paired by mistake; the warning is where that shows, and `PUMP` or `CGM`
+avoids pairing altogether.
 
 **The output is a terminal view**, in the shape `to_data_only_df` returns: `datetime`, `glucose`,
 `carbs`, `insulin_slow` (null), `insulin_fast`, and `basal_rate` as the time-weighted mean U/h over
@@ -380,9 +388,9 @@ Answered 2026-10-21:
   is refused. Basal: unfolded by default (`insulin_fast` = bolus, `basal_rate` = the bin mean in U/h),
   and folded with `fold_basal=True` (`insulin_fast` = bolus + `rate × I / 60`). Source: `PUMP`, `CGM`, and
   `MERGE` with a 0 on one side (takes the other), two agreeing non-zeros (the mean), two disagreeing
-  beyond tolerance (the mean, and the pair in the warning with both values), a pair two slots apart
-  (merged onto the pump's slot, counted once), a pair just outside the window (both kept), and two
-  CGM entries near one pump entry (only the nearer pairs).
+  beyond tolerance (the mean, and the pair in the warning with both values), a pair one slot apart
+  (merged onto the pump's slot), a pair two slots apart (both kept at the default, merged at
+  `merge_pair_slots=2`), and two CGM entries near one pump entry (only the nearer pairs).
 - RM18: two boluses on one grid point sum; an all-null group stays null.
 - The real files: each of the four parses. Over the overlap with the Dexcom export, the folded total
   equals the pump's own total (basal integral + delivered boluses) minus what the warnings report,
