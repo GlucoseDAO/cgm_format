@@ -32,6 +32,9 @@ Each event type uses a 7-8 character code:
 **Calibration:**
 
 - `CALIBRAT` - Sensor calibration event. Libre strip / finger-prick readings (Record Type 2) map here.
+- `BG_METER` - A fingerstick meter reading that is not a calibration (a Medtronic `BG Reading`). The
+  value rides `glucose`, but it is never part of the sensor series, which every processor stage reads
+  from `EGV_READ` rows only.
 
 **Carbohydrates:**
 
@@ -40,7 +43,9 @@ Each event type uses a 7-8 character code:
 **Insulin:**
 
 - `INS_FAST` - Fast-acting (bolus) insulin
-- `INS_SLOW` - Long-acting (basal) insulin
+- `INS_SLOW` - Long-acting (basal) insulin, a discrete dose (a pen injection)
+- `BASAL_RT` - A pump's basal rate changed: `basal_rate` (extended schema) holds the rate in force
+  from this row until the next `BASAL_RT` row. Pump basal is rapid-acting insulin, never `INS_SLOW`.
 
 **Exercise:**
 
@@ -183,6 +188,7 @@ existing consumer sees exactly the frame it saw before.
 | Food | `calories`, `protein`, `fat`, `fiber` | kcal, g, g, g |
 | Wearable | `heart_rate`, `breathing_rate`, `acceleration`, `mets`, `activity_calories`, `steps` | bpm, breaths/min, g, —, kcal, count |
 | Analyte | `ketones` | mmol/L |
+| Insulin delivery | `basal_rate`, `insulin_duration` | U/h, min |
 | Escape hatch | `annotations` | JSON object |
 
 The core columns keep their positions, so the core schema is an exact **prefix** of the extended
@@ -196,6 +202,10 @@ on it. Use `annotations_to_json`; do not build the string by hand.
 
 `ketones` is mmol/L and is **not** routed through the glucose conversion. Clinical ketones are
 already mmol/L, and borrowing another analyte's convention would scale them by 18.
+
+`basal_rate` and `insulin_duration` carry what a pump says that a dose at an instant cannot: a rate
+in force until it changes (on `BASAL_RT` rows), and the minutes a square bolus took to deliver (on
+its `INS_FAST` row). A pump export (`MEDTRONIC_PUMP`) parses into this schema.
 
 Frames targeting the extended schema are processed by `ExtendedFormatProcessor`. Handing one to the
 core `FormatProcessor` raises under the default validation mode rather than silently narrowing.

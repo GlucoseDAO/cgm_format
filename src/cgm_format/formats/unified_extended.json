@@ -52,9 +52,11 @@
         "enum": [
           "EGV_READ",
           "CALIBRAT",
+          "BG_METER",
           "CARBS_IN",
           "INS_FAST",
           "INS_SLOW",
+          "BASAL_RT",
           "XRCS_LTE",
           "XRCS_MED",
           "XRCS_HVY",
@@ -228,6 +230,24 @@
       }
     },
     {
+      "name": "basal_rate",
+      "type": "number",
+      "description": "Effective pump basal rate. On a BASAL_RT row: the rate in force from this row's datetime until the next BASAL_RT row, null meaning unknown from here. Null on every other row of a parsed frame",
+      "unit": "U/h",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
+      "name": "insulin_duration",
+      "type": "number",
+      "description": "Minutes over which this row's insulin_fast was delivered, from its datetime on (a pump's square or dual-square bolus). Null means delivered at once",
+      "unit": "min",
+      "constraints": {
+        "minimum": 0
+      }
+    },
+    {
       "name": "annotations",
       "type": "string",
       "description": "JSON object holding source detail with no typed home (meal photo path, free-text description, the raw vendor column a value came from). Serialize with annotations_to_json(); null when absent"
@@ -251,6 +271,8 @@
     "activity_calories",
     "steps",
     "ketones",
+    "basal_rate",
+    "insulin_duration",
     "annotations"
   ]
 }

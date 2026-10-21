@@ -135,6 +135,17 @@ from cgm_format.formats.medtronic import (
     MEDTRONIC_CSV_SEPARATOR,
     MEDTRONIC_SCHEMA_OVERRIDES_UTF8,
 )
+from cgm_format.formats.medtronic_pump import (
+    MedtronicPumpColumn,
+    MedtronicBolusType,
+    MedtronicTempBasalType,
+    MEDTRONIC_SPREAD_BOLUS_TYPES,
+    MEDTRONIC_RESUME_STATE,
+    MEDTRONIC_DAY_MARKERS,
+    MEDTRONIC_SECTION_MARKER,
+    MEDTRONIC_PUMP_SECTION,
+    MEDTRONIC_SENSOR_SECTION,
+)
 from cgm_format.formats.nightscout import (
     NightscoutEntryColumn,
     NightscoutTreatmentColumn,
@@ -426,6 +437,8 @@ class FormatParser(CGMParser):
             unified_df = cls._process_libre(text_data, european=True)
         elif format_type == SupportedCGMFormat.MEDTRONIC:
             unified_df = cls._process_medtronic(text_data)
+        elif format_type == SupportedCGMFormat.MEDTRONIC_PUMP:
+            unified_df = cls._process_medtronic_pump(text_data)
         elif format_type == SupportedCGMFormat.NIGHTSCOUT:
             unified_df = cls._process_nightscout(text_data)
         elif format_type == SupportedCGMFormat.CGMACROS:
@@ -1289,6 +1302,11 @@ class FormatParser(CGMParser):
         - "-------" placeholders in numeric columns
         - Multiple device sections with repeated header rows
         - Event Marker free-text parsing for insulin and carbs
+        - Fingerstick `BG Reading (mg/dL)` values as `BG_METER` rows, never as
+          `EGV_READ`: a meter reading is not part of the sensor series
+
+        A `Basal Rate (U/h)` is a pump's rate, not a dose, so it is not read
+        here; a pump export is `MEDTRONIC_PUMP` (`_process_medtronic_pump`).
 
         Args:
             text_data: Medtronic CSV string
@@ -1357,22 +1375,42 @@ class FormatParser(CGMParser):
 
             # Coalesce: structured columns take priority over Event Marker
             df = df.with_columns([
-                pl.coalesce([pl.col("_sensor_gl"), pl.col("_bg_gl")]).alias("_glucose"),
                 pl.coalesce([pl.col("_bolus_u"), pl.col("_marker_insulin")]).alias("_insulin_fast"),
-                pl.col("_basal_u").alias("_insulin_slow"),
                 pl.coalesce([pl.col("_bwz_carbs"), pl.col("_marker_carbs")]).alias("_carbs"),
             ])
+
+            basal_rows = df.filter(pl.col("_basal_u").is_not_null()).height
+            if basal_rows:
+                # The vendor said something this format cannot represent: a rate
+                # in U/h is not a dose in U, and a core frame has no rate column.
+                logger.warning(
+                    "Medtronic export carries %d 'Basal Rate (U/h)' row(s), which "
+                    "are not represented: a basal rate is not an insulin_slow dose. "
+                    "A pump export parses as MEDTRONIC_PUMP, which keeps them.",
+                    basal_rows,
+                )
 
             _ts = pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime")
             _quality = pl.lit(0).alias("quality")
 
-            # --- Glucose rows ---
+            # --- Glucose rows: the sensor series only ---
             glucose_data = (
-                df.filter(pl.col("_glucose").is_not_null())
+                df.filter(pl.col("_sensor_gl").is_not_null())
                 .select([
                     _ts,
-                    pl.col("_glucose").alias("glucose"),
+                    pl.col("_sensor_gl").alias("glucose"),
                     pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"),
+                    _quality,
+                ])
+            )
+
+            # --- Fingerstick meter rows ---
+            meter_data = (
+                df.filter(pl.col("_bg_gl").is_not_null())
+                .select([
+                    _ts,
+                    pl.col("_bg_gl").alias("glucose"),
+                    pl.lit(UnifiedEventType.GLUCOSE_METER.value).alias("event_type"),
                     _quality,
                 ])
             )
@@ -1384,17 +1422,6 @@ class FormatParser(CGMParser):
                     _ts,
                     pl.col("_insulin_fast").alias("insulin_fast"),
                     pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
-                    _quality,
-                ])
-            )
-
-            # --- Slow insulin rows (basal rate) ---
-            insulin_slow_data = (
-                df.filter(pl.col("_insulin_slow").is_not_null())
-                .select([
-                    _ts,
-                    pl.col("_insulin_slow").alias("insulin_slow"),
-                    pl.lit(UnifiedEventType.INSULIN_SLOW.value).alias("event_type"),
                     _quality,
                 ])
             )
@@ -1412,10 +1439,10 @@ class FormatParser(CGMParser):
 
             # Combine all event types
             all_data = [glucose_data]
+            if len(meter_data) > 0:
+                all_data.append(meter_data)
             if len(insulin_fast_data) > 0:
                 all_data.append(insulin_fast_data)
-            if len(insulin_slow_data) > 0:
-                all_data.append(insulin_slow_data)
             if len(carb_data) > 0:
                 all_data.append(carb_data)
 
@@ -1430,6 +1457,325 @@ class FormatParser(CGMParser):
         except pl.exceptions.PolarsError as e:
             error_msg = f"Failed to parse Medtronic CSV: {e}"
             raise MalformedDataError(cls._truncate_error_message(error_msg))
+
+    # ===== Medtronic pump (CareLink, MiniMed) =====
+
+    @classmethod
+    def _process_medtronic_pump(cls, text_data: str) -> UnifiedFormat:
+        """Process a MiniMed pump CareLink export into the extended unified format.
+
+        What the pump section says, and what it becomes (docs/PLAN_pump.md §3.1):
+
+        - **Boluses**: one `INS_FAST` row per bolus, its two log rows (programmed,
+          delivered) paired by `Bolus Number` and `Bolus Type`. The amount is the
+          *delivered* volume; the time is when it was programmed, which is when
+          delivery started. A square bolus or a dual's square part also carries
+          `insulin_duration`, its delivery time in minutes.
+        - **Basal**: `BASAL_RT` rows carrying `basal_rate`, the effective rate in
+          force until the next such row. The logged `Basal Rate (U/h)` already is
+          the effective rate for an absolute temp basal and a user suspend, but
+          not for a `Percent` temp basal (the log keeps the schedule), so the
+          percentage is applied here; and every suspend other than
+          `NORMAL_PUMPING` is 0 U/h until `NORMAL_PUMPING`, an alarm suspend
+          included, because a suspended pump delivers nothing.
+        - **Carbs** from the bolus wizard as `CARBS_IN`; fingersticks as
+          `BG_METER`; `Sensor Glucose (mg/dL)`, when a Medtronic sensor was worn,
+          as `EGV_READ`.
+
+        Pump basal and boluses are rapid-acting insulin: nothing here is
+        `insulin_slow`. Priming volumes, event markers and a device clock change
+        are not represented, each said once in an aggregated warning.
+
+        Args:
+            text_data: Medtronic pump CareLink CSV string
+
+        Returns:
+            DataFrame in the extended unified format
+
+        Raises:
+            MalformedDataError: If the export has no pump section or cannot be read
+            ZeroValidInputError: If nothing in it could be represented
+        """
+        try:
+            sections = {
+                name: cls._medtronic_timed(frame)
+                for name, frame in cls._medtronic_sections(text_data).items()
+            }
+            if MEDTRONIC_PUMP_SECTION not in sections:
+                raise MalformedDataError(
+                    "Medtronic pump export has no 'Pump' section; found: "
+                    + (", ".join(sorted(sections)) or "none")
+                )
+            pump = sections[MEDTRONIC_PUMP_SECTION]
+            col = MedtronicPumpColumn
+            everything = pl.concat(list(sections.values()), how="diagonal")
+
+            boluses = cls._medtronic_boluses(pump)
+            basal = cls._medtronic_effective_basal(pump)
+
+            carbs = (
+                pump.with_columns(cls._euro_number_to_float(pl.col(col.BWZ_CARB_INPUT)).alias("carbs"))
+                .filter(pl.col("carbs") > 0)
+                .select("datetime", "carbs", pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"))
+            )
+            meter = (
+                pump.with_columns(cls._euro_number_to_float(pl.col(col.BG_READING)).alias("glucose"))
+                .filter(pl.col("glucose").is_not_null())
+                .select("datetime", "glucose", pl.lit(UnifiedEventType.GLUCOSE_METER.value).alias("event_type"))
+            )
+            sensor = (
+                everything.with_columns(cls._euro_number_to_float(pl.col(col.SENSOR_GLUCOSE)).alias("glucose"))
+                .filter(pl.col("glucose").is_not_null())
+                .select("datetime", "glucose", pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"))
+            )
+
+            primes = pump.filter(pl.col(col.PRIME_TYPE).is_not_null())
+            prime_units = primes.select(
+                cls._euro_number_to_float(pl.col(col.PRIME_VOLUME_DELIVERED)).sum()
+            ).item()
+            markers = everything.filter(
+                pl.col(col.EVENT_MARKER).is_not_null()
+                & ~pl.col(col.EVENT_MARKER).is_in(list(MEDTRONIC_DAY_MARKERS))
+            ).height
+            clock_changes = everything.filter(pl.col(col.NEW_DEVICE_TIME).is_not_null()).height
+
+            unrepresented = [
+                f"{primes.height} priming row(s), {prime_units or 0:g} U (priming fills the "
+                "tubing or cannula; no export records how much reached the body)"
+                if primes.height else "",
+                f"{markers} event marker(s)" if markers else "",
+            ]
+            unrepresented = [u for u in unrepresented if u]
+            if unrepresented:
+                logger.warning(
+                    "Medtronic pump export: not represented: %s.", "; ".join(unrepresented)
+                )
+            if clock_changes:
+                logger.warning(
+                    "Medtronic pump export: the device clock was changed %d time(s) "
+                    "('New Device Time'). Timestamps are kept as the pump logged them "
+                    "and not shifted, so rows on either side of a change may be offset "
+                    "from each other and from a CGM export.",
+                    clock_changes,
+                )
+
+            unified = pl.concat(
+                [frame for frame in (sensor, meter, boluses, basal, carbs) if frame.height],
+                how="diagonal",
+            ).with_columns(pl.lit(0).alias("quality"), pl.lit(0).alias("sequence_id"))
+
+            return cls._postprocess_unified(
+                unified, schema=UNIFIED_TARGET_SCHEMA[SupportedCGMFormat.MEDTRONIC_PUMP]
+            )
+
+        except pl.exceptions.PolarsError as e:
+            error_msg = f"Failed to parse Medtronic pump CSV: {e}"
+            raise MalformedDataError(cls._truncate_error_message(error_msg))
+
+    @classmethod
+    def _medtronic_sections(cls, text_data: str) -> Dict[str, pl.DataFrame]:
+        """Split a CareLink export at its "-------;<device>;<section>" lines.
+
+        Each section is read on its own with every cell as text. Numbers carry
+        comma decimals and "-------" placeholders, and inferring dtypes over the
+        whole file is what failed on pump exports: the second section's header
+        row was read as data. Two sections of one name are concatenated.
+        """
+        lines = text_data.splitlines()
+        marks = [
+            i for i, line in enumerate(lines)
+            if line.lstrip("\ufeff").startswith(MEDTRONIC_SECTION_MARKER)
+        ]
+        if not marks:
+            raise MalformedDataError(
+                f"Medtronic export has no '{MEDTRONIC_SECTION_MARKER}' section line"
+            )
+        sections: Dict[str, pl.DataFrame] = {}
+        for k, start in enumerate(marks):
+            end = marks[k + 1] if k + 1 < len(marks) else len(lines)
+            fields = [f.strip().strip('"') for f in lines[start].split(MEDTRONIC_CSV_SEPARATOR)]
+            name = fields[2] if len(fields) > 2 else ""
+            body = "\n".join(lines[start + 1:end]).strip()
+            if not body:
+                continue
+            frame = pl.read_csv(
+                StringIO(body),
+                separator=MEDTRONIC_CSV_SEPARATOR,
+                infer_schema=False,
+                truncate_ragged_lines=True,
+            )
+            frame = frame.rename({c: c.strip().lstrip("\ufeff") for c in frame.columns})
+            sections[name] = (
+                pl.concat([sections[name], frame], how="diagonal") if name in sections else frame
+            )
+        return sections
+
+    @classmethod
+    def _medtronic_timed(cls, frame: pl.DataFrame) -> pl.DataFrame:
+        """Add `datetime` and the pump's own row order `_ix`, sorted by both.
+
+        `Index` is the order the pump logged rows in, which is what breaks a tie
+        between two rows on one timestamp (two basal rates logged in the same
+        second: the later one is in force).
+        """
+        col = MedtronicPumpColumn
+        frame = frame.with_columns(
+            pl.concat_str([pl.col(col.DATE), pl.col(col.TIME)], separator=" ").alias("_ts_raw")
+        )
+        timestamp_format = cls._probe_timestamp_format(frame, "_ts_raw", MEDTRONIC_TIMESTAMP_FORMATS)
+        return frame.with_columns(
+            pl.col("_ts_raw").str.strptime(pl.Datetime("ms"), timestamp_format).alias("datetime"),
+            cls._euro_number_to_float(pl.col(col.INDEX)).alias("_ix"),
+        ).sort("datetime", "_ix")
+
+    @staticmethod
+    def _hms_to_minutes(expr: pl.Expr) -> pl.Expr:
+        """'h:mm:ss' as minutes, Float64; null where the cell is empty or malformed."""
+        parts = expr.str.split(":")
+        return (
+            parts.list.get(0, null_on_oob=True).cast(pl.Float64, strict=False) * 60
+            + parts.list.get(1, null_on_oob=True).cast(pl.Float64, strict=False)
+            + parts.list.get(2, null_on_oob=True).cast(pl.Float64, strict=False) / 60
+        )
+
+    @classmethod
+    def _medtronic_boluses(cls, pump: pl.DataFrame) -> pl.DataFrame:
+        """One `INS_FAST` row per delivered bolus (see `_process_medtronic_pump`)."""
+        col = MedtronicPumpColumn
+        rows = pump.filter(pl.col(col.BOLUS_TYPE).is_not_null()).with_columns(
+            cls._euro_number_to_float(pl.col(col.BOLUS_VOLUME_SELECTED)).alias("_selected"),
+            cls._euro_number_to_float(pl.col(col.BOLUS_VOLUME_DELIVERED)).alias("_delivered"),
+            cls._hms_to_minutes(pl.col(col.BOLUS_DURATION)).alias("_minutes"),
+            # A row with no Bolus Number pairs with nothing: it is its own bolus.
+            pl.coalesce(
+                pl.col(col.BOLUS_NUMBER), pl.format("unnumbered-{}", pl.col("_ix"))
+            ).alias("_bolus_key"),
+        )
+        known = [member.value for member in MedtronicBolusType]
+        unknown = rows.filter(~pl.col(col.BOLUS_TYPE).is_in(known))
+        if unknown.height:
+            logger.warning(
+                "Medtronic pump export: %d bolus row(s) of an unknown type, not represented: %s.",
+                unknown.height,
+                ", ".join(sorted(set(unknown[col.BOLUS_TYPE].to_list()))),
+            )
+        programmed = pl.col("_selected").is_not_null() & pl.col("_delivered").is_null()
+        finished = pl.col("_delivered").is_not_null()
+        boluses = (
+            rows.filter(pl.col(col.BOLUS_TYPE).is_in(known))
+            .group_by("_bolus_key", col.BOLUS_TYPE, maintain_order=True)
+            .agg(
+                pl.col("datetime").filter(programmed).first().alias("_programmed_at"),
+                pl.col("datetime").filter(finished).last().alias("_finished_at"),
+                pl.col("_selected").filter(programmed).first().alias("_selected"),
+                pl.col("_delivered").filter(finished).last().alias("_delivered"),
+                pl.col("_minutes").filter(programmed).first().alias("_programmed_minutes"),
+                pl.col("_minutes").filter(finished).last().alias("_delivered_minutes"),
+            )
+            .with_columns(pl.col(col.BOLUS_TYPE).is_in(list(MEDTRONIC_SPREAD_BOLUS_TYPES)).alias("_spread"))
+        )
+        delivered = pl.col("_delivered").is_not_null() & (pl.col("_delivered") > 0)
+        empty = boluses.filter(~delivered).height
+        if empty:
+            logger.warning(
+                "Medtronic pump export: %d bolus(es) with no delivered volume, not represented.",
+                empty,
+            )
+        unclear = boluses.filter(
+            delivered & pl.col("_spread")
+            & (pl.col("_delivered") < pl.col("_selected"))
+            & (pl.col("_delivered_minutes") == pl.col("_programmed_minutes"))
+        ).height
+        if unclear:
+            logger.warning(
+                "Medtronic pump export: %d square bolus(es) delivered less than programmed but "
+                "report the programmed duration. Their delivered volume is spread over that "
+                "duration, which assumes the pump reports a cancelled square bolus's actual "
+                "duration; these rows are the ones that would show it does not.",
+                unclear,
+            )
+        return boluses.filter(delivered).select(
+            pl.coalesce("_programmed_at", "_finished_at").alias("datetime"),
+            pl.col("_delivered").alias("insulin_fast"),
+            pl.when(pl.col("_spread"))
+            .then(pl.coalesce("_delivered_minutes", "_programmed_minutes"))
+            .otherwise(None)
+            .alias("insulin_duration"),
+            pl.lit(UnifiedEventType.INSULIN_FAST.value).alias("event_type"),
+        )
+
+    @classmethod
+    def _medtronic_effective_basal(cls, pump: pl.DataFrame) -> pl.DataFrame:
+        """`BASAL_RT` rows: the effective basal rate at each point it changes.
+
+        Evaluated at every instant something could change it (a logged rate, a
+        suspend or resume, a temp basal's start or end): 0 while suspended, else
+        the last logged rate, times the percentage while a `Percent` temp is in
+        force. Only changes are emitted; a rate before the first logged one is
+        unknown, so nothing is emitted for it.
+        """
+        col = MedtronicPumpColumn
+        last_per_instant = {"subset": "datetime", "keep": "last", "maintain_order": True}
+        logged = (
+            pump.select("datetime", cls._euro_number_to_float(pl.col(col.BASAL_RATE)).alias("_scheduled"))
+            .filter(pl.col("_scheduled").is_not_null())
+            .unique(**last_per_instant)
+        )
+        states = (
+            pump.filter(pl.col(col.SUSPEND).is_not_null())
+            .select("datetime", (pl.col(col.SUSPEND) != MEDTRONIC_RESUME_STATE).alias("_suspended"))
+            .unique(**last_per_instant)
+        )
+        temps = (
+            pump.filter(pl.col(col.TEMP_BASAL_TYPE).is_not_null())
+            .select(
+                pl.col("datetime").alias("_temp_start"),
+                (pl.col(col.TEMP_BASAL_TYPE) == MedtronicTempBasalType.PERCENT).alias("_percent"),
+                cls._euro_number_to_float(pl.col(col.TEMP_BASAL_AMOUNT)).alias("_amount"),
+                cls._hms_to_minutes(pl.col(col.TEMP_BASAL_DURATION)).alias("_temp_minutes"),
+            )
+            .unique(subset="_temp_start", keep="last", maintain_order=True)
+            # A temp ends at its duration, or when the next temp replaces it.
+            .with_columns(
+                pl.min_horizontal(
+                    pl.col("_temp_start")
+                    + pl.duration(milliseconds=(pl.col("_temp_minutes") * 60_000).round(0).cast(pl.Int64)),
+                    pl.col("_temp_start").shift(-1),
+                ).alias("_temp_end")
+            )
+        )
+        instants = (
+            pl.concat([
+                logged.select("datetime"),
+                states.select("datetime"),
+                temps.select(pl.col("_temp_start").alias("datetime")),
+                temps.select(pl.col("_temp_end").alias("datetime")).drop_nulls(),
+            ])
+            .unique()
+            .sort("datetime")
+        )
+        if instants.height == 0:
+            return pl.DataFrame(schema={"datetime": pl.Datetime("ms"), "basal_rate": pl.Float64, "event_type": pl.Utf8})
+        rate = (
+            instants
+            .join_asof(logged, on="datetime", strategy="backward")
+            .join_asof(states, on="datetime", strategy="backward")
+            .join_asof(temps, left_on="datetime", right_on="_temp_start", strategy="backward")
+            .with_columns(
+                pl.when(pl.col("_suspended").fill_null(False))
+                .then(pl.lit(0.0))
+                .when(pl.col("_percent").fill_null(False) & (pl.col("datetime") < pl.col("_temp_end")))
+                .then(pl.col("_scheduled") * pl.col("_amount") / 100)
+                .otherwise(pl.col("_scheduled"))
+                .alias("basal_rate")
+            )
+            .select("datetime", "basal_rate")
+        )
+        changed = pl.col("basal_rate").ne_missing(pl.col("basal_rate").shift(1)) | (pl.int_range(pl.len()) == 0)
+        known_from_here = pl.col("basal_rate").is_not_null().cast(pl.Int8).cum_max() > 0
+        return rate.filter(changed).filter(known_from_here).with_columns(
+            pl.lit(UnifiedEventType.BASAL_RATE.value).alias("event_type")
+        )
 
     # ===== Nightscout Processing Methods =====
 

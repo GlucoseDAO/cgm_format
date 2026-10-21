@@ -16,7 +16,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ## RM16 — MiniMed 720G pump exports parse
 
-**State:** building, by the lead (2026-10-21) · **Owner:** lead · **Severity:** high
+**State:** building, by the lead: the parser is on main, ships in 0.13.0 with RM17 and RM21 · **Owner:** lead · **Severity:** high
 
 The proposal is [PLAN_pump.md](PLAN_pump.md) §2 and §3.1; this item is the parser half. All four real
 720G CareLink exports in the tree fail to parse today (`MalformedDataError` on dtype inference), and

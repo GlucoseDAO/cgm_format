@@ -142,8 +142,9 @@ What the pump section emits, all rapid-acting, none of it in `insulin_slow`:
   existing pattern: Libre's strip readings already ride `glucose` as `CALIBRAT` rows, and every
   processor stage reads only `EGV_READ` rows as the sensor series. Whether Libre's strip rows should
   become `BG_METER` too is a redefinition of what a consumer reads, so not in this plan.
-- **Not emitted**, one aggregated warning each with its count: priming volumes, rows after a filled
-  `New Device Time` (the clock changed; the parser says how many rows follow and does not shift them).
+- **Not represented**, one aggregated warning each with its count: priming volumes and event
+  markers. A filled `New Device Time` (the clock changed) is reported with its count; the rows are
+  kept as the pump logged them, not shifted and not dropped.
 
 Two **additive** columns on `CGM_SCHEMA_EXTENDED` (inserted before `annotations`, which stays last),
 and two new event types (`BASAL_RT`, `BG_METER`):
@@ -390,10 +391,10 @@ Answered 2026-10-21:
 
 ## 7. Tests and fixtures
 
-- A **synthetic** 720G export committed under `data/input/` with `git add -f` (F2), built by
-  `scripts/scrub_synthetic_medtronic.py` in the pattern of the Dexcom and Libre scrubbers: real
-  structure, shifted dates, no name, no serial. Its expected values are written by hand from its own
-  rows, never by running the parser.
+- A **synthetic** 720G export committed under `data/input/` with `git add -f` (F2), written by
+  `scripts/make_synthetic_medtronic_pump.py`: hand-authored rather than scrubbed from a real export,
+  one or two rows per record kind, so that its expected values can be written by hand from the
+  script's row list, never by running the parser. The real layout (BOM, metadata, sections) is kept.
 - Parser: every row kind in §2.2, including a percent temp across a schedule change, two rate rows on
   one timestamp, a dual bolus, a plain square bolus, a bolus with no volume, an alarm suspend, a
   rewind, a priming, both fingerstick sources as `BG_METER` rows (and none as `EGV_READ`), a filled

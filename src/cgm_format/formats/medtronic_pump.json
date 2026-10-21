@@ -1,0 +1,455 @@
+{
+  "fields": [
+    {
+      "name": "Index",
+      "type": "string",
+      "description": "CareLink pump export column 'Index', as text",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Date",
+      "type": "string",
+      "description": "CareLink pump export column 'Date', as text",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "Time",
+      "type": "string",
+      "description": "CareLink pump export column 'Time', as text",
+      "constraints": {
+        "required": true
+      }
+    },
+    {
+      "name": "New Device Time",
+      "type": "string",
+      "description": "CareLink pump export column 'New Device Time', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BG Source",
+      "type": "string",
+      "description": "CareLink pump export column 'BG Source', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BG Reading (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'BG Reading (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Linked BG Meter ID",
+      "type": "string",
+      "description": "CareLink pump export column 'Linked BG Meter ID', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Basal Rate (U/h)",
+      "type": "string",
+      "description": "CareLink pump export column 'Basal Rate (U/h)', as text",
+      "unit": "U/h",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Amount",
+      "type": "string",
+      "description": "CareLink pump export column 'Temp Basal Amount', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Type",
+      "type": "string",
+      "description": "CareLink pump export column 'Temp Basal Type', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Temp Basal Duration (h:mm:ss)",
+      "type": "string",
+      "description": "CareLink pump export column 'Temp Basal Duration (h:mm:ss)', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Type",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Type', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Volume Selected (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Volume Selected (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Volume Delivered (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Volume Delivered (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Duration (h:mm:ss)",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Duration (h:mm:ss)', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Prime Type",
+      "type": "string",
+      "description": "CareLink pump export column 'Prime Type', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Prime Volume Delivered (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'Prime Volume Delivered (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Estimated Reservoir Volume after Fill (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'Estimated Reservoir Volume after Fill (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Alert",
+      "type": "string",
+      "description": "CareLink pump export column 'Alert', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "User Cleared Alerts",
+      "type": "string",
+      "description": "CareLink pump export column 'User Cleared Alerts', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Suspend",
+      "type": "string",
+      "description": "CareLink pump export column 'Suspend', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Rewind",
+      "type": "string",
+      "description": "CareLink pump export column 'Rewind', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Estimate (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Estimate (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Target High BG (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Target High BG (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Target Low BG (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Target Low BG (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Carb Ratio (g/U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Carb Ratio (g/U)', as text",
+      "unit": "g/U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Insulin Sensitivity (mg/dL/U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Insulin Sensitivity (mg/dL/U)', as text",
+      "unit": "mg/dL/U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Carb Input (grams)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Carb Input (grams)', as text",
+      "unit": "grams",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ BG Input (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ BG Input (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Correction Estimate (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Correction Estimate (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Food Estimate (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Food Estimate (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Active Insulin (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Active Insulin (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Status",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Status', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Calibration BG (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'Sensor Calibration BG (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Glucose (mg/dL)",
+      "type": "string",
+      "description": "CareLink pump export column 'Sensor Glucose (mg/dL)', as text",
+      "unit": "mg/dL",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "ISIG Value",
+      "type": "string",
+      "description": "CareLink pump export column 'ISIG Value', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Event Marker",
+      "type": "string",
+      "description": "CareLink pump export column 'Event Marker', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Number",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Number', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Cancellation Reason",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Cancellation Reason', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BWZ Unabsorbed Insulin Total (U)",
+      "type": "string",
+      "description": "CareLink pump export column 'BWZ Unabsorbed Insulin Total (U)', as text",
+      "unit": "U",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Final Bolus Estimate",
+      "type": "string",
+      "description": "CareLink pump export column 'Final Bolus Estimate', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Scroll Step Size",
+      "type": "string",
+      "description": "CareLink pump export column 'Scroll Step Size', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Insulin Action Curve Time",
+      "type": "string",
+      "description": "CareLink pump export column 'Insulin Action Curve Time', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Calibration Rejected Reason",
+      "type": "string",
+      "description": "CareLink pump export column 'Sensor Calibration Rejected Reason', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Preset Bolus",
+      "type": "string",
+      "description": "CareLink pump export column 'Preset Bolus', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Bolus Source",
+      "type": "string",
+      "description": "CareLink pump export column 'Bolus Source', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "BLE Network Device",
+      "type": "string",
+      "description": "CareLink pump export column 'BLE Network Device', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Device Update Event",
+      "type": "string",
+      "description": "CareLink pump export column 'Device Update Event', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Associated Reason",
+      "type": "string",
+      "description": "CareLink pump export column 'Network Device Associated Reason', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Disassociated Reason",
+      "type": "string",
+      "description": "CareLink pump export column 'Network Device Disassociated Reason', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Network Device Disconnected Reason",
+      "type": "string",
+      "description": "CareLink pump export column 'Network Device Disconnected Reason', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor Exception",
+      "type": "string",
+      "description": "CareLink pump export column 'Sensor Exception', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Preset Temp Basal Name",
+      "type": "string",
+      "description": "CareLink pump export column 'Preset Temp Basal Name', as text",
+      "constraints": {
+        "required": false
+      }
+    },
+    {
+      "name": "Sensor State",
+      "type": "string",
+      "description": "CareLink pump export column 'Sensor State', as text",
+      "constraints": {
+        "required": false
+      }
+    }
+  ]
+}

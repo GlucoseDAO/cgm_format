@@ -15,6 +15,11 @@ from cgm_format.formats.dexcom_eu import DEXCOM_EU_SCHEMA, DEXCOM_EU_DETECTION_P
 from cgm_format.formats.libre import LIBRE_SCHEMA, LIBRE_DETECTION_PATTERNS, LIBRE_DATA_START_LINE
 from cgm_format.formats.libre_eu import LIBRE_EU_SCHEMA, LIBRE_EU_DETECTION_PATTERNS, LIBRE_EU_DATA_START_LINE
 from cgm_format.formats.medtronic import MEDTRONIC_SCHEMA, MEDTRONIC_DETECTION_PATTERNS, MEDTRONIC_DATA_START_LINE
+from cgm_format.formats.medtronic_pump import (
+    MEDTRONIC_PUMP_SCHEMA,
+    MEDTRONIC_PUMP_DETECTION_PATTERNS,
+    MEDTRONIC_PUMP_DATA_START_LINE,
+)
 from cgm_format.formats.nightscout import NIGHTSCOUT_ENTRIES_SCHEMA, NIGHTSCOUT_DETECTION_PATTERNS, NIGHTSCOUT_DATA_START_LINE
 from cgm_format.formats.d1namo import (
     D1NAMO_GLUCOSE_SCHEMA,
@@ -51,6 +56,7 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.LIBRE: LIBRE_SCHEMA,
     SupportedCGMFormat.LIBRE_EU: LIBRE_EU_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_SCHEMA,
+    SupportedCGMFormat.MEDTRONIC_PUMP: MEDTRONIC_PUMP_SCHEMA,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_ENTRIES_SCHEMA,
     SupportedCGMFormat.CGMACROS: CGMACROS_SCHEMA,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_GLUCOSE_SCHEMA,
@@ -71,7 +77,9 @@ SCHEMA_MAP: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
 # patterns (e.g. "Timestamp (YYYY-MM-DDThh:mm:ss)"), so the more specific
 # mmol/L check must win first. Same for LIBRE_EU before LIBRE: the mmol/L
 # export also matches generic Libre patterns ("Glucose Data,Generated",
-# "FreeStyle Libre"), so "Historic Glucose mmol/L" must win first.
+# "FreeStyle Libre"), so "Historic Glucose mmol/L" must win first. And
+# MEDTRONIC_PUMP before MEDTRONIC: a pump export carries "Sensor Glucose (mg/dL)"
+# too, and only its reservoir column says it is a pump.
 FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.UNIFIED_EXTENDED: UNIFIED_EXTENDED_DETECTION_PATTERNS,
     SupportedCGMFormat.UNIFIED_CGM: UNIFIED_DETECTION_PATTERNS,
@@ -79,6 +87,7 @@ FORMAT_DETECTION_PATTERNS: Dict[SupportedCGMFormat, List[str]] = {
     SupportedCGMFormat.DEXCOM: DEXCOM_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE_EU: LIBRE_EU_DETECTION_PATTERNS,
     SupportedCGMFormat.LIBRE: LIBRE_DETECTION_PATTERNS,
+    SupportedCGMFormat.MEDTRONIC_PUMP: MEDTRONIC_PUMP_DETECTION_PATTERNS,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DETECTION_PATTERNS,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DETECTION_PATTERNS,
     SupportedCGMFormat.CGMACROS: CGMACROS_DETECTION_PATTERNS,
@@ -95,6 +104,7 @@ FORMAT_DETECTION_LINE_COUNT: Dict[SupportedCGMFormat, int] = {
     SupportedCGMFormat.LIBRE: LIBRE_DATA_START_LINE,
     SupportedCGMFormat.LIBRE_EU: LIBRE_EU_DATA_START_LINE,
     SupportedCGMFormat.MEDTRONIC: MEDTRONIC_DATA_START_LINE,
+    SupportedCGMFormat.MEDTRONIC_PUMP: MEDTRONIC_PUMP_DATA_START_LINE,
     SupportedCGMFormat.NIGHTSCOUT: NIGHTSCOUT_DATA_START_LINE,
     SupportedCGMFormat.CGMACROS: CGMACROS_DATA_START_LINE,
     SupportedCGMFormat.D1NAMO_DIABETES: D1NAMO_DATA_START_LINE,
@@ -122,6 +132,8 @@ UNIFIED_TARGET_SCHEMA: Dict[SupportedCGMFormat, CGMSchemaDefinition] = {
     SupportedCGMFormat.LIBRE: CGM_SCHEMA,
     SupportedCGMFormat.LIBRE_EU: CGM_SCHEMA,
     SupportedCGMFormat.MEDTRONIC: CGM_SCHEMA,
+    # A basal rate and a bolus's delivery duration have no core home.
+    SupportedCGMFormat.MEDTRONIC_PUMP: CGM_SCHEMA_EXTENDED,
     SupportedCGMFormat.NIGHTSCOUT: CGM_SCHEMA,
     # Macronutrients, heart rate and meal photos have no core home.
     SupportedCGMFormat.CGMACROS: CGM_SCHEMA_EXTENDED,
@@ -157,6 +169,7 @@ FORMAT_CATEGORY: Dict[SupportedCGMFormat, FormatCategory] = {
     SupportedCGMFormat.LIBRE: FormatCategory.EXPORT,
     SupportedCGMFormat.LIBRE_EU: FormatCategory.EXPORT,
     SupportedCGMFormat.MEDTRONIC: FormatCategory.EXPORT,
+    SupportedCGMFormat.MEDTRONIC_PUMP: FormatCategory.EXPORT,
     SupportedCGMFormat.NIGHTSCOUT: FormatCategory.EXPORT,
     # Many subjects, each a directory. The first non-EXPORT format.
     SupportedCGMFormat.CGMACROS: FormatCategory.CORPUS,
@@ -271,6 +284,12 @@ KNOWN_ISSUES_TO_SUPPRESS = {
         # BOM marker in header
         ('incorrect-label', 'Index', None),
     ],
+    # Every pump column is declared text, so the Guardian list's type errors cannot occur. What
+    # Frictionless does see is the file's second section: its "-------" separator line and repeated
+    # header are rows of a table that has one header. Not suppressed — a separator is structure no
+    # single-table schema can describe (the Guardian export is excluded from that validation for the
+    # same reason), and blanket-suppressing missing cells would hide a truncated row too.
+    SupportedCGMFormat.MEDTRONIC_PUMP: [],
     SupportedCGMFormat.NIGHTSCOUT: [
         # nightscout-exporter CSV uses blank lines and "# TREATMENTS ..." comment
         # lines as section separators — frictionless sees these as blank/missing rows

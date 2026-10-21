@@ -1,0 +1,51 @@
+﻿Last Name;First Name;Patient ID;Start Date;End Date
+"Gagarin";"Yuri";"";"12.04.1961";"12.04.1961"
+Patient DOB;;;;
+
+
+-------;MiniMed 720G MMT-1810;Pump
+Index;Date;Time;New Device Time;BG Source;BG Reading (mg/dL);Linked BG Meter ID;Basal Rate (U/h);Temp Basal Amount;Temp Basal Type;Temp Basal Duration (h:mm:ss);Bolus Type;Bolus Volume Selected (U);Bolus Volume Delivered (U);Bolus Duration (h:mm:ss);Prime Type;Prime Volume Delivered (U);Estimated Reservoir Volume after Fill (U);Alert;User Cleared Alerts;Suspend;Rewind;BWZ Estimate (U);BWZ Target High BG (mg/dL);BWZ Target Low BG (mg/dL);BWZ Carb Ratio (g/U);BWZ Insulin Sensitivity (mg/dL/U);BWZ Carb Input (grams);BWZ BG Input (mg/dL);BWZ Correction Estimate (U);BWZ Food Estimate (U);BWZ Active Insulin (U);BWZ Status;Sensor Calibration BG (mg/dL);Sensor Glucose (mg/dL);ISIG Value;Event Marker;Bolus Number;Bolus Cancellation Reason;BWZ Unabsorbed Insulin Total (U);Final Bolus Estimate;Scroll Step Size;Insulin Action Curve Time;Sensor Calibration Rejected Reason;Preset Bolus;Bolus Source;BLE Network Device;Device Update Event;Network Device Associated Reason;Network Device Disassociated Reason;Network Device Disconnected Reason;Sensor Exception;Preset Temp Basal Name;Sensor State
+0,00000;1961/04/12;00:00:00;;;;;1,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+1,00000;1961/04/12;01:00:00;;;;;;50;Percent;01:00:00;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+2,00000;1961/04/12;01:00:00;;;;;1,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+3,00000;1961/04/12;01:30:00;;;;;0,800;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+4,00000;1961/04/12;02:00:00;;;;;0,800;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+5,00000;1961/04/12;03:00:00;;;;;;2,000;Rate;00:30:00;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+6,00000;1961/04/12;03:00:00;;;;;2,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+7,00000;1961/04/12;03:30:00;;;;;0,800;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+8,00000;1961/04/12;04:00:00;;;;;0,900;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+9,00000;1961/04/12;04:00:00;;;;;1,100;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+10,00000;1961/04/12;05:00:00;;;;;;;;;;;;;;;;;;USER_SUSPEND;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+11,00000;1961/04/12;05:00:00;;;;;0,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+12,00000;1961/04/12;05:10:00;;;;;;;;;;;;;;;;;;;Rewind;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+13,00000;1961/04/12;05:12:00;;;;;;;;;;;;;Tubing Fill;10,000;180,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+14,00000;1961/04/12;05:13:00;;;;;;;;;;;;;Cannula Fill;0,300;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+15,00000;1961/04/12;05:15:00;;;;;;;;;;;;;;;;;;NORMAL_PUMPING;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+16,00000;1961/04/12;05:15:00;;;;;1,100;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+17,00000;1961/04/12;06:00:00;;;;;;;;;;;;;;;;INSERT BATTERY ALARM, DELIVERY STOPPED;;ALARM_SUSPEND;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+18,00000;1961/04/12;06:20:00;;;;;;;;;;;;;;;;;;NORMAL_PUMPING;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+19,00000;1961/04/12;07:00:00;;;;;;;;;Normal;3,000;;;;;;;;;;;;;;;;;;;;;;;;;1;;;;;;;;MANUAL;;;;;;;;
+20,00000;1961/04/12;07:01:30;;;;;;;;;Normal;3,000;3,000;;;;;;;;;;;;;;;;;;;;;;;;1;;;;;;;;;;;;;;;;
+21,00000;1961/04/12;08:00:00;;;;;;;;;Dual (square part);1,500;;01:00:00;;;;;;;;;;;;;;;;;;;;;;;2;;;;;;;;;;;;;;;;
+22,00000;1961/04/12;08:00:00;;;;;;;;;Dual (normal part);2,000;;;;;;;;;;;;;;;;;;;;;;;;;2;;;;;;;;;;;;;;;;
+23,00000;1961/04/12;08:00:40;;;;;;;;;Dual (normal part);2,000;2,000;;;;;;;;;;;;;;;;;;;;;;;;2;;;;;;;;;;;;;;;;
+24,00000;1961/04/12;09:00:00;;;;;;;;;Dual (square part);1,500;1,500;01:00:00;;;;;;;;;;;;;;;;;;;;;;;2;;;;;;;;;;;;;;;;
+25,00000;1961/04/12;10:00:00;;;;;;;;;Square;2,000;;00:30:00;;;;;;;;;;;;;;;;;;;;;;;3;;;;;;;;;;;;;;;;
+26,00000;1961/04/12;10:20:00;;;;;;;;;Square;2,000;1,000;00:20:00;;;;;;;;;;;;;;;;;;;;;;;3;User Request;;;;;;;;;;;;;;;
+27,00000;1961/04/12;11:00:00;;;;;;;;;Square;2,000;;00:30:00;;;;;;;;;;;;;;;;;;;;;;;4;;;;;;;;;;;;;;;;
+28,00000;1961/04/12;11:30:00;;;;;;;;;Square;2,000;1,500;00:30:00;;;;;;;;;;;;;;;;;;;;;;;4;;;;;;;;;;;;;;;;
+29,00000;1961/04/12;12:00:00;;;;;;;;;Normal;1,000;;;;;;;;;;;;;;;;;;;;;;;;;5;;;;;;;;;;;;;;;;
+30,00000;1961/04/12;12:00:30;;;;;;;;;Normal;1,000;0,000;;;;;;;;;;;;;;;;;;;;;;;;5;User Request;;;;;;;;;;;;;;;
+31,00000;1961/04/12;12:30:00;;;;;;;;;Mystery;1,000;1,000;;;;;;;;;;;;;;;;;;;;;;;;6;;;;;;;;;;;;;;;;
+32,00000;1961/04/12;13:00:00;;ENTERED_IN_BOLUS_WIZRD;120;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+33,00000;1961/04/12;13:00:00;;;;;;;;;;;;;;;;;;;;4,500;;;;;45;120;;;;Delivered;;;;;;;;;;;;;;;;;;;;;
+34,00000;1961/04/12;13:00:00;;;;;;;;;Normal;4,500;;;;;;;;;;;;;;;;;;;;;;;;;7;;;;;;;;BOLUS_WIZARD;;;;;;;;
+35,00000;1961/04/12;13:00:20;;;;;;;;;Normal;4,500;4,500;;;;;;;;;;;;;;;;;;;;;;;;7;;;;;;;;;;;;;;;;
+36,00000;1961/04/12;14:00:00;;ENTERED_IN_BG_ENTRY;95;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+37,00000;1961/04/12;15:00:00;;;;;;;;;;;;;;;;;;;;0,000;;;;;0;0;;;;Not Delivered;;;;;;;;;;;;;;;;;;;;;
+38,00000;1961/04/12;16:00:00;;;;;1,000;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+-------;MiniMed 720G MMT-1810;Sensor
+Index;Date;Time;New Device Time;BG Source;BG Reading (mg/dL);Linked BG Meter ID;Basal Rate (U/h);Temp Basal Amount;Temp Basal Type;Temp Basal Duration (h:mm:ss);Bolus Type;Bolus Volume Selected (U);Bolus Volume Delivered (U);Bolus Duration (h:mm:ss);Prime Type;Prime Volume Delivered (U);Estimated Reservoir Volume after Fill (U);Alert;User Cleared Alerts;Suspend;Rewind;BWZ Estimate (U);BWZ Target High BG (mg/dL);BWZ Target Low BG (mg/dL);BWZ Carb Ratio (g/U);BWZ Insulin Sensitivity (mg/dL/U);BWZ Carb Input (grams);BWZ BG Input (mg/dL);BWZ Correction Estimate (U);BWZ Food Estimate (U);BWZ Active Insulin (U);BWZ Status;Sensor Calibration BG (mg/dL);Sensor Glucose (mg/dL);ISIG Value;Event Marker;Bolus Number;Bolus Cancellation Reason;BWZ Unabsorbed Insulin Total (U);Final Bolus Estimate;Scroll Step Size;Insulin Action Curve Time;Sensor Calibration Rejected Reason;Preset Bolus;Bolus Source;BLE Network Device;Device Update Event;Network Device Associated Reason;Network Device Disassociated Reason;Network Device Disconnected Reason;Sensor Exception;Preset Temp Basal Name;Sensor State
+39,00000;1961/04/12;00:00:00;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Start of the day;;;;;;;;;;;;;;;;;
+40,00000;1961/04/12;00:05:00;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;110;20,10;;;;;;;;;;;;;;;;;;
+41,00000;1961/04/12;23:59:59;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;End of the day;;;;;;;;;;;;;;;;;

@@ -99,6 +99,9 @@ class UnifiedEventType(EnumLiteral):
     
     # Calibration
     CALIBRATION = "CALIBRAT"  # Sensor calibration event
+    # A fingerstick meter reading that is not a calibration: the value rides `glucose`, but it is
+    # never part of the sensor series, which every processor stage reads from EGV_READ rows only.
+    GLUCOSE_METER = "BG_METER"
     
     # Carbohydrates
     CARBOHYDRATES = "CARBS_IN"  # Carbohydrate intake
@@ -106,6 +109,9 @@ class UnifiedEventType(EnumLiteral):
     # Insulin
     INSULIN_FAST = "INS_FAST"  # Fast-acting (bolus) insulin
     INSULIN_SLOW = "INS_SLOW"  # Long-acting (basal) insulin
+    # A pump's basal rate changed: `basal_rate` holds the rate in force from this row until the next
+    # BASAL_RT row (null = unknown from here). Pump basal is rapid-acting insulin, not INS_SLOW.
+    BASAL_RATE = "BASAL_RT"
     
     # Exercise
     EXERCISE_LIGHT = "XRCS_LTE"  # Light exercise
@@ -325,7 +331,7 @@ CGM_SCHEMA = CGMSchemaDefinition(
 # Data columns the extended schema appends to the core six. The order below IS
 # the widened total ordering: `get_stable_sort_keys()` returns every column in
 # schema order, so appending here changes how extended frames sort. Grouped
-# food -> wearable -> analyte, with `annotations` last.
+# food -> wearable -> analyte -> insulin delivery, with `annotations` last.
 #
 # `annotations` is a DATA column, not a service column. That is deliberate: it
 # therefore joins `primary_key` and the sort keys, which is what keeps two
@@ -419,6 +425,28 @@ EXTENDED_DATA_COLUMNS: tuple[ColumnSchema, ...] = (
         "unit": "mmol/L",
         "constraints": {"minimum": 0},
     },
+    # --- insulin delivery: what a pump says that a dose at an instant cannot ---
+    {
+        "name": "basal_rate",
+        "dtype": pl.Float64,
+        "description": (
+            "Effective pump basal rate. On a BASAL_RT row: the rate in force from this row's "
+            "datetime until the next BASAL_RT row, null meaning unknown from here. Null on every "
+            "other row of a parsed frame"
+        ),
+        "unit": "U/h",
+        "constraints": {"minimum": 0},
+    },
+    {
+        "name": "insulin_duration",
+        "dtype": pl.Float64,
+        "description": (
+            "Minutes over which this row's insulin_fast was delivered, from its datetime on "
+            "(a pump's square or dual-square bolus). Null means delivered at once"
+        ),
+        "unit": "min",
+        "constraints": {"minimum": 0},
+    },
     # --- annotations: last, always ---
     {
         "name": "annotations",
@@ -447,6 +475,7 @@ CGM_SCHEMA_EXTENDED = derive_schema(
         "heart_rate", "breathing_rate", "acceleration", "mets",
         "activity_calories", "steps",
         "ketones",
+        "basal_rate", "insulin_duration",
         "annotations",
     ),
 )

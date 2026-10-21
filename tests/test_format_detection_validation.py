@@ -15,6 +15,7 @@ from typing import Dict, Optional
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError, MalformedDataError
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
+from cgm_format.formats.medtronic_pump import MEDTRONIC_PUMP_DETECTION_PATTERNS
 from cgm_format.cgm_cli import FrictionlessError, _should_suppress_error
 
 # Optional: Use frictionless library if available
@@ -29,11 +30,17 @@ except ImportError:
 DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 def is_medtronic_file(file_path: Path) -> bool:
-    """Check if a file is a Medtronic Guardian Connect file."""
+    """Check if a file is a Medtronic CareLink export (Guardian Connect or a MiniMed pump).
+
+    Both carry a second "-------" section with its own header row, which no single-table
+    Frictionless schema can describe, so they are left out of the schema validation here.
+    """
     try:
         with open(file_path, 'rb') as f:
-            header = f.read(500).decode('utf-8', errors='ignore')
-            return "Guardian Connect" in header
+            header = f.read(4000).decode('utf-8', errors='ignore')
+            return "Guardian Connect" in header or any(
+                pattern in header for pattern in MEDTRONIC_PUMP_DETECTION_PATTERNS
+            )
     except Exception:
         return False
 

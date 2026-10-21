@@ -46,6 +46,8 @@ _EXPECTED_APPENDED = (
     "activity_calories",
     "steps",
     "ketones",
+    "basal_rate",
+    "insulin_duration",
     "annotations",
 )
 

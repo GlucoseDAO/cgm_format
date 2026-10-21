@@ -15,7 +15,9 @@ import polars as pl
 import pytest
 
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor
+from cgm_format.format_processor import ExtendedFormatProcessor, FormatProcessor
+from cgm_format.formats.supported import UNIFIED_TARGET_SCHEMA
+from cgm_format.formats.unified import CGM_SCHEMA_EXTENDED
 from cgm_format.interface.cgm_interface import (
     EXPECTED_INTERVAL_MINUTES,
     SMALL_GAP_MAX_MINUTES,
@@ -36,6 +38,26 @@ RETIME_MODES = [True, False]
 RETIME_IDS = ["retimed", "measured"]
 
 
+
+
+def processor_for(file_path: Path) -> type[FormatProcessor]:
+    """The processor for the schema the file's format parses into.
+
+    A format whose target is the extended schema (a pump export: `basal_rate`,
+    `insulin_duration`) is processed by `ExtendedFormatProcessor`; running the core
+    processor on it would fail its schema check rather than test the invariants.
+    """
+    fmt = FormatParser.detect_format(FormatParser.decode_raw_data(file_path.read_bytes()))
+    if UNIFIED_TARGET_SCHEMA[fmt] is CGM_SCHEMA_EXTENDED:
+        return ExtendedFormatProcessor
+    return FormatProcessor
+
+
+def processor_of(df: pl.DataFrame) -> type[FormatProcessor]:
+    """The processor for a frame's own shape, for helpers that see no file."""
+    if set(CGM_SCHEMA_EXTENDED.get_column_names()) <= set(df.columns):
+        return ExtendedFormatProcessor
+    return FormatProcessor
 
 
 def get_supported_test_files() -> List[Path]:
@@ -114,7 +136,7 @@ def check_no_large_gaps(df: pl.DataFrame, expected_interval: int, label: str, ma
     # If glucose_only, split glucose events using FormatProcessor.split_glucose_events
     # This ensures we only check gaps between actual glucose readings
     if glucose_only:
-        glucose_df, _ = FormatProcessor.split_glucose_events(df)
+        glucose_df, _ = processor_of(df).split_glucose_events(df)
         check_df = glucose_df
     else:
         check_df = df
@@ -278,13 +300,13 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
 
         # Apply sync three times
-        df1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
+        df1 = processor_for(file_path).synchronize_timestamps(unified_df, retime_glucose=retime)
         print(f"After 1st sync: {len(df1)} rows")
 
-        df2 = FormatProcessor.synchronize_timestamps(df1, retime_glucose=retime)
+        df2 = processor_for(file_path).synchronize_timestamps(df1, retime_glucose=retime)
         print(f"After 2nd sync: {len(df2)} rows")
 
-        df3 = FormatProcessor.synchronize_timestamps(df2, retime_glucose=retime)
+        df3 = processor_for(file_path).synchronize_timestamps(df2, retime_glucose=retime)
         print(f"After 3rd sync: {len(df3)} rows")
 
         # Assert 1st and 3rd are identical
@@ -317,13 +339,13 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
         
         # Apply interpolate three times
-        df1 = FormatProcessor.interpolate_gaps(unified_df)
+        df1 = processor_for(file_path).interpolate_gaps(unified_df)
         print(f"After 1st interpolate: {len(df1)} rows")
         
-        df2 = FormatProcessor.interpolate_gaps(df1)
+        df2 = processor_for(file_path).interpolate_gaps(df1)
         print(f"After 2nd interpolate: {len(df2)} rows")
         
-        df3 = FormatProcessor.interpolate_gaps(df2)
+        df3 = processor_for(file_path).interpolate_gaps(df2)
         print(f"After 3rd interpolate: {len(df3)} rows")
         
         # Assert 1st and 3rd are identical
@@ -359,15 +381,15 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
 
         # Step 1: interpolate_gaps
-        df1 = FormatProcessor.interpolate_gaps(unified_df)
+        df1 = processor_for(file_path).interpolate_gaps(unified_df)
         print(f"After 1st interpolate_gaps: {len(df1)} rows")
 
         # Step 2: synchronize_timestamps
-        df2 = FormatProcessor.synchronize_timestamps(df1, retime_glucose=retime)
+        df2 = processor_for(file_path).synchronize_timestamps(df1, retime_glucose=retime)
         print(f"After synchronize_timestamps: {len(df2)} rows")
 
         # Step 3: interpolate_gaps again (should be idempotent)
-        df3 = FormatProcessor.interpolate_gaps(df2)
+        df3 = processor_for(file_path).interpolate_gaps(df2)
         print(f"After 2nd interpolate_gaps: {len(df3)} rows")
         
         # Assert df2 and df3 are identical
@@ -406,15 +428,15 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
 
         # Step 1: synchronize_timestamps
-        df1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
+        df1 = processor_for(file_path).synchronize_timestamps(unified_df, retime_glucose=retime)
         print(f"After 1st synchronize_timestamps: {len(df1)} rows")
 
         # Step 2: interpolate_gaps
-        df2 = FormatProcessor.interpolate_gaps(df1)
+        df2 = processor_for(file_path).interpolate_gaps(df1)
         print(f"After interpolate_gaps: {len(df2)} rows")
 
         # Step 3: synchronize_timestamps again (should be idempotent)
-        df3 = FormatProcessor.synchronize_timestamps(df2, retime_glucose=retime)
+        df3 = processor_for(file_path).synchronize_timestamps(df2, retime_glucose=retime)
         print(f"After 2nd synchronize_timestamps: {len(df3)} rows")
 
         # Assert df2 and df3 are identical
@@ -450,18 +472,18 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
         
         # Chain A: interpolate → sync → interpolate
-        df_a1 = FormatProcessor.interpolate_gaps(unified_df)
-        df_a2 = FormatProcessor.synchronize_timestamps(df_a1, retime_glucose=retime)
-        df_a3 = FormatProcessor.interpolate_gaps(df_a2)
+        df_a1 = processor_for(file_path).interpolate_gaps(unified_df)
+        df_a2 = processor_for(file_path).synchronize_timestamps(df_a1, retime_glucose=retime)
+        df_a3 = processor_for(file_path).interpolate_gaps(df_a2)
         print(f"Chain A final: {len(df_a3)} rows")
         check_no_large_gaps(df_a3, EXPECTED_INTERVAL_MINUTES, "Chain A final")
         check_no_null_glucose_egv(df_a3, "Chain A final")
         check_seconds_are_zero(df_a3, "Chain A final")
         
         # Chain B: sync → interpolate → sync
-        df_b1 = FormatProcessor.synchronize_timestamps(unified_df, retime_glucose=retime)
-        df_b2 = FormatProcessor.interpolate_gaps(df_b1)
-        df_b3 = FormatProcessor.synchronize_timestamps(df_b2, retime_glucose=retime)
+        df_b1 = processor_for(file_path).synchronize_timestamps(unified_df, retime_glucose=retime)
+        df_b2 = processor_for(file_path).interpolate_gaps(df_b1)
+        df_b3 = processor_for(file_path).synchronize_timestamps(df_b2, retime_glucose=retime)
         print(f"Chain B final: {len(df_b3)} rows")
         check_no_large_gaps(df_b3, EXPECTED_INTERVAL_MINUTES, "Chain B final")
         check_no_null_glucose_egv(df_b3, "Chain B final")
@@ -491,13 +513,13 @@ class TestProcessingIdempotency:
         unified_df = parsed_files_cache[file_path.name].clone()
         
         # Apply detect_and_assign_sequences three times
-        result1 = FormatProcessor.detect_and_assign_sequences(unified_df)
+        result1 = processor_for(file_path).detect_and_assign_sequences(unified_df)
         print(f"After 1st detect_and_assign_sequences: {len(result1)} rows")
         
-        result2 = FormatProcessor.detect_and_assign_sequences(result1)
+        result2 = processor_for(file_path).detect_and_assign_sequences(result1)
         print(f"After 2nd detect_and_assign_sequences: {len(result2)} rows")
         
-        result3 = FormatProcessor.detect_and_assign_sequences(result2)
+        result3 = processor_for(file_path).detect_and_assign_sequences(result2)
         print(f"After 3rd detect_and_assign_sequences: {len(result3)} rows")
         
         # Check that ALL GLUCOSE events have sequence_id >= 1 (assigned)
@@ -589,9 +611,9 @@ class TestGridRetiming:
 
         parsed = parsed_files_cache[file_path.name].clone()
 
-        df = FormatProcessor.synchronize_timestamps(parsed, retime_glucose=True)
-        df = FormatProcessor.synchronize_timestamps(df, retime_glucose=True)
-        df = FormatProcessor.synchronize_timestamps(df, retime_glucose=True)
+        df = processor_for(file_path).synchronize_timestamps(parsed, retime_glucose=True)
+        df = processor_for(file_path).synchronize_timestamps(df, retime_glucose=True)
+        df = processor_for(file_path).synchronize_timestamps(df, retime_glucose=True)
 
         # Sync adds no rows, so the anchors are the parsed readings, one for one.
         measured = parsed.sort('original_datetime')['original_glucose']

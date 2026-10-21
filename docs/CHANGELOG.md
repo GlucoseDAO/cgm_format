@@ -11,6 +11,59 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+**Minor, planned as 0.13.0.** Insulin pumps: MiniMed pump CareLink exports parse (RM16). The fold
+that joins them with a CGM export (RM17) and the models' input shape (RM21) follow in the same
+release; the plan is `docs/PLAN_pump.md`.
+
+### MiniMed pump exports parse (RM16)
+
+- **`SupportedCGMFormat.MEDTRONIC_PUMP`**, a variant of `MEDTRONIC`, detected before it by the
+  pump-only `Estimated Reservoir Volume after Fill (U)` column, parsing into `CGM_SCHEMA_EXTENDED`.
+  Before this, every 720G export in the tree failed with `MalformedDataError` on dtype inference.
+  The file is read section by section with every cell as text.
+- **Boluses** become one `INS_FAST` row each, the programmed and delivered log rows paired by `Bolus
+  Number`: the delivered amount, at the programmed time. A square bolus or a dual's square part
+  carries its delivery time in the new extended column **`insulin_duration`** (min).
+- **Basal** becomes `BASAL_RT` rows (new `UnifiedEventType.BASAL_RATE`) carrying the new extended
+  column **`basal_rate`** (U/h): the effective rate in force until the next such row, with `Percent`
+  temp basals applied (the export logs only the schedule) and every suspend 0 until
+  `NORMAL_PUMPING`, an alarm suspend included. Only changes are emitted.
+- **Fingersticks** become `BG_METER` rows (new `UnifiedEventType.GLUCOSE_METER`), value in `glucose`.
+- Two assumptions the export cannot confirm, stated in `docs/PLAN_pump.md` §3.4: a percent temp
+  delivers schedule × percent, and a cancelled square bolus reports its actual duration (a warning
+  names the rows that would show otherwise).
+- Priming volumes, event markers and a device clock change are not represented, each said once in an
+  aggregated warning with its count.
+- New public symbols: `MEDTRONIC_PUMP_SCHEMA`, `MedtronicPumpColumn`, `MedtronicBolusType`,
+  `MedtronicTempBasalType`. A hand-authored synthetic export, `data/input/medtronic_pump_synthetic.csv`,
+  is written by `scripts/make_synthetic_medtronic_pump.py`.
+
+### Repairs on the Guardian Connect path (`MEDTRONIC`)
+
+- **Fingersticks no longer count as sensor readings.** `BG Reading (mg/dL)` was coalesced into
+  `glucose` as `EGV_READ`; it is now a `BG_METER` row. On the committed Guardian fixture, `EGV_READ`
+  drops from 22,404 rows to its 22,149 sensor readings and 255 rows become `BG_METER`. A consumer that
+  filtered on `EGV_READ` loses the fingersticks from the sensor series, which is the repair; one that
+  wants them reads `BG_METER`.
+- **`Basal Rate (U/h)` is no longer an `insulin_slow` dose.** A rate is not a dose, and on a pump it
+  is rapid-acting insulin. No Guardian file we hold has basal rows, so no shipped output changes;
+  one that does gets a warning naming the count, and a pump export keeps the rates as `MEDTRONIC_PUMP`.
+
+### Tests
+
+- New `tests/test_medtronic_pump.py`, expected values written by hand from the fixture's row list.
+  Shown failing on the old code first: the old parser read the synthetic export as `MEDTRONIC`, put
+  its 11 basal rows into `insulin_slow`, and counted both fingersticks as sensor readings.
+- `tests/test_extended_schema.py`: the pinned list of appended extended columns gains `basal_rate`
+  and `insulin_duration`, before `annotations` (a changed expectation, by design).
+- `tests/test_idempotency.py`: each file now runs through the processor its format targets
+  (`ExtendedFormatProcessor` for a pump export) instead of the core processor for every file; the
+  pump exports join the suite and hold every idempotency and commutativity check.
+- `tests/test_format_detection_validation.py`: pump exports join Guardian ones in being left out of
+  single-table Frictionless validation, for the same reason (a second section with its own header).
+
 ## 0.12.3 — 2026-10-21
 
 **Patch.** Nightscout exporter CSVs written in a day-first locale now parse, and one written so

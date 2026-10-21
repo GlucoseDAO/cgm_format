@@ -59,6 +59,7 @@ class SupportedCGMFormat(Enum):
     LIBRE = "libre"
     LIBRE_EU = "libre_eu"  # European Libre exports with mmol/L units
     MEDTRONIC = "medtronic"
+    MEDTRONIC_PUMP = "medtronic_pump"  # MiniMed pump CareLink export: basal, boluses, wizard carbs
     NIGHTSCOUT = "nightscout"
     UNIFIED_CGM = "unified"  # Format that this library provides
     UNIFIED_EXTENDED = "unified_extended"  # Unified format widened with macros/wearables/annotations

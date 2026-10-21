@@ -52,9 +52,11 @@
         "enum": [
           "EGV_READ",
           "CALIBRAT",
+          "BG_METER",
           "CARBS_IN",
           "INS_FAST",
           "INS_SLOW",
+          "BASAL_RT",
           "XRCS_LTE",
           "XRCS_MED",
           "XRCS_HVY",

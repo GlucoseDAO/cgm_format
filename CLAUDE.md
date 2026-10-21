@@ -72,7 +72,7 @@ The two public entry classes:
 Supporting modules:
 - `formats/unified.py` — `UnifiedEventType`, `Quality` flags, `CGM_SCHEMA` (the canonical
   `CGMSchemaDefinition`).
-- `formats/{dexcom,dexcom_eu,libre,libre_eu,medtronic,nightscout}.py` — vendor column enums, detection
+- `formats/{dexcom,dexcom_eu,libre,libre_eu,medtronic,medtronic_pump,nightscout}.py` — vendor column enums, detection
   patterns, schemas.
 - `formats/supported.py` — eight registries: `SCHEMA_MAP`, `FORMAT_DETECTION_PATTERNS`,
   `FORMAT_DETECTION_LINE_COUNT`, `UNIFIED_TARGET_SCHEMA`, `FORMAT_CATEGORY`,

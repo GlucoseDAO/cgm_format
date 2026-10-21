@@ -6,7 +6,7 @@ Python library for converting vendor-specific Continuous Glucose Monitoring (CGM
 
 ## Features
 
-- **Vendor format detection**: Automatic detection of Dexcom, Libre, Medtronic, Nightscout, and Unified formats
+- **Vendor format detection**: Automatic detection of Dexcom, Libre, Medtronic (Guardian Connect CGM and MiniMed pump CareLink exports), Nightscout, and Unified formats
 - **Nightscout support**: Download and parse CGM data from Nightscout via REST API (JSON) or nightscout-exporter CSV, with `api-secret` and token auth
 - **Robust parsing**: Handles BOM marks, encoding artifacts, and vendor-specific CSV quirks
 - **Unified schema**: Standardized data format with service columns (metadata) and data columns

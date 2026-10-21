@@ -145,6 +145,13 @@ from cgm_format.formats.medtronic import (
     MedtronicColumn,
 )
 
+from cgm_format.formats.medtronic_pump import (
+    MEDTRONIC_PUMP_SCHEMA,
+    MedtronicPumpColumn,
+    MedtronicBolusType,
+    MedtronicTempBasalType,
+)
+
 from cgm_format.formats.nightscout import (
     NIGHTSCOUT_ENTRIES_SCHEMA,
     NIGHTSCOUT_TREATMENTS_SCHEMA,
@@ -263,6 +270,10 @@ __all__ = [
     # Medtronic format
     "MEDTRONIC_SCHEMA",
     "MedtronicColumn",
+    "MEDTRONIC_PUMP_SCHEMA",
+    "MedtronicPumpColumn",
+    "MedtronicBolusType",
+    "MedtronicTempBasalType",
     
     # Nightscout format
     "NIGHTSCOUT_ENTRIES_SCHEMA",
