@@ -137,12 +137,16 @@ What the pump section emits, all rapid-acting, none of it in `insulin_slow`:
   `Suspend` other than `NORMAL_PUMPING` until the next `NORMAL_PUMPING`**, `ALARM_SUSPEND` included.
   A suspended pump delivers nothing, so 0 is the measured value there, not a fill.
 - **Carbs**: `BWZ Carb Input (grams)` > 0 as `CARBS_IN`, as today.
-- **Not emitted**, one aggregated warning each with its count: priming volumes, fingersticks (Q2),
-  rows after a filled `New Device Time` (the clock changed; the parser says how many rows follow and
-  does not shift them).
+- **Fingersticks** (`BG Reading (mg/dL)`, either `BG Source`): a new `UnifiedEventType.BG_METER =
+  "BG_METER"` row carrying the value in `glucose`, never `EGV_READ` (the person, Q2). This follows the
+  existing pattern: Libre's strip readings already ride `glucose` as `CALIBRAT` rows, and every
+  processor stage reads only `EGV_READ` rows as the sensor series. Whether Libre's strip rows should
+  become `BG_METER` too is a redefinition of what a consumer reads, so not in this plan.
+- **Not emitted**, one aggregated warning each with its count: priming volumes, rows after a filled
+  `New Device Time` (the clock changed; the parser says how many rows follow and does not shift them).
 
 Two **additive** columns on `CGM_SCHEMA_EXTENDED` (inserted before `annotations`, which stays last),
-and one new event type:
+and two new event types (`BASAL_RT`, `BG_METER`):
 
 | Column | dtype | Meaning |
 |---|---|---|
@@ -153,7 +157,8 @@ and one new event type:
 land where it was delivered: 00:12 to 02:30 of spread, which at 5-minute resolution is up to 30 rows.
 
 `Basal Rate (U/h)` stops feeding `insulin_slow` on the Guardian path too, which has no basal rows in
-any file we hold; and the fingerstick decision (Q2) applies to both formats.
+any file we hold; and fingersticks become `BG_METER` rows on both formats, which takes the Guardian
+fixture's 255 fingersticks out of its `EGV_READ` series.
 
 A pump-only frame is a valid parse of insulin and carb events and nothing more. It is not meant to go
 through the processor alone: the glucose stages do not refuse it (they run, assign every row
@@ -181,14 +186,21 @@ The fold invents no glucose.
 **The bins.** Grid point `t` owns `[t − I/2, t + I/2)`, `I` = `cls.expected_interval_minutes`.
 
 ```
-insulin_fast(t) = Σ insulin_fast of instant doses starting in the bin
-                + Σ spread doses × (overlap of [start, start + insulin_duration) with the bin) / insulin_duration
-                + (1 / MINUTES_PER_HOUR) × ∫ basal_rate dt over the bin, in minutes
+bolus(t)      = Σ insulin_fast of instant doses starting in the bin
+              + Σ spread doses × (overlap of [start, start + insulin_duration) with the bin) / insulin_duration
+basal_dose(t) = (1 / MINUTES_PER_HOUR) × ∫ basal_rate dt over the bin, in minutes
+basal_rate(t) = basal_dose(t) × MINUTES_PER_HOUR / I          (the time-weighted mean U/h)
 ```
 
-With a constant rate `r` across the bin the last term is `r × I / 60`: the person's `basal_hourly /
+With a constant rate `r` across the bin, `basal_dose` is `r × I / 60`: the person's `basal_hourly /
 12` at `I = 5`. `I` is the processor's configured interval; 60 is a named `MINUTES_PER_HOUR`
 constant; there is no literal 12. A rate change inside a bin is integrated piecewise, exactly.
+
+**Whether basal is folded into `insulin_fast` waits on the training inputs (Q1).** Until that is
+clarified, the person's default is not to fold: `insulin_fast(t) = bolus(t)`, and basal travels
+separately as `basal_rate(t)`. The folded form, `insulin_fast(t) = bolus(t) + basal_dose(t)`, is the
+person's original request, and stays a single switch away (a `fold_basal` argument, default from a
+class attribute) once the training repo says which one the models consume.
 
 **Three-valued.** The pump's coverage is from its first to its last row. A bin wholly inside it gets
 a number, 0 included (a suspended hour delivers 0 U, measured). A bin wholly outside it gets null
@@ -204,12 +216,29 @@ gives the total units and the time range. One answer for that case, not three.
 identical in `datetime`, `event_type` and every data column, and reports how many. Two genuine
 boluses identical to the second are not something a pump logs.
 
-**Which source the insulin and carbs come from** is Q4: the CGM frame's own insulin and carb rows
-partly duplicate the pump's (§2.5).
+**Which source the insulin and carbs come from** is a `source` argument (the person, Q4), an
+`EnumLiteral` `FoldSource` with three members, because the CGM frame's own insulin and carb rows
+partly duplicate the pump's (§2.5):
+
+- `PUMP` (the default): boluses and carbs from the pump frame; the CGM frame's insulin and carb rows
+  are reported in a warning with their totals, not folded.
+- `CGM`: boluses and carbs from the CGM frame; the pump contributes basal only.
+- `MERGE`: both, per bin and per quantity. **A 0 or null on either side is "this source did not
+  say"**, so the other side's value is taken as it is: a pump 5 U against a CGM 0 is 5, not 2.5. Only
+  when both sides are non-zero is the bin's value their mean, and when the two differ by more than a
+  tolerance (named constants, `FOLD_MERGE_INSULIN_TOLERANCE_U` and `FOLD_MERGE_CARBS_TOLERANCE_G`) the
+  bin is listed in one aggregated warning with both values. The person's expectation is that a
+  correctly joined pair agrees within the margin; the warning is where it does not.
+
+Matching is per bin, so a dose the two devices logged in neighbouring bins does not merge: under
+`MERGE` it is counted twice, and under `PUMP` or `CGM` once. The critic's matching on the real pair
+used a 15-minute window and found 6 of 16 boluses agreeing, so per-bin `MERGE` will count some of the
+other 10 twice; the warning says how many bins had a value on one side only, which is where to
+look.
 
 **The output is a terminal view**, in the shape `to_data_only_df` returns: `datetime`, `glucose`,
-`carbs`, `insulin_slow` (null), `insulin_fast`, and, per Q1, `basal_rate` as the time-weighted mean
-U/h over the bin. That is a different meaning from the parsed `BASAL_RT` row's "in force from here",
+`carbs`, `insulin_slow` (null), `insulin_fast`, and `basal_rate` as the time-weighted mean U/h over
+the bin. That is a different meaning from the parsed `BASAL_RT` row's "in force from here",
 which is why the wide view carries no `event_type` and the fold refuses a frame without one: a folded
 frame cannot be folded again, by construction rather than by luck. The inputs are not modified;
 losslessness holds because the parsed frames keep every row and the fold is a derived view.
@@ -265,28 +294,28 @@ Loop pump users with **two** insulin channels, `Basal Rate (U/h)` and `Bolus Ins
 the channel ships empty because nothing cgm_format parsed held a pump rate (the only candidate was a
 Dexcom long-acting dose, which is not one). A pump export is the first source that holds a real rate.
 The person's fold puts basal and bolus into one `insulin_fast` number per row, which is what a
-single-channel consumer wants and loses the split SugarOne's channels need. Hence Q1.
+single-channel consumer wants and loses the split SugarOne's channels need. Hence Q1, and the
+person's answer: "Real training inputs take precedence".
 
 ---
 
-## 6. Open, for the person
+## 6. Settled by the person, and what is still open
 
-- **Q1, the basal channel.** (a) Fold only, as asked: `insulin_fast` = basal dose + bolus per row,
-  nothing else. (b) Fold, and also keep `basal_rate` (mean U/h over the bin) on the wide row, so
-  SugarOne's basal channel can be fed from a real rate. (c) Do not fold basal into `insulin_fast`.
-  *Recommended: (b).* It is what was asked plus one column; (c) contradicts the request, and (a) closes
-  the only route to that channel.
-- **Q2, fingersticks** (Guardian and pump). (a) Out of `glucose`, counted in a warning. (b) Kept as
-  `glucose`, as today, which mixes meter values into the CGM series. (c) A new event type for meter
-  readings carrying the value. *Recommended: (a) now, (c) as its own item when a consumer wants meter
-  values.*
-- **Q3, the data.** Is the Dexcom export covering 2026-07-13 to 2026-07-18 the same person's? And can
-  she export Dexcom for 2026-08 to 2026-10?
-- **Q4, which source the insulin and carbs come from** when both frames carry them. (a) Insulin from the
-  pump only (it delivered it); carbs from the pump only; the CGM frame's insulin and carb rows reported
-  and not folded. (b) Insulin from the pump, carbs from both, near-duplicates (within the bin, equal
-  grams) merged. (c) Both, summed. *Recommended: (a).* One source per quantity, no matching
-  heuristic; (c) double-counts the 6 pairs §2.5 found.
+Answered 2026-10-21:
+
+- **Q1, the basal channel: open, pending the training inputs.** "Before deciding, send opus agent into
+  glucose-metabonet repo and see how model actually trains. ... For now default (3) don't fold unless
+  clarified otherwise. Real training inputs take precedence." So `insulin_fast` carries boluses only
+  and basal travels as `basal_rate`, until the training repo's insulin inputs are read (§3.2).
+- **Q2, fingersticks: a new meter event type**, `BG_METER`, on both Medtronic formats (§3.1).
+  Rejected: leaving them out with a warning (the recommendation), and keeping them as `glucose`.
+- **Q3, the data: same person, no more exports.** The real-data check covers the five overlapping days
+  only.
+- **Q4, the source of insulin and carbs: an option**, "pump, cgm, merge-as mean; merge strategy must
+  see 0s as none, i.e. 0;5 is not 2.5, it's 5, mean only for two non-zero vals in both sources. Warn
+  where std deviation is larger than expected with values" (§3.2). Rejected: pump only (the
+  recommendation), a carb-matching heuristic, and summing both. The default, `PUMP`, is the plan's
+  pick, reversible, for review.
 
 Two facts to confirm with the person who wears the pump: that a `Percent` temp delivers scheduled ×
 percent (the export logs only the schedule), and that a cancelled square bolus reports its *actual*
