@@ -2932,6 +2932,90 @@ class FormatParser(CGMParser):
             *cls._cgmacros_wearable_columns(),
         )
 
+    # ===== Several exports of one series =====
+
+    @classmethod
+    def parse_exports(cls, paths: Sequence[Union[str, Path]]) -> UnifiedFormat:
+        """Parse several exports of one series and join them (see `join_exports`)."""
+        if isinstance(paths, (str, Path)):
+            raise TypeError(
+                f"parse_exports takes a sequence of paths, not a single path; got {type(paths).__name__}. "
+                f"Pass [{paths!r}], or use parse_file for one file."
+            )
+        return cls.join_exports([cls.parse_file(path) for path in paths])
+
+    @classmethod
+    def join_exports(cls, frames: Sequence[UnifiedFormat]) -> UnifiedFormat:
+        """Join exports that are pieces of one series: one sensor, one account, exported in parts.
+
+        A Clarity or LibreView account exported twice, over spans that touch or overlap, gives two
+        files of one series. They are neither a bundle (which merges different modalities: two glucose
+        members splice into shared sequences and the overlap counts twice) nor tracks (alternative
+        sensors worn at once). Here the export that starts first keeps the span they share, and a
+        later one contributes only rows after every earlier one has ended, whatever order they are
+        passed in: the rule `fold_insulin_onto_grid` applies to overlapping pump exports.
+
+        Readings in the dropped overlap are compared with the kept ones at the same instant; any that
+        the kept export lacks or holds with another value are counted in a warning, because that is
+        two sources disagreeing (a second sensor, or a re-export after values changed), not one series
+        exported twice. The caller owns the guarantee that the frames are one person's.
+
+        Sequences are not carried over: `sequence_id` is 0 on every row, for the processor to detect
+        afresh across the whole span, so no two stretches share an id.
+
+        Args:
+            frames: Parsed unified frames of one series, any order
+
+        Returns:
+            One frame in the frames' unified shape, stable-sorted
+
+        Raises:
+            ValueError: If `frames` is empty
+        """
+        if not frames:
+            raise ValueError("join_exports needs at least one frame")
+        order = sorted(
+            range(len(frames)),
+            key=lambda i: (
+                frames[i]["original_datetime"].min(),
+                -frames[i]["original_datetime"].max().timestamp(),
+                -frames[i].height,
+                i,
+            ),
+        )
+        reading = pl.col("event_type") == UnifiedEventType.GLUCOSE.value
+        kept: List[pl.DataFrame] = []
+        covered_until: Optional[datetime] = None
+        dropped = 0
+        disagreeing = 0
+        for i in order:
+            frame = frames[i]
+            if covered_until is not None:
+                overlap = frame.filter(pl.col("original_datetime") <= covered_until)
+                dropped += overlap.height
+                known = pl.concat(kept, how="diagonal_relaxed").filter(reading).select(
+                    "original_datetime", pl.col("original_glucose").alias("_kept")
+                ).unique("original_datetime", keep="first")
+                disagreeing += (
+                    overlap.filter(reading)
+                    .join(known, on="original_datetime", how="left")
+                    .filter(pl.col("_kept").is_null() | (pl.col("_kept") != pl.col("original_glucose")))
+                    .height
+                )
+                frame = frame.filter(pl.col("original_datetime") > covered_until)
+            kept.append(frame)
+            end = frames[i]["original_datetime"].max()
+            covered_until = end if covered_until is None else max(covered_until, end)
+        if dropped:
+            logger.warning(
+                "join_exports: %d row(s) inside a span an earlier export already covers, taken from that "
+                "export; %d of their glucose readings are missing from it or differ in value.",
+                dropped, disagreeing,
+            )
+        joined = pl.concat(kept, how="diagonal_relaxed").with_columns(pl.lit(0).alias("sequence_id"))
+        schema = CGM_SCHEMA_EXTENDED if set(CGM_SCHEMA_EXTENDED.get_column_names()) <= set(joined.columns) else CGM_SCHEMA
+        return schema.validate_dataframe(joined, enforce=True)
+
     # ===== Faceted output: tracks and corpora =====
 
     @classmethod

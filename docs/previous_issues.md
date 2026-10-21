@@ -295,3 +295,30 @@ were found and converted in the same pass rather than left to rot:
   `ProcessingWarning` members. The first time `prepare_for_inference` emitted `SYNCHRONIZATION`, the
   CLI printed "SYNCHRONIZATION: Unknown warning" at the user. It now reads `WarningDescription`,
   which is declared beside the enum itself.
+
+### F21 — two exports of one sensor have no entry point that joins them
+
+Found on `main` after 0.13.0, folding a pump record onto real Dexcom data that arrived as two Clarity
+exports of one account: one covering four days, one ninety, overlapping by 22 hours.
+
+The overlap is one sensor exported twice: same device (`android G6`), a shared transmitter, and all
+267 readings in the overlap identical in time and value. The library has no way to say "these are
+pieces of one series": `parse_bundle` is for different modalities (two glucose members splice into
+shared sequences and the overlap doubles), and `parse_tracks` is for different sensors worn at once.
+So the fold ran once per export, giving two joint tracks that share a day; a consumer concatenating
+them gets that day twice.
+
+**Surfaced rather than repaired**, because the shape is a decision: a `parse_exports(paths)` that
+concatenates same-format exports and drops readings identical in time and value is the obvious
+repair, but it has to decide what an overlap that *disagrees* means (two sensors, or a re-export
+after a calibration changed values), and whether a reading equal in time but not in value raises,
+warns, or keeps the later export's. `fold_insulin_onto_grid` already takes several pump exports and
+resolves their overlap by span ownership; the same rule for CGM exports would be the consistent one.
+
+**Resolved** on `main` after 0.13.0: `FormatParser.join_exports(frames)` and `parse_exports(paths)`
+(`format_parser.py`, "Several exports of one series"). The export that starts first keeps the span
+the exports share, whatever order they are passed in, the rule `fold_insulin_onto_grid` applies to
+overlapping pump exports; readings of the dropped overlap that the kept export lacks or holds with
+another value are counted in a warning; `sequence_id` is left at 0 for the processor to detect across
+the whole span. On the two real exports: 26,420 rows, the 267 shared readings once, 0 disagreeing.
+`tests/test_join_exports.py`.

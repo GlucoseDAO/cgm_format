@@ -38,6 +38,16 @@ export does not say when that insulin was delivered. Any other unexpected sectio
 warning rather than merged. Found by a format survey; shown failing on 0.13.0 first. F20 in
 `docs/dogfooding.md` records what remains open for a 780G in auto mode.
 
+### Several exports of one series join once (F21)
+
+`FormatParser.join_exports(frames)` / `parse_exports(paths)` join exports that are pieces of one
+series, as an account exported twice over spans that overlap: the export that starts first keeps the
+shared span, a later one adds only what comes after, in any order, and a disagreeing overlap is
+counted in a warning. Sequences are left for the processor to detect across the whole span. Before
+this there was no way to join them: a bundle doubles the overlap, and tracks are other sensors.
+Decided here, for review: the earlier export wins a disagreement (the rule overlapping pump exports
+already follow). Found joining two real Clarity exports of one G6.
+
 ## 0.13.0 — 2026-10-21
 
 **Minor.** Insulin pumps: MiniMed pump CareLink exports parse (RM16), fold onto a CGM export's

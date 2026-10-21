@@ -349,22 +349,3 @@ auto-mode spans needs the export's mode-change markers identified on real data; 
 total evenly across the day invents a delivery profile the pump never reported (no silent
 substitute, `CLAUDE.md` §2); and refusing 780G exports would lose their boluses, carbs and readings,
 which are sound. Needs: one real 780G export with auto-mode periods.
-
-### F21 — two exports of one sensor have no entry point that joins them
-
-Found on `main` after 0.13.0, folding a pump record onto real Dexcom data that arrived as two Clarity
-exports of one account: one covering four days, one ninety, overlapping by 22 hours.
-
-The overlap is one sensor exported twice: same device (`android G6`), a shared transmitter, and all
-267 readings in the overlap identical in time and value. The library has no way to say "these are
-pieces of one series": `parse_bundle` is for different modalities (two glucose members splice into
-shared sequences and the overlap doubles), and `parse_tracks` is for different sensors worn at once.
-So the fold ran once per export, giving two joint tracks that share a day; a consumer concatenating
-them gets that day twice.
-
-**Surfaced rather than repaired**, because the shape is a decision: a `parse_exports(paths)` that
-concatenates same-format exports and drops readings identical in time and value is the obvious
-repair, but it has to decide what an overlap that *disagrees* means (two sensors, or a re-export
-after a calibration changed values), and whether a reading equal in time but not in value raises,
-warns, or keeps the later export's. `fold_insulin_onto_grid` already takes several pump exports and
-resolves their overlap by span ownership; the same rule for CGM exports would be the consistent one.
