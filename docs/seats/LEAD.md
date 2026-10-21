@@ -74,6 +74,15 @@ installs and imports in a clean virtual environment, `gh release view` shows wha
 cut on `main` after the merge, never before. The `claude-review` check fails on every fork's pull request
 for want of a secret: known, not a gate, not to be fixed by this seat unasked.
 
+**PyPI is the person's, and they publish from the clone's `dist/`**: "I normally do uv build and
+publish from dists" (2026-10-21). So the release's last step leaves the tagged version's dists in
+`dist/` at the clone's root (git-ignored), built from the tag (a worktree at the tag, `uv build
+--out-dir dist`, outside the sandbox), and the report ends with `uv publish dist/cgm_format-<version>*`
+for them to run with their token in their own terminal. A scratch folder will not do: it is private to
+the session's sandbox, and their terminal does not see it. A `uv build` of the same tag twice is not
+byte-identical (build timestamps), so the dists in `dist/` and on the GitHub release match in content,
+not in hash.
+
 ## A contributor's pull request
 
 Review it against the documents it touches, push fixes to it when the person asks, and leave the merge
