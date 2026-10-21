@@ -150,6 +150,7 @@ from cgm_format.formats.nightscout import (
     NightscoutEntryColumn,
     NightscoutTreatmentColumn,
     NightscoutTreatmentEventType,
+    NightscoutDateOrder,
     NIGHTSCOUT_TIMESTAMP_FORMATS,
     NIGHTSCOUT_TREATMENTS_DETECTION_PATTERNS,
     NIGHTSCOUT_TREATMENTS_JSON_DTYPES,
@@ -2088,6 +2089,12 @@ class FormatParser(CGMParser):
         "%d/%m/%Y %I:%M:%S %p",    # en-AU, en-NZ, en-IN: 7/4/2026 7:59:42 pm
         "%Y-%m-%d %H:%M:%S",       # ISO-ish: 2026-04-07 19:59:42
     ]
+    # A stated date order rules out the formats of the other order. Year-first is neither, so it
+    # stays readable whatever the caller states.
+    _EXPORTER_OTHER_ORDER_PREFIX: ClassVar[dict[NightscoutDateOrder, str]] = {
+        NightscoutDateOrder.MONTH_FIRST: "%d/%m/",
+        NightscoutDateOrder.DAY_FIRST: "%m/%d/",
+    }
 
     @classmethod
     def _exporter_datetime_strings(cls, *sections: tuple[pl.DataFrame, str, str]) -> pl.Series:
@@ -2099,7 +2106,9 @@ class FormatParser(CGMParser):
         return pl.concat(parts)["stamp"].drop_nulls()
 
     @classmethod
-    def _exporter_datetime_format(cls, stamps: pl.Series) -> str:
+    def _exporter_datetime_format(
+        cls, stamps: pl.Series, date_order: Optional[NightscoutDateOrder] = None
+    ) -> str:
         """The one format a whole exporter file is read with, chosen over every row of every section.
 
         A format wins by reading every row, not by being tried first: ``strptime(strict=False)``
@@ -2108,8 +2117,14 @@ class FormatParser(CGMParser):
         day-first both read every row; the text cannot settle it, so the list order does (month
         first, as before) and one warning says so. When no format reads every row, the one that
         reads most wins and the rows it cannot read are counted, since they are dropped.
+
+        A stated ``date_order`` leaves only the formats of that order (and year-first), so nothing
+        is ambiguous and the caller's order decides.
         """
         formats = cls._EXPORTER_DATETIME_FORMATS
+        if date_order is not None:
+            other = cls._EXPORTER_OTHER_ORDER_PREFIX[date_order]
+            formats = [fmt for fmt in formats if not fmt.startswith(other)]
         total = stamps.len()
         if total == 0:
             return formats[0]
@@ -2130,8 +2145,10 @@ class FormatParser(CGMParser):
             return complete[0]
         best = max(formats, key=lambda fmt: read[fmt])
         if read[best] == 0:
+            stated = f" in the stated date_order={date_order.name}" if date_order is not None else ""
             raise MalformedDataError(
-                f"Cannot parse Date+Time columns with any known format. Sample: {stamps.head(3).to_list()}"
+                f"Cannot parse Date+Time columns with any known format{stated}. "
+                f"Sample: {stamps.head(3).to_list()}"
             )
         unreadable = stamps.filter(stamps.str.strptime(pl.Datetime("ms"), best, strict=False).is_null())
         logger.warning(
@@ -2294,20 +2311,32 @@ class FormatParser(CGMParser):
         cls,
         entries_data: Union[bytes, str],
         treatments_data: Union[bytes, str, None] = None,
+        date_order: Optional[NightscoutDateOrder] = None,
     ) -> UnifiedFormat:
         """Parse Nightscout entries and optional treatments to unified format.
 
         Accepts JSON (from the Nightscout REST API) or nightscout-exporter CSV
-        for entries.  Treatments must be JSON (Nightscout doesn't serve
-        treatments as CSV).  Merges glucose readings with insulin / carb
-        treatments into a single unified DataFrame.
+        for entries: the entries section alone, or the exporter's whole file,
+        whose ``# TREATMENTS`` section is then read as the treatments.  Merges
+        glucose readings with insulin / carb treatments into a single unified
+        DataFrame.
 
         Args:
             entries_data: Nightscout entries (JSON or exporter CSV), as bytes or string
-            treatments_data: Optional Nightscout treatments JSON
+            treatments_data: Optional Nightscout treatments (JSON, or the exporter's
+                treatments section). Must be None when ``entries_data`` is a whole
+                exporter file that carries its own treatments section.
+            date_order: The day/month order of an exporter CSV's dates, which follow
+                the exporting browser's locale. ``None`` infers it from the file, and
+                a file that reads completely both ways is read month first with a
+                warning. JSON carries ISO timestamps, so there it is unused.
 
         Returns:
             DataFrame in unified format matching CGM_SCHEMA
+
+        Raises:
+            MalformedDataError: If treatments come both inside the exporter file and
+                as ``treatments_data``, or no row's date reads in any format allowed.
         """
         if isinstance(entries_data, bytes):
             entries_text = cls.decode_raw_data(entries_data)
@@ -2322,7 +2351,15 @@ class FormatParser(CGMParser):
         # Exporter CSV sections are read first, so one date format can be chosen over all of them.
         entries_csv_df = None
         if not cls._is_nightscout_entries_json(entries_text):
-            entries_csv_df = cls._parse_nightscout_entries_csv(entries_text)
+            entries_csv, embedded_treatments = cls._split_nightscout_exporter_csv(entries_text)
+            if embedded_treatments is not None:
+                if treatments_text is not None:
+                    raise MalformedDataError(
+                        "The entries data is a whole nightscout-exporter file with its own "
+                        "# TREATMENTS section, and treatments_data was given as well; pass one or the other."
+                    )
+                treatments_text = embedded_treatments
+            entries_csv_df = cls._parse_nightscout_entries_csv(entries_csv)
         treatments_csv_df = None
         if treatments_text is not None and not cls._is_nightscout_treatments_json(treatments_text):
             treatments_csv_df = cls._parse_nightscout_treatments_csv(treatments_text)
@@ -2331,7 +2368,13 @@ class FormatParser(CGMParser):
             sections.append((entries_csv_df, NightscoutEntryColumn.DATE, NightscoutEntryColumn.TIME))
         if treatments_csv_df is not None:
             sections.append((treatments_csv_df, NightscoutTreatmentColumn.DATE, NightscoutTreatmentColumn.TIME))
-        fmt = cls._exporter_datetime_format(cls._exporter_datetime_strings(*sections)) if sections else ""
+        if date_order is not None and not sections:
+            logger.warning(
+                "parse_nightscout received date_order=%s and is ignoring it: it orders the dates of "
+                "a nightscout-exporter CSV, and this data is JSON with ISO timestamps.",
+                date_order.name,
+            )
+        fmt = cls._exporter_datetime_format(cls._exporter_datetime_strings(*sections), date_order) if sections else ""
 
         if entries_csv_df is None:
             glucose_rows = cls._entries_json_to_unified(cls._parse_nightscout_entries_json(entries_text))
@@ -2360,6 +2403,7 @@ class FormatParser(CGMParser):
         entries_path: Union[str, Path],
         treatments_path: Union[str, Path, None] = None,
         profile_path: Union[str, Path, None] = None,
+        date_order: Optional[NightscoutDateOrder] = None,
     ) -> UnifiedFormat:
         """Parse Nightscout export files (JSON or CSV) to unified format.
 
@@ -2376,7 +2420,9 @@ class FormatParser(CGMParser):
         keeps its own path through `parse_nightscout`.
 
         Accepts both JSON and CSV for entries; treatments are expected to be
-        JSON (the Nightscout API does not support CSV for treatments).
+        JSON (the Nightscout API does not support CSV for treatments). A whole
+        nightscout-exporter CSV is one file: pass it as ``entries_path`` alone,
+        and its treatments section is read with it.
 
         Args:
             entries_path: Path to entries file (JSON or CSV)
@@ -2391,6 +2437,8 @@ class FormatParser(CGMParser):
                 dropping it silently would be the "silent fallback" the
                 charter forbids, and rejecting it would break existing callers
                 for no gain.
+            date_order: The day/month order of an exporter CSV's dates; see
+                :meth:`parse_nightscout`.
 
         Returns:
             DataFrame in unified format matching CGM_SCHEMA
@@ -2408,7 +2456,7 @@ class FormatParser(CGMParser):
         treatments_data: Union[bytes, None] = None
         if treatments_path is not None:
             treatments_data = Path(treatments_path).read_bytes()
-        return cls.parse_nightscout(entries_data, treatments_data)
+        return cls.parse_nightscout(entries_data, treatments_data, date_order)
 
     @classmethod
     def from_nightscout_url(

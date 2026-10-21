@@ -11,6 +11,23 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+**Minor** (a new optional parameter and a new enum). The version bump is the lead's.
+
+### A caller can state a Nightscout exporter file's date order (RM19)
+
+- **`NightscoutDateOrder`** (`MONTH_FIRST`, `DAY_FIRST`) and an optional **`date_order`** on
+  `FormatParser.parse_nightscout` and `from_nightscout_exports`. The default `None` keeps 0.12.3's
+  inference. Stated, it settles the one case the text cannot: a file on a 12-hour clock with no day
+  past the 12th, which 0.12.3 reads month first with a warning. A file that reads in no format of
+  the stated order is refused, naming the order. Year-first dates read under either.
+- **`parse_nightscout` and `from_nightscout_exports` take the exporter's whole file**, `# CGM
+  ENTRIES` and `# TREATMENTS` sections included. Before, they read the section line as the header
+  and failed; only `parse_file` / `parse_from_string` could read it. Treatments both inside the file
+  and passed beside it raise `MalformedDataError`.
+- Not done: a `--date-order` flag on `cgm-cli parse`.
+
 ## 0.13.0 — 2026-10-21
 
 **Minor.** Insulin pumps: MiniMed pump CareLink exports parse (RM16), fold onto a CGM export's

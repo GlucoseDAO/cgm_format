@@ -112,6 +112,16 @@ class NightscoutDirection(EnumLiteral):
     RATE_OUT_OF_RANGE = "RATE OUT OF RANGE"
 
 
+class NightscoutDateOrder(EnumLiteral):
+    """The order of day and month in a nightscout-exporter CSV's Date column.
+
+    The exporter writes dates in the browser's locale, so the order is the locale's. A caller who
+    knows it states it; ``None`` (the default) lets the parser infer it from the file.
+    """
+    MONTH_FIRST = "month_first"   # en-US: 4/7/2026 is 7 April
+    DAY_FIRST = "day_first"       # en-GB, en-AU and most others: 7/4/2026 is 7 April
+
+
 # =============================================================================
 # Raw Column Names
 # =============================================================================

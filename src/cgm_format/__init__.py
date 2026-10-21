@@ -153,6 +153,7 @@ from cgm_format.formats.nightscout import (
     NightscoutTreatmentColumn,
     NightscoutTreatmentEventType,
     NightscoutDirection,
+    NightscoutDateOrder,
 )
 
 from cgm_format.nightscout_downloader import (
@@ -277,6 +278,7 @@ __all__ = [
     "NightscoutTreatmentColumn",
     "NightscoutTreatmentEventType",
     "NightscoutDirection",
+    "NightscoutDateOrder",
     
     # Nightscout downloader
     "download_nightscout",

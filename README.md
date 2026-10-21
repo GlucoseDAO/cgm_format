@@ -588,6 +588,18 @@ df = FormatParser.from_nightscout_url("https://my-ns.example.com", api_secret="m
 df = FormatParser.parse_file("nightscout-data-with-treatments.csv")
 ```
 
+The exporter writes dates in the exporting browser's locale. The parser infers the order from the
+file, but a file on a 12-hour clock in which no day is past the 12th reads both ways; it is read
+month first, with a warning. If you know the export came from a day-first locale, say so:
+
+```python
+from cgm_format import FormatParser, NightscoutDateOrder
+
+df = FormatParser.from_nightscout_exports(
+    "nightscout-data-with-treatments.csv", date_order=NightscoutDateOrder.DAY_FIRST
+)
+```
+
 > **Note:** The built-in Nightscout `/api/v1/entries.csv` endpoint is defective (headerless,
 > 5 columns only) and treatments don't support CSV at all. Use the JSON API or
 > nightscout-exporter CSV instead.

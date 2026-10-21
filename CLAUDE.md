@@ -740,7 +740,9 @@ register the more-specific identity first.
 - **Nightscout dual-path.** (1) JSON API path — `parse_nightscout()` / `from_nightscout_exports()` /
   `from_nightscout_url()`, combining entries + treatments, `token` / `api_secret` auth. (2)
   nightscout-exporter CSV — a combined file with `# CGM ENTRIES` / `# TREATMENTS` section headers,
-  auto-detected by `detect_format()`. `_process_nightscout` dispatches both. The built-in Nightscout
+  auto-detected by `detect_format()`. `_process_nightscout` dispatches both; `parse_nightscout` also
+  takes the combined file whole, and is the only route that takes `date_order` (the exporter writes
+  dates in the browser's locale). The built-in Nightscout
   API CSV endpoints are **not** supported (headerless 5-col entries; treatments returns JSON anyway)
   — `data/input/nightscout_entries.csv` is kept as a negative control. JSON files do **not** go
   through `detect_format()`.

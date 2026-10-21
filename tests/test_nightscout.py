@@ -27,6 +27,7 @@ import polars as pl
 
 from cgm_format import FormatParser as FormatParserPrime
 from cgm_format import FormatProcessor
+from cgm_format import NightscoutDateOrder
 from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     SupportedCGMFormat,
@@ -762,3 +763,105 @@ class TestExporterLocaleDates:
 
         assert {d for d in us["datetime"].dt.date().unique().to_list()} == {date(2026, 4, 6), date(2026, 4, 7)}
         assert [r for r in caplog.records if "no format" in r.getMessage()] == []
+
+
+def _iso(moment: datetime) -> tuple[str, str]:
+    """Year first, 24-hour: the one shape no stated order makes ambiguous."""
+    return f"{moment:%Y-%m-%d}", f"{moment:%H:%M:%S}"
+
+
+class TestExporterDateOrder:
+    """RM19: a caller who knows the export's locale can say the date order outright.
+
+    0.12.3 infers the order from the file; a file on a 12-hour clock with no day past the 12th
+    reads completely both ways and is read month first with a warning. ``date_order`` settles it.
+    """
+
+    @staticmethod
+    def _glucose_moments(df: pl.DataFrame) -> set[datetime]:
+        rows = df.filter(pl.col("event_type") == UnifiedEventType.GLUCOSE.value)
+        return set(rows["datetime"].to_list())
+
+    @staticmethod
+    def _ambiguity(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.getMessage() for r in caplog.records if "ambiguous" in r.getMessage()]
+
+    def test_day_first_settles_the_ambiguous_export(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        au_text, written = _relocale(exporter_csv_text, _en_au)
+        assert all(m.day <= 12 for m in written), "the fixture must stay ambiguous for this test"
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            au = FormatParser.parse_nightscout(au_text, date_order=NightscoutDateOrder.DAY_FIRST)
+
+        assert self._glucose_moments(au) == written
+        assert au["datetime"].null_count() == 0
+        assert self._ambiguity(caplog) == []
+
+    def test_month_first_stated_reads_as_inferred_without_the_warning(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        inferred = FormatParser.parse_from_string(exporter_csv_text)
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            stated = FormatParser.parse_nightscout(exporter_csv_text, date_order=NightscoutDateOrder.MONTH_FIRST)
+
+        assert stated.equals(inferred)
+        assert self._ambiguity(caplog) == []
+
+    def test_no_order_keeps_the_inference_and_its_warning(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The combined exporter file, sections and all, now goes through parse_nightscout too."""
+        au_text, _ = _relocale(exporter_csv_text, _en_au)
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            direct = FormatParser.parse_nightscout(au_text)
+            detected = FormatParser.parse_from_string(au_text)
+
+        assert direct.equals(detected)
+        assert len(self._ambiguity(caplog)) == 2, "one warning per parse"
+
+    def test_a_wrong_stated_order_is_refused_by_name(self, exporter_csv_text: str) -> None:
+        """A day-first export past the 12th read as month first reads no row at all."""
+        gb_text, _ = _relocale(exporter_csv_text, _en_gb, shift=timedelta(days=10))
+
+        with pytest.raises(MalformedDataError, match="MONTH_FIRST|month_first"):
+            FormatParser.parse_nightscout(gb_text, date_order=NightscoutDateOrder.MONTH_FIRST)
+
+    def test_year_first_dates_read_under_either_order(self, exporter_csv_text: str) -> None:
+        iso_text, written = _relocale(exporter_csv_text, _iso)
+
+        for order in NightscoutDateOrder:
+            assert self._glucose_moments(FormatParser.parse_nightscout(iso_text, date_order=order)) == written
+
+    def test_from_nightscout_exports_takes_the_order(self, exporter_csv_text: str, tmp_path: Path) -> None:
+        au_text, written = _relocale(exporter_csv_text, _en_au)
+        path = tmp_path / "export.csv"
+        path.write_text(au_text)
+
+        df = FormatParser.from_nightscout_exports(path, date_order=NightscoutDateOrder.DAY_FIRST)
+
+        assert self._glucose_moments(df) == written
+        assert df.equals(FormatParser.parse_nightscout(au_text, date_order=NightscoutDateOrder.DAY_FIRST))
+
+    def test_treatments_in_the_file_and_beside_it_is_refused(
+        self, exporter_csv_text: str, treatments_json_text: Optional[str]
+    ) -> None:
+        if treatments_json_text is None:
+            pytest.skip("no treatments JSON")
+        assert "# TREATMENTS" in exporter_csv_text, "the fixture lost its treatments section"
+
+        with pytest.raises(MalformedDataError, match="TREATMENTS"):
+            FormatParser.parse_nightscout(exporter_csv_text, treatments_json_text)
+
+    def test_an_order_given_for_json_says_it_is_unused(
+        self, entries_json_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            stated = FormatParser.parse_nightscout(entries_json_text, date_order=NightscoutDateOrder.DAY_FIRST)
+
+        assert stated.equals(FormatParser.parse_nightscout(entries_json_text))
+        assert [r for r in caplog.records if "date_order" in r.getMessage()], "the ignored order went unsaid"
