@@ -43,6 +43,11 @@ InterpolatedRow = Dict[str, Union[int, float, str, datetime, None]]
 
 logger = logging.getLogger(__name__)
 
+# The event types whose `glucose` is the sensor series: readings, and the deprecated imputed code
+# older frames still carry. A meter (BG_METER) or calibration (CALIBRAT) value rides `glucose` too,
+# but is not part of the series.
+SENSOR_SERIES_EVENTS: Tuple[str, ...] = (UnifiedEventType.GLUCOSE.value, UnifiedEventType.IMPUTATION.value)
+
 
 class FoldSource(EnumLiteral):
     """Where `FormatProcessor.fold_insulin_onto_grid` takes boluses and carbs from.
@@ -930,10 +935,10 @@ class FormatProcessor(CGMProcessor):
         if validation_mode & (ValidationMethod.INPUT | ValidationMethod.INPUT_FORCED):
             cls.schema.validate_dataframe(dataframe, enforce=validation_mode & ValidationMethod.INPUT_FORCED)
         
-        # Check for valid glucose readings
-        valid_glucose_count = dataframe.filter(
-            pl.col('glucose').is_not_null()
-        ).height
+        # Check for valid glucose readings: sensor readings only, a meter or
+        # calibration value rides `glucose` too but is not part of the series.
+        is_reading = pl.col('event_type').is_in(SENSOR_SERIES_EVENTS) & pl.col('glucose').is_not_null()
+        valid_glucose_count = dataframe.filter(is_reading).height
         
         if valid_glucose_count == 0:
             raise ZeroValidInputError("No valid glucose data points in the sequence")
@@ -954,7 +959,7 @@ class FormatProcessor(CGMProcessor):
                 candidate_df = dataframe.filter(pl.col('sequence_id') == candidate_seq_id)
                 
                 # Check if this sequence has glucose data
-                if candidate_df.filter(pl.col('glucose').is_not_null()).height == 0:
+                if candidate_df.filter(is_reading).height == 0:
                     continue  # Skip sequences with no glucose data
                 
                 # Try truncating this sequence
@@ -1138,8 +1143,9 @@ class FormatProcessor(CGMProcessor):
         Args:
             unified_df: DataFrame in UnifiedFormat with all columns
             drop_service_columns: If True, drop service columns (sequence_id, event_type, quality)
-            drop_duplicates: If True, collapse rows sharing a timestamp into one row,
-                keeping the first non-null value of each column. A glucose reading and an
+            drop_duplicates: If True, collapse rows sharing a timestamp into one row (see
+                `_coalesce_duplicate_timestamps`): amounts summed, glucose from the sensor
+                reading, every other column its first non-null value. A glucose reading and an
                 insulin dose that land on the same grid point merge into a single wide row
                 instead of one discarding the other.
             glucose_only: If True, drop non-EGV events before truncation (keeps only GLUCOSE)
@@ -1182,15 +1188,47 @@ class FormatProcessor(CGMProcessor):
         the same grid point occupy two rows. Dropping one of them silently discarded whichever
         sorted second; merging keeps both in the single wide row that ML models expect. An
         amount (`COALESCE_SUMMED_COLUMNS`) is summed: two boluses on one grid point are both
-        given. A sum over nothing recorded stays null, never 0. Every other column keeps its
-        first non-null value.
+        given. A sum over nothing recorded stays null, never 0. `glucose` is the sensor
+        series' (`SENSOR_SERIES_EVENTS`): a meter or calibration value on the same grid point is not part
+        of the series and does not stand in for it. `insulin_duration` is kept only where one
+        bolus is on the point; two summed doses have no one duration, so it is null there and
+        the count is warned. Every other column keeps its first non-null value.
         """
         if unified_df.height == 0:
             return unified_df
 
+        has_events = 'event_type' in unified_df.columns
+        if 'insulin_duration' in unified_df.columns:
+            mixed = (
+                unified_df.group_by('datetime')
+                .agg(
+                    (pl.col('insulin_fast').is_not_null().sum() > 1)
+                    & pl.col('insulin_duration').is_not_null().any()
+                )
+                .to_series(1).sum()
+            )
+            if mixed:
+                logger.warning(
+                    "Collapsing rows: %d grid point(s) carry two or more boluses one of which is "
+                    "spread over time; their summed insulin_fast has no single insulin_duration, "
+                    "which is left null. fold_insulin_onto_grid spreads such doses instead.",
+                    mixed,
+                )
+
         def merged(col: str) -> pl.Expr:
             if col in cls.COALESCE_SUMMED_COLUMNS:
                 return pl.when(pl.col(col).is_not_null().any()).then(pl.col(col).sum()).otherwise(None).alias(col)
+            if col == 'glucose' and has_events:
+                return (
+                    pl.col(col).filter(pl.col('event_type').is_in(SENSOR_SERIES_EVENTS))
+                    .drop_nulls().first().alias(col)
+                )
+            if col == 'insulin_duration':
+                return (
+                    pl.when(pl.col('insulin_fast').is_not_null().sum() == 1)
+                    .then(pl.col(col).filter(pl.col('insulin_fast').is_not_null()).first())
+                    .otherwise(None).alias(col)
+                )
             return pl.col(col).drop_nulls().first().alias(col)
 
         other_columns = [col for col in unified_df.columns if col != 'datetime']
@@ -1600,7 +1638,9 @@ class FormatProcessor(CGMProcessor):
           unless the pump's rate is known across the whole bin; 0 during a
           suspend. With `fold_basal`, the bin's basal dose, `rate x I /
           MINUTES_PER_HOUR` for a constant rate, is added into `insulin_fast`
-          instead of being kept apart (the models read the two apart).
+          instead, and `basal_rate` is null (the models read the two apart, so
+          this is off by default). Not with `source=CGM`, whose bins without an
+          entry are unknown rather than 0.
         - `carbs`: summed in the bin; null where no entry was recorded.
         - `insulin_slow`: the CGM frame's long-acting doses in the bin.
 
@@ -1613,10 +1653,16 @@ class FormatProcessor(CGMProcessor):
         side is taken; two non-zero values are averaged, and named in a warning
         when they differ by more than a tolerance.
 
+        Overlapping pump exports: the one that starts first keeps the span they
+        share, and a later one contributes only after every earlier one has
+        ended, whatever order they are passed in. So two exports that disagree
+        there (a temp basal only one saw begin, a bolus whose programmed row only
+        one holds) give one answer, the earlier export's.
+
         What is not attached to any row is said in one warning with its total:
-        entries outside every sequence, the source not chosen, pump rows
-        repeated across overlapping exports, basal in bins the pump only partly
-        covered. The output is a terminal view without `event_type`, so it
+        entries outside every sequence (per source under MERGE, since one dose
+        may be logged by both), the source not chosen, pump rows an earlier
+        export already covers, basal in bins the pump only partly covered. The output is a terminal view without `event_type`, so it
         cannot be folded again; the inputs are left untouched.
 
         Args:
@@ -1646,6 +1692,14 @@ class FormatProcessor(CGMProcessor):
             raise ValueError(
                 "fold_insulin_onto_grid needs a unified CGM frame (with event_type and "
                 "original_datetime); a folded frame cannot be folded again"
+            )
+        if fold_basal and source == FoldSource.CGM:
+            # A CGM app's log says nothing about the bins it has no entry for, so a bolus there is
+            # unknown, and unknown plus a basal dose is unknown: the fold would be null almost everywhere.
+            raise ValueError(
+                "fold_basal needs boluses from a source that covers every bin it is folded into; "
+                "with source=CGM a bin without a logged bolus is unknown, not 0. Use source=PUMP "
+                "or MERGE, or keep basal apart in basal_rate"
             )
 
         bins = cls._fold_bins(cgm, interval)
@@ -1714,7 +1768,9 @@ class FormatProcessor(CGMProcessor):
                 )
             out = out.with_columns((pl.col("insulin_fast") + pl.col("basal_dose")).alias("insulin_fast"))
         out = out.with_columns(
-            (pl.col("basal_dose") * MINUTES_PER_HOUR / interval).alias("basal_rate")
+            # Folded into insulin_fast, basal is not also given apart: that would count it twice.
+            (pl.lit(None, dtype=pl.Float64) if fold_basal
+             else pl.col("basal_dose") * MINUTES_PER_HOUR / interval).alias("basal_rate")
         ).select(
             "sequence_id", "datetime", "quality", "glucose",
             "carbs", "insulin_slow", "insulin_fast", "basal_rate",
@@ -1835,7 +1891,13 @@ class FormatProcessor(CGMProcessor):
 
     @classmethod
     def _fold_pump_rows(cls, pumps: List[UnifiedFormat], notes: List[str]) -> pl.DataFrame:
-        """All pump frames as one, rows repeated across overlapping exports dropped once."""
+        """All pump frames as one, each instant taken from one export only.
+
+        Exports are taken in order of where they start (then the longer, then
+        the larger, then as passed), never by content. Each contributes only the
+        rows after every export before it has ended, so where two overlap the
+        earlier keeps the shared span.
+        """
         wanted = ["datetime", "event_type", "insulin_fast", "insulin_duration", "basal_rate", "carbs"]
         frames = [
             frame.select(
@@ -1843,11 +1905,52 @@ class FormatProcessor(CGMProcessor):
             ).with_columns(pl.col("datetime").cast(pl.Datetime("ms")))
             for frame in pumps
         ]
-        rows = pl.concat(frames, how="vertical_relaxed")
-        unique = rows.unique(maintain_order=True)
-        if unique.height < rows.height:
-            notes.append(f"{rows.height - unique.height} pump row(s) repeated across overlapping exports, counted once")
-        return unique.sort("datetime", "event_type", maintain_order=True)
+        order = sorted(
+            range(len(frames)),
+            key=lambda i: (frames[i]["datetime"].min(), -frames[i]["datetime"].max().timestamp(), -frames[i].height, i),
+        )
+        kept: List[pl.DataFrame] = []
+        covered_until: Optional[datetime] = None
+        dropped = 0
+        for i in order:
+            frame = frames[i]
+            if covered_until is not None:
+                inside = frame.filter(pl.col("datetime") <= covered_until)
+                # A bolus programmed near an earlier export's end but delivered after it is in the
+                # later export only: keep it there unless the earlier one has the same dose (amount
+                # and duration) within SMALL_GAP_MAX_MINUTES, its own record of it.
+                extra = cls._fold_unmatched_boluses(inside, pl.concat(kept, how="vertical_relaxed"))
+                dropped += inside.height - extra.height
+                frame = pl.concat([extra, frame.filter(pl.col("datetime") > covered_until)], how="vertical_relaxed")
+            kept.append(frame)
+            end = frames[i]["datetime"].max()
+            covered_until = end if covered_until is None else max(covered_until, end)
+        if dropped:
+            notes.append(f"{dropped} pump row(s) inside a span an earlier export already covers, taken from that export")
+        return pl.concat(kept, how="vertical_relaxed").sort("datetime", "event_type", maintain_order=True)
+
+    @classmethod
+    def _fold_unmatched_boluses(cls, candidates: pl.DataFrame, kept: pl.DataFrame) -> pl.DataFrame:
+        """The bolus rows of `candidates` that `kept` has no record of: no bolus of the same amount
+        and duration within SMALL_GAP_MAX_MINUTES."""
+        def keyed(frame: pl.DataFrame) -> pl.DataFrame:
+            return frame.filter(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value).with_columns(
+                pl.col("insulin_duration").fill_null(0.0).alias("_minutes_key")
+            )
+        bolus = keyed(candidates).with_row_index("_candidate").sort("datetime")
+        if bolus.height == 0:
+            return candidates.clear()
+        known = keyed(kept).select("datetime", "insulin_fast", "_minutes_key", pl.col("datetime").alias("_known_at")).sort("datetime")
+        matched = bolus.join_asof(
+            known, on="datetime", by=["insulin_fast", "_minutes_key"], strategy="nearest",
+            tolerance=timedelta(minutes=SMALL_GAP_MAX_MINUTES),
+            check_sortedness=False,  # both sides are sorted by datetime just above
+        )
+        return (
+            matched.filter(pl.col("_known_at").is_null())
+            .sort("_candidate")
+            .select(candidates.columns)
+        )
 
     @classmethod
     def _fold_coverage(cls, pumps: List[UnifiedFormat]) -> pl.DataFrame:
@@ -2060,9 +2163,11 @@ class FormatProcessor(CGMProcessor):
         near_slots = SMALL_GAP_MAX_MINUTES // interval
         p = cls._fold_place(bins, pump, interval).with_row_index("_p")
         c = cls._fold_place(bins, cgm, interval).with_row_index("_c")
+        # A 0 says nothing, so it pairs with nothing: it would take a partner from a real entry.
+        pairable = pl.col("slot").is_not_null() & (pl.col("amount") > 0)
         candidates = (
-            p.filter(pl.col("slot").is_not_null())
-            .join(c.filter(pl.col("slot").is_not_null()), on="sequence_id", suffix="_cgm")
+            p.filter(pairable)
+            .join(c.filter(pairable), on="sequence_id", suffix="_cgm")
             .with_columns(
                 (pl.col("slot") - pl.col("slot_cgm")).abs().alias("_slots"),
                 (pl.col("at") - pl.col("at_cgm")).dt.total_milliseconds().abs().alias("_apart"),
@@ -2106,8 +2211,21 @@ class FormatProcessor(CGMProcessor):
                 "fold_insulin_onto_grid: %d merged %s pair(s) differ by more than %g %s, averaged: %s",
                 len(disagreements), kind, tolerance, unit, "; ".join(disagreements),
             )
-        keep_p = p.filter(~pl.col("_p").is_in([pi for pi, _ in pairs])).select("at", "amount", "minutes")
-        keep_c = c.filter(~pl.col("_c").is_in([ci for _, ci in pairs])).select("at", "amount", "minutes")
+        # Outside every sequence nothing pairs, and one dose may be logged by both sources, so the
+        # amounts there are said per source and attached to nothing. A spread pump dose starting
+        # outside stays: part of it may land inside, and only the pump has it.
+        instant = pl.col("minutes").fill_null(0) <= 0
+        out_p = p.filter(pl.col("slot").is_null() & instant)
+        out_c = c.filter(pl.col("slot").is_null())
+        if out_p.height or out_c.height:
+            notes.append(
+                f"outside every glucose sequence, {kind}: {out_p['amount'].sum():g} {unit} logged by the pump, "
+                f"{out_c['amount'].sum():g} {unit} by the CGM (one dose may be in both)"
+            )
+        paired_p = [pi for pi, _ in pairs]
+        paired_c = [ci for _, ci in pairs]
+        keep_p = p.filter(~pl.col("_p").is_in(paired_p) & ~(pl.col("slot").is_null() & instant)).select("at", "amount", "minutes")
+        keep_c = c.filter(~pl.col("_c").is_in(paired_c) & pl.col("slot").is_not_null()).select("at", "amount", "minutes")
         merged = pl.DataFrame(
             resolved, schema={"at": pl.Datetime("ms"), "amount": pl.Float64, "minutes": pl.Float64}
         )

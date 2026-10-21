@@ -602,7 +602,7 @@ wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
   spread over the bins it was delivered across. **`basal_rate`** is the pump's rate averaged over the
   bin, U/h, kept apart because the forecasting models read basal and bolus as separate channels.
   `fold_basal=True` adds the bin's basal dose (`rate × 5 / 60` for a constant rate) into
-  `insulin_fast` instead.
+  `insulin_fast` instead, and leaves `basal_rate` null (not with `source=CGM`, which raises).
 - Nulls mean "not known": `basal_rate` where the pump's rate does not cover the whole bin,
   `insulin_fast` where no source covers it, `carbs` where no entry was recorded. A suspended pump is a
   measured 0.
@@ -612,6 +612,8 @@ wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
   averages two non-zero values, and warns with both where they differ.
 - `FormatProcessor.to_sugarone_ready_df(wide)` renders this in the trained models' input columns,
   basal and bolus as separate channels. `to_ml_ready_df` is the legacy path for frames without a pump.
+- Overlapping monthly exports are fine in any order: the earlier keeps the span they share, and a
+  bolus split across two is counted once.
 - Do not `parse_bundle` the pump with the CGM before synchronizing: pump rows would move the glucose
   grid (F19 in `docs/dogfooding.md`). The fold reads the CGM's grid and leaves both inputs untouched.
 

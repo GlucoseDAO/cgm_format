@@ -2308,6 +2308,29 @@ def test_collapse_sums_amounts_sharing_a_grid_point():
     assert result['glucose'].to_list() == [120.0, 130.0]
 
 
+def test_collapse_takes_glucose_from_the_sensor_series_only():
+    """A meter value on a grid point neither replaces the reading there nor stands in where there is none."""
+    base_time = datetime(2024, 1, 1, 10, 10, 0)
+
+    def row(event_type, **values):
+        record = {
+            'sequence_id': 0, 'event_type': event_type, 'quality': GOOD_QUALITY.value, 'datetime': base_time,
+            'glucose': None, 'carbs': None, 'insulin_slow': None, 'insulin_fast': None, 'exercise': None,
+        }
+        record.update(values)
+        return record
+
+    unified_df = create_test_dataframe([
+        row(UnifiedEventType.GLUCOSE_METER.value, glucose=250.0),
+        row(UnifiedEventType.GLUCOSE.value, glucose=100.0),
+        row(UnifiedEventType.GLUCOSE_METER.value, datetime=base_time + timedelta(minutes=5), glucose=240.0),
+    ])
+
+    result = FormatProcessor.to_data_only_df(unified_df, drop_duplicates=True)
+
+    assert result['glucose'].to_list() == [100.0, None]
+
+
 SUGAR_ONE_COLUMNS = [
     'sequence_id', 'Timestamp', 'Event Type', 'User ID', 'Glucose (mg/dL)',
     'Basal Rate (U/h)', 'Bolus Insulin (U)', 'Carbohydrates (g)',

@@ -8,8 +8,10 @@ rows and the bin rule, a grid point t owning [t - 2.5 min, t + 2.5 min); none co
 fold.
 """
 
+import csv
 import logging
 import re
+from io import StringIO
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -217,12 +219,33 @@ def _real_pumps() -> List[Path]:
     return found
 
 
+def _raw_delivered_units(paths: List[Path]) -> float:
+    """Units the pump delivered, read from the raw CSVs with the csv module, not the parser: every row
+    with a delivered bolus volume, a row present in two overlapping exports counted once."""
+    seen = set()
+    for path in paths:
+        text = FormatParser.decode_raw_data(path.read_bytes())
+        header: Optional[List[str]] = None
+        for row in csv.reader(StringIO(text), delimiter=";"):
+            if row and row[0].strip().lstrip("\ufeff") == "Index":
+                header = [c.strip() for c in row]
+                continue
+            if header is None or len(row) != len(header):
+                continue
+            cell = row[header.index("Bolus Volume Delivered (U)")].strip()
+            if cell:
+                fields = ("Date", "Time", "Bolus Number", "Bolus Type", "Bolus Volume Delivered (U)")
+                seen.add(tuple(row[header.index(f)] for f in fields))
+    return sum(float(key[-1].replace(",", ".")) for key in seen)
+
+
 @pytest.mark.skipif(not REAL_CGM.exists() or not _real_pumps(), reason="real CGM and pump exports absent")
 def test_real_pair_accounts_for_every_bolus_unit(caplog: pytest.LogCaptureFixture) -> None:
     """On the real overlap, every bolus unit the pumps delivered is on a row or reported outside.
 
-    The expected total is the pump frames' boluses with rows repeated across the overlapping monthly
-    exports counted once, computed here from the parsed frames, not from the fold.
+    The expected total is read from the raw CSVs with the csv module (`_raw_delivered_units`),
+    independent of both the parser and the fold, so a bolus split across two exports and counted
+    twice would show here.
     """
     pumps = [FormatParser.parse_file(p) for p in _real_pumps()]
     cgm = FormatProcessor.synchronize_timestamps(FormatParser.parse_file(REAL_CGM))
@@ -230,11 +253,7 @@ def test_real_pair_accounts_for_every_bolus_unit(caplog: pytest.LogCaptureFixtur
         wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
     message = " ".join(r.getMessage() for r in caplog.records)
     outside = re.search(r"([\d.]+) U of bolus insulin outside every glucose sequence", message)
-    delivered = (
-        pl.concat([p.filter(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value)
-                   .select("datetime", "insulin_fast", "insulin_duration") for p in pumps])
-        .unique()["insulin_fast"].sum()
-    )
+    delivered = _raw_delivered_units(_real_pumps())
     on_rows = wide["insulin_fast"].sum()
     assert on_rows + (float(outside.group(1)) if outside else 0.0) == pytest.approx(delivered, abs=0.01)
 
@@ -273,3 +292,68 @@ class TestSugarOneShape:
     def test_refuses_a_unified_frame(self, cgm: pl.DataFrame) -> None:
         with pytest.raises(ValueError, match="fold_insulin_onto_grid"):
             FormatProcessor.to_sugarone_ready_df(cgm)
+
+
+def export_slice(first: str, last: str) -> pl.DataFrame:
+    """The synthetic pump export cut to the pump rows logged from `first` to `last` (HH:MM:SS), as an
+    export covering only that span would hold them."""
+    text = FormatParser.decode_raw_data(PUMP.read_bytes())
+    kept = []
+    for line in text.split("\n"):
+        cells = line.split(";")
+        is_row = len(cells) > 3 and cells[1] == "1961/04/12" and cells[0][:1].isdigit()
+        if not is_row or first <= cells[2] <= last:
+            kept.append(line)
+    return FormatParser.parse_from_string("\n".join(kept))
+
+
+class TestOverlappingExports:
+    """Findings of the pre-release audit: exports that overlap but do not hold the same rows."""
+
+    def test_a_bolus_split_across_two_exports_counts_once(self, cgm: pl.DataFrame) -> None:
+        # A ends at 08:30, before the dual's square part finishes (09:00); B starts at 07:01, after
+        # bolus 1 was programmed (07:00) but before it finished (07:01:30).
+        a, b = export_slice("00:00:00", "08:30:00"), export_slice("07:01:00", "23:59:59")
+        for order in ([a, b], [b, a]):
+            wide = FormatProcessor.fold_insulin_onto_grid(cgm, order)
+            day = wide.filter(pl.col("datetime").dt.date() == pl.date(1961, 4, 12))
+            assert day["insulin_fast"].sum() == pytest.approx(13.5)
+            assert bins(wide, "07:02")["07:02"]["insulin_fast"] == pytest.approx(3.0)
+            assert bins(wide, "08:07")["08:07"]["insulin_fast"] == pytest.approx(1.5 * 5 / 60)
+
+    def test_exports_that_disagree_give_the_earlier_ones_answer_in_any_order(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
+        # B starts at 01:20, inside the percent temp it never saw begin: its 01:30 rate is the schedule.
+        b = export_slice("01:20:00", "23:59:59")
+        alone = FormatProcessor.fold_insulin_onto_grid(cgm, pump)
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, [pump, b]).equals(alone)
+        assert FormatProcessor.fold_insulin_onto_grid(cgm, [b, pump]).equals(alone)
+
+
+class TestAuditCases:
+    def test_cgm_source_cannot_fold_basal(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
+        with pytest.raises(ValueError, match="fold_basal"):
+            FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.CGM, fold_basal=True)
+
+    def test_folded_basal_is_not_also_given_apart(self, cgm: pl.DataFrame, pump: pl.DataFrame) -> None:
+        wide = FormatProcessor.fold_insulin_onto_grid(cgm, pump, fold_basal=True)
+        assert wide["basal_rate"].null_count() == wide.height
+
+    def test_a_zero_takes_no_partner(self, dexcom: pl.DataFrame, pump: pl.DataFrame) -> None:
+        cgm = FormatProcessor.synchronize_timestamps(with_entries(dexcom, [
+            ("12:59", UnifiedEventType.INSULIN_FAST, "insulin_fast", 0.0),
+            ("13:03", UnifiedEventType.INSULIN_FAST, "insulin_fast", 4.5),  # the pump's 13:00 dose, logged again
+        ]))
+        got = bins(FormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.MERGE), "13:02")
+        assert got["13:02"]["insulin_fast"] == pytest.approx(4.5)  # once, not 9.0
+
+    def test_merge_reports_outside_entries_per_source(self, dexcom: pl.DataFrame, pump: pl.DataFrame, caplog: pytest.LogCaptureFixture) -> None:
+        # The CGM's first reading is at 00:57; a dose at 00:30 logged by both sources is outside every sequence.
+        early_pump = pl.concat([pump, pump.filter(pl.col("event_type") == UnifiedEventType.INSULIN_FAST.value).head(1)
+                                .with_columns(pl.lit(at("00:30")).cast(pl.Datetime("ms")).alias("datetime"),
+                                              pl.lit(at("00:30")).cast(pl.Datetime("ms")).alias("original_datetime"))])
+        cgm = FormatProcessor.synchronize_timestamps(with_entries(dexcom, [("00:31", UnifiedEventType.INSULIN_FAST, "insulin_fast", 3.0)]))
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_processor"):
+            FormatProcessor.fold_insulin_onto_grid(cgm, early_pump, source=FoldSource.MERGE)
+        message = " ".join(r.getMessage() for r in caplog.records)
+        assert "insulin: 3 U logged by the pump, 3 U by the CGM (one dose may be in both)" in message
+        assert "U of bolus insulin outside every glucose sequence" not in message

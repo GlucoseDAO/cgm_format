@@ -61,6 +61,32 @@ release; the plan is `docs/PLAN_pump.md`.
   the exports are absent). Not checked: the pump's clock against the CGM's, which no export
   records.
 
+### What the pre-release audit changed
+
+A fresh read of RM16, RM17, RM18 and RM21 against `docs/PLAN_pump.md` found eleven defects, all fixed
+before this release, each with a test shown failing on the code before the fix:
+
+- **Same-second basal ties now keep the later-logged rate.** CareLink writes exports newest first,
+  so `Index` falls as the pump logs; the parser had the tie-break backwards on real files (8 and 20
+  basal rows in two of the four exports). The synthetic export is now written newest first too.
+- **Overlapping pump exports give one answer whatever order they are passed in.** The export that
+  starts first keeps the span they share; a later one adds a bolus there only if the earlier has no
+  record of it (same amount and duration within 15 minutes). Before, a bolus split across two exports
+  (programmed in one, finished in the other) was counted twice, and two exports disagreeing about a
+  basal rate gave a list-order-dependent result. A spread bolus whose programmed row an export lacks
+  now starts at its finish less its duration.
+- **`MERGE`**: a 0 no longer takes a partner from a real entry; entries outside every sequence are
+  reported per source, not summed as if two doses.
+- **`fold_basal`**: `basal_rate` is null when basal is folded into `insulin_fast` (it was given twice),
+  and `source=CGM` with `fold_basal=True` raises, since a CGM log's bins without an entry are unknown.
+- **The collapse** (`to_data_only_df(drop_duplicates=True)`, `to_ml_ready_df`) takes `glucose` from
+  the sensor series only (`SENSOR_SERIES_EVENTS`): a meter or calibration value no longer replaces a
+  reading or stands in where there is none. Two boluses summed on one point keep no
+  `insulin_duration`, with a warning. `prepare_for_inference`'s "no valid readings" guard counts
+  sensor readings only.
+- The real-data test now reads delivered units from the raw CSVs, independent of the parser and the
+  fold; it had computed its expectation the way the code does.
+
 ### The models' input shape, with pump basal (RM21)
 
 - **`FormatProcessor.to_sugarone_ready_df(folded)`** renders the fold's output in the columns the

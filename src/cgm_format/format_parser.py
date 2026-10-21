@@ -1682,7 +1682,9 @@ class FormatParser(CGMParser):
         empty = boluses.filter(~delivered).height
         if empty:
             logger.warning(
-                "Medtronic pump export: %d bolus(es) with no delivered volume, not represented.",
+                "Medtronic pump export: %d bolus(es) with no delivered volume in this export, not "
+                "represented: cancelled before any insulin left the pump, or still being delivered "
+                "when the export ends (the next export then has it).",
                 empty,
             )
         unclear = boluses.filter(
@@ -1698,8 +1700,16 @@ class FormatParser(CGMParser):
                 "duration; these rows are the ones that would show it does not.",
                 unclear,
             )
+        # Without its programmed row (the export starts mid-bolus) a bolus starts at its finish,
+        # less the duration a spread one reports, which is its actual delivery time.
+        finished_start = pl.col("_finished_at") - pl.duration(
+            milliseconds=(pl.col("_delivered_minutes").fill_null(0) * 60_000).round(0).cast(pl.Int64)
+        )
         return boluses.filter(delivered).select(
-            pl.coalesce("_programmed_at", "_finished_at").alias("datetime"),
+            pl.coalesce(
+                "_programmed_at",
+                pl.when(pl.col("_spread")).then(finished_start).otherwise(pl.col("_finished_at")),
+            ).alias("datetime"),
             pl.col("_delivered").alias("insulin_fast"),
             pl.when(pl.col("_spread"))
             .then(pl.coalesce("_delivered_minutes", "_programmed_minutes"))
