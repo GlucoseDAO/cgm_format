@@ -48,12 +48,17 @@ Delegation is for finding things, never for deciding them.
    [docs/USAGE.md](docs/USAGE.md) (public API),
    [docs/NEW_SCHEMA.md](docs/NEW_SCHEMA.md) (new-vendor checklist),
    [docs/RESEARCH_CORPORA.md](docs/RESEARCH_CORPORA.md) (multi-subject / multi-device datasets).
+7. **[docs/seats/README.md](docs/seats/README.md)** — the standing roles a session can take here
+   (`lead`, `triage`) on the seats kit, each with its priming file and grant. Read it before
+   `/seats:seat <seat>`; a session that takes no seat does the task it was given and no seat's work.
 
 Everything below is self-contained: no rule here requires following a link to know what you must not
 do. Links carry positive detail only.
 
-`.claude/` holds only `settings.local.json` — no skills, agents or workflows. If you add any, name
-them here, or they get discovered by accident.
+`.claude/` holds only `settings.local.json` (git-ignored, local scope): a few permission rules and
+the seats kit's pin, the `seats@agent-seat-blueprints` plugin at a tagged `ref`, which only the lead
+moves. No skills, agents or workflows; if you add any, name them here, or they get discovered by
+accident. `.claude/worktrees/` is where subagent worktrees land, ignored through `.git/info/exclude`.
 
 ## Project map
 
@@ -178,7 +183,12 @@ reason gets rationalised away at 2 a.m.
 - **Never commit large data.** Anything over ~5 MB that genuinely must travel goes through Git LFS.
   GitHub rejects >100 MB, and a large blob in history is extremely hard to remove afterwards (§3).
 - **Never run tree operations.** No `git push`, tags, releases, branch management or history
-  rewriting — the user's domain. **Never `git stash drop` / `git stash clear`**, even on explicit
+  rewriting — the user's domain. **The one exception is a seat's written grant** in `docs/seats/`:
+  the lead's (`docs/seats/LEAD.md`, "Grant", for a session on Opus 5.5 or above) covers pushing
+  `main` to `origin` as a fast-forward, its own branches and pull requests, release tags and GitHub
+  releases; a PyPI publish, a contributor's merge, force or history rewriting, `git branch -D` and a
+  pushed tag's deletion stay the user's. A session holding no seat, or a seat whose grant does not
+  name the operation, has no exception. **Never `git stash drop` / `git stash clear`**, even on explicit
   request. **Never `git add -A` or `git add .`** — it sweeps in `.env` files, editor swap files and
   junk; stage explicit paths. **Committing is not a tree operation and needs no permission** (since
   2026-08-28): land each coherent block as it completes, structured by what the work is rather than by
@@ -326,7 +336,8 @@ uv run cgm-cli detect|parse|pipeline <file>      # detect / parse-to-unified / f
 genuinely needs an interactive terminal, which is when you hand over a verbatim line instead.
 
 **Before a PR**, print `git diff origin/main --stat HEAD` and `git log origin/main..HEAD --oneline`,
-show the output, and wait for approval. Installation-specific files stay out.
+show the output, and wait for approval — except the lead's own pull requests, which its grant lets it
+open and merge without asking (`docs/seats/LEAD.md`). Installation-specific files stay out.
 
 ---
 
@@ -627,6 +638,12 @@ same applies when the user corrects a preference: it goes in §10, in their word
 - **Any typehints is slack.** Name the type — `TypedDict`, `Protocol`, a Union of the members — not
   `Any`. `Dict[str, Any]` is the same refusal with extra words. Why: Any turns the annotation into a
   comment the checker will never catch (2026-08-13).
+- **The lead seat's grant** (2026-10-21): "cgm as a format lib stayed way more gated. Still with opus
+  5.5 intlligence level and above, I can allow more autonomy, push, tags, gh release. Publising to
+  pypi still stays gated on me". And "side PRs merge on my approval only". The full list is
+  `docs/seats/LEAD.md`, "Grant"; it stands over §2's tree-operations rule for that seat only.
+- **No trust register until 1.0** (2026-10-21): "trust register burdens release pace much. Maybe
+  after 1.0 maturity". Do not propose one again before 1.0.
 
 ## 11. Learned workspace facts
 
