@@ -196,11 +196,12 @@ With a constant rate `r` across the bin, `basal_dose` is `r × I / 60`: the pers
 12` at `I = 5`. `I` is the processor's configured interval; 60 is a named `MINUTES_PER_HOUR`
 constant; there is no literal 12. A rate change inside a bin is integrated piecewise, exactly.
 
-**Whether basal is folded into `insulin_fast` waits on the training inputs (Q1).** Until that is
-clarified, the person's default is not to fold: `insulin_fast(t) = bolus(t)`, and basal travels
-separately as `basal_rate(t)`. The folded form, `insulin_fast(t) = bolus(t) + basal_dose(t)`, is the
-person's original request, and stays a single switch away (a `fold_basal` argument, default from a
-class attribute) once the training repo says which one the models consume.
+**Basal is not folded into `insulin_fast`** (Q1, settled by the training inputs, §5):
+`insulin_fast(t) = bolus(t)`, and basal travels separately as `basal_rate(t)` in U/h, which is the
+pair every model trained in `glucose_forecasting_metabonet` reads. The folded form, `insulin_fast(t) =
+bolus(t) + basal_dose(t)`, is the person's original request and equals MetaboNet's raw `insulin`
+total; it stays reachable as an opt-in `fold_basal=True` (default from a class attribute, off), for a
+consumer that wants total delivered insulin per row.
 
 **Three-valued.** The pump's coverage is from its first to its last row. A bin wholly inside it gets
 a number, 0 included (a suspended hour delivers 0 U, measured). A bin wholly outside it gets null
@@ -297,16 +298,39 @@ The person's fold puts basal and bolus into one `insulin_fast` number per row, w
 single-channel consumer wants and loses the split SugarOne's channels need. Hence Q1, and the
 person's answer: "Real training inputs take precedence".
 
+**What the training inputs are** (read 2026-10-21 by an agent in `GlucoseDAO/glucose_forecasting_metabonet`
+at `origin/main`, every claim with a file and line in its report):
+
+- Every model family trained there (SugarOne, SugarJepa2-288, CITRAS, KronLSTM, ConvTransformer,
+  CF-JEPA, GBM, KANMixer, Chronos, GluoFM) reads four channels: `glucose`, `basal` in **U/h**, `bolus`
+  in **U**, `carbs`. Basal and bolus are always separate (`common/data/columns.py`).
+- Basal is forward- then back-filled; bolus is zero-filled as an event (`loading.py`). A combined
+  channel would be zero-filled as an event, so basal would lose its carry-forward, and nearly every
+  row of a channel trained on sparse spikes would carry a small dose.
+- MetaboNet's raw parquet holds `basal` as **U per 5-minute bin**, which the repo's adapter multiplies
+  by 12 to get U/h, `bolus` in U, and `insulin` = basal + bolus. No model reads `insulin` as a channel;
+  it enters only as a fallback into the bolus channel when both are null.
+- The shipped SugarOne and SugarJepa2-288 scalers span basal [0, 36] U/h and bolus [0, 25] U.
+- The raw data cannot tell a recorded 0 from a missing value; the training code fills nulls itself and
+  warns that a zero "would be a claim that none was given". Emitting null for "not recorded" and 0 only
+  for a recorded zero is what the models want, and what this library's three-valued rule says anyway.
+
+So the wide row's `insulin_fast` (bolus, U) and `basal_rate` (U/h) are the two training channels
+exactly, with no conversion on the consumer's side.
+
 ---
 
 ## 6. Settled by the person, and what is still open
 
 Answered 2026-10-21:
 
-- **Q1, the basal channel: open, pending the training inputs.** "Before deciding, send opus agent into
-  glucose-metabonet repo and see how model actually trains. ... For now default (3) don't fold unless
-  clarified otherwise. Real training inputs take precedence." So `insulin_fast` carries boluses only
-  and basal travels as `basal_rate`, until the training repo's insulin inputs are read (§3.2).
+- **Q1, the basal channel: not folded**, settled by the training inputs. The person: "Before deciding,
+  send opus agent into glucose-metabonet repo and see how model actually trains. ... For now default
+  (3) don't fold unless clarified otherwise. Real training inputs take precedence." The training repo
+  reads basal (U/h) and bolus (U) as separate channels (§5), so the default stays: `insulin_fast` is
+  bolus, `basal_rate` is the bin's mean U/h, and the fold is an opt-in (§3.2). Rejected: the fold as
+  default (matches only MetaboNet's raw total, which no model reads), and basal as U per 5 minutes
+  (MetaboNet's raw unit, 12 times below what the models are scaled on).
 - **Q2, fingersticks: a new meter event type**, `BG_METER`, on both Medtronic formats (§3.1).
   Rejected: leaving them out with a warning (the recommendation), and keeping them as `glucose`.
 - **Q3, the data: same person, no more exports.** The real-data check covers the five overlapping days
@@ -338,8 +362,8 @@ duration in `Bolus Duration`.
   is 0; insulin between sequences is reported, not folded; overlapping pump exports fold to the same
   result as one; the CGM frame's glucose and grid are byte-identical before and after; the output is
   the same whichever order `interpolate_gaps` and `synchronize_timestamps` ran in; folding the output
-  is refused. Basal: unfolded by default (`insulin_fast` = bolus, `basal_rate` = the bin mean), and
-  folded with the switch on (`insulin_fast` = bolus + `rate × I / 60`). Source: `PUMP`, `CGM`, and
+  is refused. Basal: unfolded by default (`insulin_fast` = bolus, `basal_rate` = the bin mean in U/h),
+  and folded with `fold_basal=True` (`insulin_fast` = bolus + `rate × I / 60`). Source: `PUMP`, `CGM`, and
   `MERGE` with a 0 on one side (takes the other), two agreeing non-zeros (the mean), two disagreeing
   beyond tolerance (the mean, and the bin in the warning with both values).
 - RM18: two boluses on one grid point sum; an all-null group stays null.

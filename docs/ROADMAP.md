@@ -51,17 +51,16 @@ frames apart, never bundles or re-synchronizes them (bundling first lets pump ro
 grid, F19), and returns one row per grid point of each CGM sequence: glucose as the CGM had it,
 `insulin_fast` = instant doses in the bin + spread doses' share + the basal rate integrated over the
 bin, which is `rate × I / 60` for a constant rate (`I` = `expected_interval_minutes`, no literal 12).
-Basal is **not** folded into `insulin_fast` by default until the training inputs say otherwise (the
-person: "Real training inputs take precedence"); it travels as the bin's mean `basal_rate`, with the
-fold one switch away. Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`, where
+Basal is **not** folded into `insulin_fast`: every model trained in `glucose_forecasting_metabonet`
+reads basal (U/h) and bolus (U) as separate channels, and the person ruled that real training inputs
+take precedence. It travels as the bin's mean `basal_rate`; the fold is an opt-in `fold_basal=True`. Insulin and carbs come from a `source` option, `PUMP` / `CGM` / `MERGE`, where
 merge takes a 0 as "did not say", averages only two non-zeros, and warns with both values beyond a
 tolerance.
 Null outside the pump's coverage, 0 where the pump was suspended; insulin outside every sequence
 reported with its total, never attached; overlapping monthly exports deduplicated. A terminal view:
 inputs untouched, the output refuses to be folded again.
 
-Before code: the training repo's insulin inputs (an agent is reading `glucose_forecasting_metabonet`),
-which decide the basal default. Checked on real data over the five days where a Dexcom export and the
+Checked on real data over the five days where a Dexcom export and the
 pump record overlap; no more exports are coming.
 
 **Legality:** additive (a new classmethod, a new enum), so **minor**, riding RM16's release.

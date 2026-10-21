@@ -259,6 +259,15 @@ Until 1–4 are answered, `to_ml_ready_df` keeps `Basal Rate (U/h)` empty and ex
 `basal_rate_from_insulin_slow=True` as an explicit, documented opt-in for a deployment that has
 established its own answer.
 
+**Corrected 2026-10-21**, from a read of `GlucoseDAO/glucose_forecasting_metabonet` (`PLAN_pump.md`
+§5). The training basal range is **[0, 36] U/h**, not the `[0, 3]` estimated above: that is the span of
+the scalers shipped with the SugarOne and SugarJepa2-288 checkpoints, both fitted on
+`loop_ai_ready_joined2.csv`. A 26 U long-acting dose would scale to about 0.72, inside the range the
+model saw, not about 8.7. The point that a dose is not a rate still stands, and empty stays the right
+default for a pen user. And the scalers **are** shipped beside the checkpoints in that repo; the
+"not in the checkpoint" finding holds for the older `glucose-forecasting` repo only. A pump export
+(RM16) is the first source with a real rate for this channel.
+
 ### 0.9 Rung 3 (grid re-timing) — **shipped in 0.12.0, 2026-08-18**
 
 **Result: MAE 0.7834 → 0.000176 mg/dL** over the 289-point gate window, max abs diff 0.0005,
