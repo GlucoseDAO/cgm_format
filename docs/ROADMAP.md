@@ -14,6 +14,68 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ---
 
+## RM16 — MiniMed 720G pump exports parse
+
+**State:** queued · **Owner:** lead · **Severity:** high
+
+The proposal is [PLAN_pump.md](PLAN_pump.md) §2 and §3.1; this item is the parser half. All four real
+720G CareLink exports in the tree fail to parse today (`MalformedDataError` on dtype inference), and
+the shipped Medtronic path misreads two columns on any CareLink file: `Basal Rate (U/h)` becomes an
+`insulin_slow` dose, and fingersticks become `EGV_READ` glucose (255 of the Guardian fixture's
+22,404 "readings" are fingersticks).
+
+Shape: a new variant format `MEDTRONIC_PUMP` (the `DEXCOM_EU` / `LIBRE_EU` pattern) targeting
+`CGM_SCHEMA_EXTENDED`, because the target schema is per format. Section-aware read, every column
+`Utf8`. Boluses paired by `Bolus Number`, placed at the programmed time with the delivered amount, a
+square part carrying a new extended `insulin_duration`. The effective basal rate (percent temps
+applied, every suspend 0 until `NORMAL_PUMPING`, ties resolved by `Index`) as `BASAL_RT` rows in a
+new extended `basal_rate` (U/h). Priming, fingersticks and rows after a clock change left out, each
+counted in one warning. A synthetic 720G fixture from a new scrub script, expected values written by
+hand.
+
+Before code: the plan's Q2 (fingersticks) and the two pump facts in its §6.
+
+**Legality:** additive (a new format, two extended columns, one event type), so **minor**.
+`insulin_slow` losing the Medtronic basal rate, and fingersticks leaving `glucose`, are repairs with
+their own changelog lines.
+
+---
+
+## RM17 — fold pump insulin onto the glucose grid
+
+**State:** after RM16 · **Owner:** lead · **Severity:** high
+
+The proposal is [PLAN_pump.md](PLAN_pump.md) §3.2. `fold_insulin_onto_grid(cgm, pump)` takes the two
+frames apart, never bundles or re-synchronizes them (bundling first lets pump rows move the CGM's
+grid, F19), and returns one row per grid point of each CGM sequence: glucose as the CGM had it,
+`insulin_fast` = instant doses in the bin + spread doses' share + the basal rate integrated over the
+bin, which is `rate × I / 60` for a constant rate (`I` = `expected_interval_minutes`, no literal 12).
+Null outside the pump's coverage, 0 where the pump was suspended; insulin outside every sequence
+reported with its total, never attached; overlapping monthly exports deduplicated. A terminal view:
+inputs untouched, the output refuses to be folded again.
+
+Before code: the plan's Q1 (keep `basal_rate` on the wide row, for SugarOne) and Q4 (which source
+the insulin and carbs come from). Checked on real data over the overlap of a Dexcom export and the
+pump record (Q3).
+
+**Legality:** additive (a new classmethod), so **minor**, riding RM16's release.
+
+---
+
+## RM18 — the collapse keeps the first dose on a grid point and drops the rest
+
+**State:** queued · **Owner:** lead · **Severity:** medium
+
+`_coalesce_duplicate_timestamps`, behind `to_data_only_df(drop_duplicates=True)`, keeps the first
+non-null value per column per grid point, so a second bolus or carb entry on the same point is lost,
+for every vendor. Amounts (`carbs`, `insulin_slow`, `insulin_fast`) are summed when at least one is
+non-null, else null (Polars sums an all-null group to `0.0`, and a null amount means "not recorded").
+[PLAN_pump.md](PLAN_pump.md) §2.6 and §3.3.
+
+**Legality:** a repair of a silent loss, so a **patch**, with its own changelog line.
+
+---
+
 ## RM1 — schema-regen helper prints instead of logging
 
 **State:** queued · **Owner:** lead · **Severity:** low

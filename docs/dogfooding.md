@@ -305,3 +305,29 @@ required for this function."* with no install instructions, which §5 asks for b
 clear `ImportError` **with install instructions**, as `nightscout_downloader._ensure_httpx` does it.
 `to_polars` also documents itself as raising *"If arrow and pandas are not installed"* while checking
 a flag named for pandas; the names should agree.
+
+### F19 — a non-glucose row moves its sequence's grid, and joins a sequence however far away it is
+
+Found on 0.12.2 while planning pump support (`docs/PLAN_pump.md`), by the plan's critic, on a real
+Dexcom export with insulin and carb entries.
+
+Two pre-existing behaviours combine:
+
+- `detect_and_assign_sequences` gives each non-glucose row (insulin, carbs, exercise) the
+  `sequence_id` of the nearest glucose row, through a `join_asof(strategy="nearest")` with no
+  distance limit (`format_processor.py`, "Pass 2"). An insulin row 30 days after the last reading
+  joined the last sequence.
+- `get_sequence_grid_start` roots a sequence's grid at the minimum `original_datetime` over **all** of
+  its rows, not over its readings. One insulin row added 2 minutes before the first Dexcom reading
+  moved 353 of 1,392 grid instants and changed 350 re-timed glucose values.
+
+So whether a person logged a bolus just before their sensor started decides where every glucose
+reading of that sequence lands, and a dose far outside any sequence stretches one. Nothing is lost
+(the anchors hold), but the glucose grid is meant to be a property of the glucose series.
+
+**Surfaced rather than repaired**, because both repairs are grid decisions that move existing
+output: rooting the grid at the first *reading* changes where every Dexcom file with an early insulin
+or carb entry lands, and bounding the nearest-sequence join needs a distance (the 15-minute
+`SMALL_GAP_MAX_MINUTES` is the obvious candidate) and a state for rows beyond it (`sequence_id` 0 is
+already reserved for "unassigned"). The pump fold (RM17) avoids both by integrating the pump frame
+onto the CGM's grid instead of bundling it before synchronization.
