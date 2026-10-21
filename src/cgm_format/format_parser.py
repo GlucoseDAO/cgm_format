@@ -1509,6 +1509,7 @@ class FormatParser(CGMParser):
                 )
             pump = sections[MEDTRONIC_PUMP_SECTION]
             col = MedtronicPumpColumn
+            cls._medtronic_note_other_sections(sections)
             everything = pl.concat(list(sections.values()), how="diagonal")
 
             boluses = cls._medtronic_boluses(pump)
@@ -1574,13 +1575,41 @@ class FormatParser(CGMParser):
             raise MalformedDataError(cls._truncate_error_message(error_msg))
 
     @classmethod
+    def _medtronic_note_other_sections(cls, sections: Dict[str, pl.DataFrame]) -> None:
+        """Say what the sections other than Pump and Sensor held, once each: none is read.
+
+        A 780G's "Pump/Aggregated Auto Insulin Data" holds one row a day, written like a bolus at
+        00:00:00, that is the day's automatic SmartGuard insulin with no time of delivery. It is no
+        bolus, and the export itemizes that insulin nowhere else, so basal_rate and insulin_fast
+        miss it; the warning gives the units and days.
+        """
+        for name, frame in sections.items():
+            if name in (MEDTRONIC_PUMP_SECTION, MEDTRONIC_SENSOR_SECTION):
+                continue
+            delivered = MedtronicPumpColumn.BOLUS_VOLUME_DELIVERED
+            if name.endswith("Aggregated Auto Insulin Data") and delivered in frame.columns:
+                units = frame.select(cls._euro_number_to_float(pl.col(delivered)).sum()).item() or 0.0
+                days = frame.filter(pl.col(delivered).is_not_null()).height
+                logger.warning(
+                    "Medtronic pump export: %g U of automatic insulin over %d day(s), given only as "
+                    "daily totals ('%s'), not represented: no time of delivery. basal_rate and "
+                    "insulin_fast do not include it.",
+                    units, days, name,
+                )
+            else:
+                logger.warning(
+                    "Medtronic pump export: section '%s' (%d rows) is not read.", name, frame.height
+                )
+
+    @classmethod
     def _medtronic_sections(cls, text_data: str) -> Dict[str, pl.DataFrame]:
         """Split a CareLink export at its "-------;<device>;<section>" lines.
 
         Each section is read on its own with every cell as text. Numbers carry
         comma decimals and "-------" placeholders, and inferring dtypes over the
         whole file is what failed on pump exports: the second section's header
-        row was read as data. Two sections of one name are concatenated.
+        row was read as data. Two sections of one name are concatenated; a section
+        whose line carries a label after the serial is keyed `<section>/<label>`.
         """
         lines = text_data.splitlines()
         marks = [
@@ -1596,6 +1625,11 @@ class FormatParser(CGMParser):
             end = marks[k + 1] if k + 1 < len(marks) else len(lines)
             fields = [f.strip().strip('"') for f in lines[start].split(MEDTRONIC_CSV_SEPARATOR)]
             name = fields[2] if len(fields) > 2 else ""
+            # "-------;<device>;<section>;<serial>;<label>": a 780G labels its daily SmartGuard totals
+            # "Aggregated Auto Insulin Data" under the section name "Pump", so the label is part of the key.
+            label = fields[4] if len(fields) > 4 and not fields[4].startswith(MEDTRONIC_SECTION_MARKER) else ""
+            if label:
+                name = f"{name}/{label}"
             body = "\n".join(lines[start + 1:end]).strip()
             if not body:
                 continue

@@ -159,6 +159,28 @@ class TestSyntheticParse:
         assert FormatParser.parse_file(SYNTHETIC).equals(synthetic)
 
 
+def test_daily_auto_insulin_totals_are_not_boluses(caplog: pytest.LogCaptureFixture) -> None:
+    """A 780G export adds a section of daily SmartGuard totals, also labelled 'Pump' on its section line
+    ("-------;<device>;Pump;<serial>;Aggregated Auto Insulin Data"). Its rows look like boluses at
+    00:00:00 but are a day's automatic insulin with no time of delivery: never an INS_FAST row."""
+    text = FormatParser.decode_raw_data(SYNTHETIC.read_bytes())
+    lines = text.split("\n")
+    sensor = next(i for i, line in enumerate(lines) if line.startswith("-------") and ";Sensor" in line)
+    header = lines[sensor + 1]
+    columns = MedtronicPumpColumn.get_all_columns()
+    cells = {MedtronicPumpColumn.INDEX: "100,00000", MedtronicPumpColumn.DATE: "1961/04/12", MedtronicPumpColumn.TIME: "00:00:00",
+             MedtronicPumpColumn.BOLUS_TYPE: "Normal", MedtronicPumpColumn.BOLUS_VOLUME_SELECTED: "20,494",
+             MedtronicPumpColumn.BOLUS_VOLUME_DELIVERED: "20,494", MedtronicPumpColumn.BOLUS_SOURCE: "CLOSED_LOOP_AUTO_INSULIN"}
+    row = ";".join(cells.get(c, "") for c in columns)
+    lines[sensor:sensor] = ["-------;MiniMed 780G MMT-1886;Pump;XXXXXXXXXX;Aggregated Auto Insulin Data", header, row]
+    with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+        df = FormatParser.parse_from_string("\n".join(lines))
+    boluses = rows_of(df, UnifiedEventType.INSULIN_FAST, "insulin_fast")
+    assert (at("00:00:00"), 20.494) not in boluses
+    assert len(boluses) == 6  # the synthetic export's own six, unchanged
+    assert any("20.494 U of automatic insulin" in r.getMessage() for r in caplog.records)
+
+
 def _guardian_cells(column: MedtronicColumn) -> int:
     """Cells of one Guardian column holding a number, read with the csv module, not the parser."""
     text = FormatParser.decode_raw_data(GUARDIAN.read_bytes())

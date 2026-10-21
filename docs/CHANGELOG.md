@@ -28,6 +28,16 @@ patch.
   and passed beside it raise `MalformedDataError`.
 - Not done: a `--date-order` flag on `cgm-cli parse`.
 
+### A 780G's daily automatic-insulin totals are no longer read as boluses
+
+A MiniMed 780G CareLink export carries a section of daily SmartGuard totals whose section line also
+says `Pump` (`-------;<device>;Pump;<serial>;Aggregated Auto Insulin Data`). 0.13.0 merged it into the
+pump section and read each day's total as a bolus at 00:00:00 (20.494 U on a public 780G sample). The
+section is now keyed by its label, not read, and its units and days are given in a warning: the
+export does not say when that insulin was delivered. Any other unexpected section is named in a
+warning rather than merged. Found by a format survey; shown failing on 0.13.0 first. F20 in
+`docs/dogfooding.md` records what remains open for a 780G in auto mode.
+
 ## 0.13.0 — 2026-10-21
 
 **Minor.** Insulin pumps: MiniMed pump CareLink exports parse (RM16), fold onto a CGM export's
