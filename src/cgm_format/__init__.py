@@ -34,7 +34,7 @@ except Exception:
 
 # Core classes
 from cgm_format.format_parser import FormatParser
-from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
+from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor, FoldSource
 
 # Interface classes and exceptions
 from cgm_format.interface.cgm_interface import (
@@ -170,6 +170,7 @@ __all__ = [
     "FormatParser",
     "FormatProcessor",
     "ExtendedFormatProcessor",
+    "FoldSource",
 
     # Core interfaces
     "SupportedCGMFormat",

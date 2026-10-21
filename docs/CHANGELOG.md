@@ -40,6 +40,27 @@ release; the plan is `docs/PLAN_pump.md`.
   `MedtronicTempBasalType`. A hand-authored synthetic export, `data/input/medtronic_pump_synthetic.csv`,
   is written by `scripts/make_synthetic_medtronic_pump.py`.
 
+### A pump folded onto a CGM's grid (RM17)
+
+- **`FormatProcessor.fold_insulin_onto_grid(cgm, pump)`** gives each grid point of every sequence of a
+  synchronized CGM frame its bolus insulin (`insulin_fast`, spread doses spread), the pump's basal
+  rate averaged over the bin (`basal_rate`, U/h), carbs, and the CGM's own long-acting doses. One row
+  per grid point; glucose and grid exactly the CGM's. `pump` may be several frames (overlapping
+  monthly exports, their repeated rows counted once). `docs/USAGE.md`, Workflow 5.
+- **Basal stays out of `insulin_fast` by default**: every model trained in
+  `glucose_forecasting_metabonet` reads basal (U/h) and bolus (U) as separate channels.
+  `fold_basal=True` folds the bin's basal dose in.
+- **`FoldSource`** (`PUMP`, `CGM`, `MERGE`) picks where boluses and carbs come from. `MERGE` pairs
+  entries at most `merge_pair_slots` grid slots apart (default `MERGE_PAIR_SLOTS = 1`), a 0 meaning
+  the source did not say, two non-zeros averaged and warned with both values beyond
+  `FOLD_MERGE_INSULIN_TOLERANCE_U` / `FOLD_MERGE_CARBS_TOLERANCE_G`.
+- What lands on no row is said once with its total: entries outside every sequence, the source not
+  chosen, repeated pump rows, basal in bins the pump covers only in part.
+- Checked on real data: on five days where a Dexcom export and a 720G pump record overlap, the bolus
+  units on rows plus those reported outside equal what the pump delivered (a test, skipped where
+  the exports are absent). Not checked: the pump's clock against the CGM's, which no export
+  records.
+
 ### Repairs on the Guardian Connect path (`MEDTRONIC`)
 
 - **Fingersticks no longer count as sensor readings.** `BG Reading (mg/dL)` was coalesced into
@@ -63,6 +84,8 @@ release; the plan is `docs/PLAN_pump.md`.
   pump exports join the suite and hold every idempotency and commutativity check.
 - `tests/test_format_detection_validation.py`: pump exports join Guardian ones in being left out of
   single-table Frictionless validation, for the same reason (a second section with its own header).
+- New `tests/test_fold.py`: every expected bin value worked out by hand from the synthetic Dexcom and
+  pump exports, plus the real-pair accounting identity above.
 
 ## 0.12.3 — 2026-10-21
 

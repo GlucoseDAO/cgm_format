@@ -4,8 +4,9 @@ Implements vendor-agnostic processing operations on UnifiedFormat data (Stages 4
 Adapted from glucose_ml_preprocessor.py for single-user unified format processing.
 """
 
+import logging
 import polars as pl
-from typing import Dict, List, Tuple, ClassVar, Optional, Union
+from typing import Dict, List, Tuple, ClassVar, Optional, Sequence, Union
 from datetime import timedelta, datetime
 from cgm_format.interface.cgm_interface import (
     CGMProcessor,
@@ -21,8 +22,12 @@ from cgm_format.interface.cgm_interface import (
     MAXIMUM_WANTED_DURATION_MINUTES,
     CALIBRATION_GAP_THRESHOLD,
     CALIBRATION_PERIOD_HOURS,
+    MINUTES_PER_HOUR,
+    MERGE_PAIR_SLOTS,
+    FOLD_MERGE_INSULIN_TOLERANCE_U,
+    FOLD_MERGE_CARBS_TOLERANCE_G,
 )
-from cgm_format.interface.schema import CGMSchemaDefinition
+from cgm_format.interface.schema import CGMSchemaDefinition, EnumLiteral
 from cgm_format.formats.unified import (
     UnifiedEventType,
     Quality,
@@ -35,6 +40,18 @@ from cgm_format.formats.unified import (
 # value union spans every dtype the unified schemas use; a key is always present
 # and maps to None when the row has nothing to say for that column.
 InterpolatedRow = Dict[str, Union[int, float, str, datetime, None]]
+
+logger = logging.getLogger(__name__)
+
+
+class FoldSource(EnumLiteral):
+    """Where `FormatProcessor.fold_insulin_onto_grid` takes boluses and carbs from.
+
+    Basal always comes from the pump: a CGM export has no rate.
+    """
+    PUMP = "pump"    # the device that delivered the dose and timed the meal
+    CGM = "cgm"      # what was logged in the CGM's app
+    MERGE = "merge"  # both, paired within a slot threshold (see the method)
 
 
 class FormatProcessor(CGMProcessor):
@@ -69,6 +86,9 @@ class FormatProcessor(CGMProcessor):
     snap_to_grid: ClassVar[bool] = True
     retime_glucose: ClassVar[bool] = True
     validation_mode_default: ClassVar[ValidationMethod] = ValidationMethod.INPUT
+    fold_source: ClassVar[FoldSource] = FoldSource.PUMP
+    fold_basal: ClassVar[bool] = False
+    merge_pair_slots: ClassVar[int] = MERGE_PAIR_SLOTS
 
 
     @classmethod
@@ -1536,6 +1556,481 @@ class FormatProcessor(CGMProcessor):
             "Use detect_and_assign_sequences instead."
         )
 
+
+    # ===== Folding a pump onto a CGM's grid =====
+
+    @classmethod
+    def fold_insulin_onto_grid(
+        cls,
+        cgm: UnifiedFormat,
+        pump: Union[UnifiedFormat, Sequence[UnifiedFormat]],
+        source: Optional[Union[FoldSource, str]] = None,
+        merge_pair_slots: Optional[int] = None,
+        fold_basal: Optional[bool] = None,
+        expected_interval_minutes: Optional[int] = None,
+    ) -> pl.DataFrame:
+        """Give each grid point of a CGM frame the insulin and carbs a pump recorded around it.
+
+        `cgm` is a synchronized unified frame (`synchronize_timestamps`), whose
+        glucose grid this reads and never changes; `pump` is a parsed pump frame
+        (`MEDTRONIC_PUMP`), or several (monthly exports, which may overlap), which
+        this integrates. The pump is never bundled with the CGM or synchronized:
+        its rows would move the CGM's grid (F19 in docs/dogfooding.md).
+
+        One output row per grid point of each CGM sequence, first to last, every
+        point included: `sequence_id`, `datetime`, `quality` and `glucose` from
+        the CGM's glucose row there (null where it has none; nothing is
+        invented), then per bin `[t - I/2, t + I/2)`, `I` the interval:
+
+        - `insulin_fast`: boluses starting in the bin, plus each spread bolus's
+          share (`insulin_duration`) of the bin it overlaps. 0 where the pump
+          covered the bin and delivered none; null where no source covers it.
+        - `basal_rate`: the pump's basal rate averaged over the bin, U/h. Null
+          unless the pump's rate is known across the whole bin; 0 during a
+          suspend. With `fold_basal`, the bin's basal dose, `rate x I /
+          MINUTES_PER_HOUR` for a constant rate, is added into `insulin_fast`
+          instead of being kept apart (the models read the two apart).
+        - `carbs`: summed in the bin; null where no entry was recorded.
+        - `insulin_slow`: the CGM frame's long-acting doses in the bin.
+
+        `source` picks where boluses and carbs come from (`FoldSource`): the pump
+        (default), the CGM frame's own entries, or both merged. Under `MERGE`,
+        each CGM entry pairs with at most one pump entry of the same kind at
+        most `merge_pair_slots` grid slots away, nearest in time first; a pair
+        lands on the pump entry's slot, and beyond the threshold both are kept.
+        A 0 or null on either side means that source did not say, so the other
+        side is taken; two non-zero values are averaged, and named in a warning
+        when they differ by more than a tolerance.
+
+        What is not attached to any row is said in one warning with its total:
+        entries outside every sequence, the source not chosen, pump rows
+        repeated across overlapping exports, basal in bins the pump only partly
+        covered. The output is a terminal view without `event_type`, so it
+        cannot be folded again; the inputs are left untouched.
+
+        Args:
+            cgm: Synchronized unified frame with glucose readings
+            pump: Parsed pump frame, or a sequence of them
+            source: Where boluses and carbs come from (defaults to cls.fold_source)
+            merge_pair_slots: Pairing threshold under MERGE (defaults to cls.merge_pair_slots)
+            fold_basal: Add the basal dose into insulin_fast (defaults to cls.fold_basal)
+            expected_interval_minutes: Grid interval (defaults to cls.expected_interval_minutes)
+
+        Returns:
+            One row per grid point: sequence_id, datetime, quality, glucose, carbs,
+            insulin_slow, insulin_fast, basal_rate
+
+        Raises:
+            ValueError: If `cgm` is not a synchronized unified frame, or no pump frame is given
+            ZeroValidInputError: If `cgm` has no glucose readings
+        """
+        source = FoldSource(source if source is not None else cls.fold_source)
+        pair_slots = cls.merge_pair_slots if merge_pair_slots is None else merge_pair_slots
+        fold_basal = cls.fold_basal if fold_basal is None else fold_basal
+        interval = expected_interval_minutes or cls.expected_interval_minutes
+        pumps = [pump] if isinstance(pump, pl.DataFrame) else list(pump)
+        if not pumps:
+            raise ValueError("fold_insulin_onto_grid needs at least one pump frame")
+        if "event_type" not in cgm.columns or "original_datetime" not in cgm.columns:
+            raise ValueError(
+                "fold_insulin_onto_grid needs a unified CGM frame (with event_type and "
+                "original_datetime); a folded frame cannot be folded again"
+            )
+
+        bins = cls._fold_bins(cgm, interval)
+        notes: List[str] = []
+
+        pump_rows = cls._fold_pump_rows(pumps, notes)
+        coverage = cls._fold_coverage(pumps)
+
+        def entries(frame: pl.DataFrame, event: UnifiedEventType, value: str, at: str) -> pl.DataFrame:
+            out = frame.filter((pl.col("event_type") == event.value) & pl.col(value).is_not_null())
+            duration = (
+                pl.col("insulin_duration") if "insulin_duration" in out.columns
+                else pl.lit(None, dtype=pl.Float64)
+            )
+            return out.select(
+                pl.col(at).alias("at"),
+                pl.col(value).cast(pl.Float64).alias("amount"),
+                duration.cast(pl.Float64).alias("minutes"),
+            ).sort("at", "amount")
+
+        pump_bolus = entries(pump_rows, UnifiedEventType.INSULIN_FAST, "insulin_fast", "datetime")
+        pump_carbs = entries(pump_rows, UnifiedEventType.CARBOHYDRATES, "carbs", "datetime")
+        cgm_bolus = entries(cgm, UnifiedEventType.INSULIN_FAST, "insulin_fast", "original_datetime")
+        cgm_carbs = entries(cgm, UnifiedEventType.CARBOHYDRATES, "carbs", "original_datetime")
+        cgm_slow = entries(cgm, UnifiedEventType.INSULIN_SLOW, "insulin_slow", "original_datetime")
+
+        if source == FoldSource.PUMP:
+            bolus, carbs = pump_bolus, pump_carbs
+            cls._fold_note_unused("the CGM frame's", cgm_bolus, cgm_carbs, notes)
+        elif source == FoldSource.CGM:
+            bolus, carbs = cgm_bolus, cgm_carbs
+            cls._fold_note_unused("the pump's", pump_bolus, pump_carbs, notes)
+        else:
+            bolus = cls._fold_merge(
+                bins, pump_bolus, cgm_bolus, pair_slots, FOLD_MERGE_INSULIN_TOLERANCE_U, "U", "insulin", interval, notes)
+            carbs = cls._fold_merge(
+                bins, pump_carbs, cgm_carbs, pair_slots, FOLD_MERGE_CARBS_TOLERANCE_G, "g", "carbs", interval, notes)
+
+        bolus_per_bin = cls._fold_amounts(bins, bolus, interval, "insulin_fast", "U of bolus insulin", notes)
+        carbs_per_bin = cls._fold_amounts(bins, carbs, interval, "carbs", "g of carbs", notes)
+        slow_per_bin = cls._fold_amounts(bins, cgm_slow, interval, "insulin_slow", "U of long-acting insulin", notes)
+        basal_per_bin = cls._fold_basal_doses(bins, pump_rows, coverage, interval, notes)
+
+        bins = bins.with_columns(
+            cls._fold_covered(bins, coverage, interval) if source != FoldSource.CGM
+            else pl.lit(False).alias("_covered")
+        )
+        out = (
+            bins.join(bolus_per_bin, on=["sequence_id", "datetime"], how="left")
+            .join(carbs_per_bin, on=["sequence_id", "datetime"], how="left")
+            .join(slow_per_bin, on=["sequence_id", "datetime"], how="left")
+            .join(basal_per_bin, on=["sequence_id", "datetime"], how="left")
+            .with_columns(
+                pl.when(pl.col("insulin_fast").is_null() & pl.col("_covered"))
+                .then(pl.lit(0.0))
+                .otherwise(pl.col("insulin_fast"))
+                .alias("insulin_fast")
+            )
+        )
+        if fold_basal:
+            lost = out.filter(pl.col("basal_dose").is_null() & (pl.col("insulin_fast") > 0))
+            if lost.height:
+                notes.append(
+                    f"{lost['insulin_fast'].sum():g} U of bolus insulin in {lost.height} bin(s) where "
+                    "basal is unknown, so their folded insulin_fast is null"
+                )
+            out = out.with_columns((pl.col("insulin_fast") + pl.col("basal_dose")).alias("insulin_fast"))
+        out = out.with_columns(
+            (pl.col("basal_dose") * MINUTES_PER_HOUR / interval).alias("basal_rate")
+        ).select(
+            "sequence_id", "datetime", "quality", "glucose",
+            "carbs", "insulin_slow", "insulin_fast", "basal_rate",
+        ).sort("sequence_id", "datetime")
+
+        if notes:
+            logger.warning("fold_insulin_onto_grid: not attached to any row: %s.", "; ".join(notes))
+        return out
+
+    @classmethod
+    def _fold_bins(cls, cgm: UnifiedFormat, interval: int) -> pl.DataFrame:
+        """Every grid point of every CGM sequence, with the glucose row there if any."""
+        readings = (
+            cgm.filter((pl.col("event_type") == UnifiedEventType.GLUCOSE.value) & pl.col("glucose").is_not_null())
+            .sort("sequence_id", "datetime", "quality")
+            .unique(subset=["sequence_id", "datetime"], keep="first", maintain_order=True)
+            .select("sequence_id", "datetime", "quality", "glucose")
+        )
+        if readings.height == 0:
+            raise ZeroValidInputError("fold_insulin_onto_grid: the CGM frame has no glucose readings")
+        step_ms = interval * 60_000
+        spans = (
+            readings.group_by("sequence_id")
+            .agg(pl.col("datetime").min().alias("first"), pl.col("datetime").max().alias("last"))
+            .sort("first")
+        )
+        offgrid = readings.join(spans, on="sequence_id").filter(
+            (pl.col("datetime") - pl.col("first")).dt.total_milliseconds() % step_ms != 0
+        )
+        if offgrid.height:
+            raise ValueError(
+                f"fold_insulin_onto_grid: {offgrid.height} glucose reading(s) are off the "
+                f"{interval}-minute grid; synchronize_timestamps the CGM frame first"
+            )
+        grid = (
+            spans.with_columns(
+                pl.int_ranges(
+                    0, (pl.col("last") - pl.col("first")).dt.total_milliseconds() // step_ms + 1
+                ).alias("k")
+            )
+            .explode("k", empty_as_null=False)  # never empty: a sequence has at least its first point
+            .select(
+                "sequence_id",
+                (pl.col("first") + pl.duration(milliseconds=pl.col("k") * step_ms)).alias("datetime"),
+            )
+        )
+        return grid.join(readings, on=["sequence_id", "datetime"], how="left").sort("sequence_id", "datetime")
+
+    @classmethod
+    def _fold_pump_rows(cls, pumps: List[UnifiedFormat], notes: List[str]) -> pl.DataFrame:
+        """All pump frames as one, rows repeated across overlapping exports dropped once."""
+        wanted = ["datetime", "event_type", "insulin_fast", "insulin_duration", "basal_rate", "carbs"]
+        frames = [
+            frame.select(
+                [pl.col(c) if c in frame.columns else pl.lit(None, dtype=pl.Float64).alias(c) for c in wanted]
+            ).with_columns(pl.col("datetime").cast(pl.Datetime("ms")))
+            for frame in pumps
+        ]
+        rows = pl.concat(frames, how="vertical_relaxed")
+        unique = rows.unique(maintain_order=True)
+        if unique.height < rows.height:
+            notes.append(f"{rows.height - unique.height} pump row(s) repeated across overlapping exports, counted once")
+        return unique.sort("datetime", "event_type", maintain_order=True)
+
+    @classmethod
+    def _fold_coverage(cls, pumps: List[UnifiedFormat]) -> pl.DataFrame:
+        """The spans the pump frames cover, overlapping ones merged: [start, end]."""
+        spans = pl.DataFrame(
+            {
+                "start": [frame["datetime"].min() for frame in pumps],
+                "end": [frame["datetime"].max() for frame in pumps],
+            },
+            schema={"start": pl.Datetime("ms"), "end": pl.Datetime("ms")},
+        ).sort("start", "end")
+        return (
+            spans.with_columns(
+                (pl.col("start") > pl.col("end").cum_max().shift(1)).fill_null(True).cum_sum().alias("_group")
+            )
+            .group_by("_group")
+            .agg(pl.col("start").min(), pl.col("end").max())
+            .sort("start")
+            .select("start", "end")
+        )
+
+    @classmethod
+    def _fold_covered(cls, bins: pl.DataFrame, coverage: pl.DataFrame, interval: int) -> pl.Series:
+        """`_covered`: whether each bin lies wholly inside one pump span, in `bins` row order."""
+        half = pl.duration(milliseconds=interval * 60_000 // 2)
+        return (
+            bins.select("datetime").with_row_index("_row")
+            .with_columns((pl.col("datetime") - half).alias("_lo"), (pl.col("datetime") + half).alias("_hi"))
+            .sort("_lo")
+            .join_asof(coverage, left_on="_lo", right_on="start", strategy="backward")
+            .with_columns(((pl.col("_lo") >= pl.col("start")) & (pl.col("_hi") <= pl.col("end"))).fill_null(False).alias("_covered"))
+            .sort("_row")["_covered"]
+        )
+
+    @classmethod
+    def _fold_place(cls, bins: pl.DataFrame, entries: pl.DataFrame, interval: int) -> pl.DataFrame:
+        """Each entry's sequence and slot: the grid point whose bin holds its `at` (null when none does)."""
+        step_ms = interval * 60_000
+        spans = (
+            bins.group_by("sequence_id")
+            .agg(pl.col("datetime").min().alias("_first"), pl.col("datetime").max().alias("_last"))
+            .with_columns((pl.col("_first") - pl.duration(milliseconds=step_ms // 2)).alias("_edge"))
+            .sort("_edge")
+        )
+        placed = (
+            entries.with_row_index("_entry")
+            .sort("at")
+            .join_asof(spans, left_on="at", right_on="_edge", strategy="backward")
+            .with_columns(
+                (((pl.col("at") - pl.col("_first")).dt.total_milliseconds() + step_ms // 2) // step_ms).alias("_k")
+            )
+        )
+        inside = pl.col("_k").is_between(0, ((pl.col("_last") - pl.col("_first")).dt.total_milliseconds() // step_ms))
+        return placed.with_columns(
+            pl.when(inside).then(pl.col("sequence_id")).otherwise(None).alias("sequence_id"),
+            pl.when(inside).then(pl.col("_k")).otherwise(None).alias("slot"),
+            pl.when(inside)
+            .then(pl.col("_first") + pl.duration(milliseconds=pl.col("_k") * step_ms))
+            .otherwise(None)
+            .alias("datetime"),
+        ).sort("_entry").drop("_entry", "_first", "_last", "_edge", "_k")
+
+    @classmethod
+    def _fold_amounts(
+        cls, bins: pl.DataFrame, entries: pl.DataFrame, interval: int, column: str, what: str, notes: List[str]
+    ) -> pl.DataFrame:
+        """Sum entries per bin. One with `minutes` is delivered evenly over them: a rate for that long,
+        integrated over each bin it overlaps, exactly as basal is."""
+        key = {"sequence_id": bins.schema["sequence_id"], "datetime": pl.Datetime("ms")}
+        spread = pl.col("minutes").fill_null(0) > 0
+        instant = cls._fold_place(bins, entries.filter(~spread).select("at", "amount"), interval)
+        outside = instant.filter(pl.col("sequence_id").is_null())
+        outside_units = outside["amount"].sum() if outside.height else 0.0
+        per_bin = (
+            instant.filter(pl.col("sequence_id").is_not_null())
+            .group_by("sequence_id", "datetime")
+            .agg(pl.col("amount").sum().alias(column))
+            .select(pl.col("sequence_id").cast(key["sequence_id"]), "datetime", column)
+        )
+        spreading = entries.filter(spread)
+        if spreading.height:
+            ms = (pl.col("minutes") * 60_000).round(0).cast(pl.Int64)
+            per_hour = pl.col("amount") / pl.col("minutes") * MINUTES_PER_HOUR
+            steps = (
+                pl.concat([
+                    spreading.select(pl.col("at").alias("datetime"), per_hour.alias("_delta")),
+                    spreading.select((pl.col("at") + pl.duration(milliseconds=ms)).alias("datetime"), (-per_hour).alias("_delta")),
+                ])
+                .group_by("datetime").agg(pl.col("_delta").sum())
+                .sort("datetime")
+                .with_columns(pl.col("_delta").cum_sum().alias("_rate"), pl.col("datetime").shift(-1).alias("_end"))
+                .filter(pl.col("_end").is_not_null())
+            )
+            doses = cls._fold_integrate(bins, steps.select("datetime", "_end", "_rate"), interval)
+            spread_bins = doses.select("sequence_id", "datetime", pl.col("_dose").alias(column)).filter(pl.col(column) > 0)
+            outside_units += spreading["amount"].sum() - spread_bins[column].sum()
+            per_bin = (
+                pl.concat([per_bin, spread_bins], how="vertical_relaxed")
+                .group_by("sequence_id", "datetime").agg(pl.col(column).sum())
+            )
+        if outside_units > 1e-9:
+            notes.append(f"{outside_units:g} {what} outside every glucose sequence")
+        return per_bin.select(pl.col("sequence_id").cast(key["sequence_id"]), pl.col("datetime").cast(key["datetime"]), column)
+
+    @classmethod
+    def _fold_integrate(cls, bins: pl.DataFrame, segments: pl.DataFrame, interval: int) -> pl.DataFrame:
+        """Integrate a step rate over every bin.
+
+        `segments` is `datetime`, `_end`, `_rate` (U/h, null = unknown), sorted and non-overlapping. The
+        running integral F and the running known minutes K are piecewise linear between segment edges,
+        so a bin `[lo, hi)` gets `_dose` = F(hi) - F(lo) units and `_known` = K(hi) - K(lo) minutes.
+        """
+        segments = (
+            segments.with_columns(
+                ((pl.col("_end") - pl.col("datetime")).dt.total_milliseconds().clip(lower_bound=0) / 60_000).alias("_minutes")
+            )
+            .with_columns(
+                (pl.col("_rate").fill_null(0) * pl.col("_minutes") / MINUTES_PER_HOUR).alias("_units"),
+                pl.when(pl.col("_rate").is_not_null()).then(pl.col("_minutes")).otherwise(0.0).alias("_known_minutes"),
+            )
+            .with_columns(
+                (pl.col("_units").cum_sum() - pl.col("_units")).alias("_units_before"),
+                (pl.col("_known_minutes").cum_sum() - pl.col("_known_minutes")).alias("_known_before"),
+            )
+            .select("datetime", "_end", "_rate", "_units_before", "_known_before")
+        )
+        half = pl.duration(milliseconds=interval * 60_000 // 2)
+        edges = bins.select("sequence_id", "datetime").with_row_index("_row").with_columns(
+            (pl.col("datetime") - half).alias("lo"), (pl.col("datetime") + half).alias("hi")
+        )
+
+        def running(edge: str) -> pl.DataFrame:
+            within = (pl.min_horizontal(pl.col("x"), pl.col("_end")) - pl.col("datetime")).dt.total_milliseconds() / 60_000
+            return (
+                edges.select("_row", pl.col(edge).alias("x")).sort("x")
+                .join_asof(segments, left_on="x", right_on="datetime", strategy="backward")
+                .select(
+                    "_row",
+                    (pl.col("_units_before") + pl.col("_rate").fill_null(0) * within / MINUTES_PER_HOUR).fill_null(0.0).alias(f"F_{edge}"),
+                    (pl.col("_known_before") + pl.when(pl.col("_rate").is_not_null()).then(within).otherwise(0.0)).fill_null(0.0).alias(f"K_{edge}"),
+                )
+            )
+
+        return (
+            edges.join(running("lo"), on="_row").join(running("hi"), on="_row")
+            .sort("_row")
+            .select(
+                "sequence_id", "datetime",
+                (pl.col("F_hi") - pl.col("F_lo")).alias("_dose"),
+                (pl.col("K_hi") - pl.col("K_lo")).alias("_known"),
+            )
+        )
+
+    @classmethod
+    def _fold_basal_doses(
+        cls, bins: pl.DataFrame, pump_rows: pl.DataFrame, coverage: pl.DataFrame, interval: int, notes: List[str]
+    ) -> pl.DataFrame:
+        """Each bin's basal dose, U: the rate integrated over it, null unless known throughout.
+
+        A rate is in force until the next change or the end of the pump span it starts in, whichever
+        comes first; a gap between spans, or a rate the pump logged as unknown, is not known.
+        """
+        changes = (
+            pump_rows.filter(pl.col("event_type") == UnifiedEventType.BASAL_RATE.value)
+            .select("datetime", "basal_rate")
+            .unique(subset="datetime", keep="last", maintain_order=True)
+            .sort("datetime")
+        )
+        if changes.height == 0:
+            notes.append("no basal rate in any pump frame, so basal_rate is null throughout")
+            return bins.select("sequence_id", "datetime", pl.lit(None, dtype=pl.Float64).alias("basal_dose"))
+        segments = (
+            changes.join_asof(coverage, left_on="datetime", right_on="start", strategy="backward")
+            .with_columns(pl.min_horizontal(pl.col("datetime").shift(-1), pl.col("end")).fill_null(pl.col("end")).alias("_end"))
+            .select("datetime", "_end", pl.col("basal_rate").alias("_rate"))
+        )
+        doses = cls._fold_integrate(bins, segments, interval)
+        whole = pl.col("_known") >= interval - 1e-9
+        partial = doses.filter(~whole & (pl.col("_known") > 1e-9))
+        if partial.height:
+            notes.append(
+                f"{partial['_dose'].sum():g} U of basal in {partial.height} bin(s) the pump's rate covers "
+                "only in part, so their basal_rate is null"
+            )
+        return doses.select(
+            "sequence_id", "datetime", pl.when(whole).then(pl.col("_dose")).otherwise(None).alias("basal_dose")
+        )
+
+    @classmethod
+    def _fold_note_unused(cls, whose: str, bolus: pl.DataFrame, carbs: pl.DataFrame, notes: List[str]) -> None:
+        if bolus.height:
+            notes.append(f"{bolus['amount'].sum():g} U in {bolus.height} of {whose} bolus entries (source not chosen)")
+        if carbs.height:
+            notes.append(f"{carbs['amount'].sum():g} g in {carbs.height} of {whose} carb entries (source not chosen)")
+
+    @classmethod
+    def _fold_merge(
+        cls,
+        bins: pl.DataFrame,
+        pump: pl.DataFrame,
+        cgm: pl.DataFrame,
+        max_slots: int,
+        tolerance: float,
+        unit: str,
+        kind: str,
+        interval: int,
+        notes: List[str],
+    ) -> pl.DataFrame:
+        """Pair CGM entries with pump entries at most `max_slots` apart, one to one, nearest first."""
+        near_slots = SMALL_GAP_MAX_MINUTES // interval
+        p = cls._fold_place(bins, pump, interval).with_row_index("_p")
+        c = cls._fold_place(bins, cgm, interval).with_row_index("_c")
+        candidates = (
+            p.filter(pl.col("slot").is_not_null())
+            .join(c.filter(pl.col("slot").is_not_null()), on="sequence_id", suffix="_cgm")
+            .with_columns(
+                (pl.col("slot") - pl.col("slot_cgm")).abs().alias("_slots"),
+                (pl.col("at") - pl.col("at_cgm")).dt.total_milliseconds().abs().alias("_apart"),
+            )
+            .filter(pl.col("_slots") <= max(near_slots, max_slots))
+            .sort("_apart", "at", "at_cgm", "_p", "_c")
+        )
+        # Greedy, nearest first: a pairing is inherently sequential.
+        used_p: set[int] = set()
+        used_c: set[int] = set()
+        pairs: List[Tuple[int, int]] = []
+        for row in candidates.filter(pl.col("_slots") <= max_slots).iter_rows(named=True):
+            if row["_p"] in used_p or row["_c"] in used_c:
+                continue
+            used_p.add(row["_p"]); used_c.add(row["_c"])
+            pairs.append((row["_p"], row["_c"]))
+        near = candidates.filter(
+            ~pl.col("_p").is_in(list(used_p)) & ~pl.col("_c").is_in(list(used_c))
+        )["_c"].n_unique()
+        if near:
+            notes.append(
+                f"{near} {kind} entr(ies) in the CGM frame unpaired but within {near_slots} slots of an "
+                f"unpaired pump entry (merge_pair_slots={max_slots}): both kept"
+            )
+        resolved: List[Dict[str, Union[datetime, float, None]]] = []
+        disagreements: List[str] = []
+        for pi, ci in pairs:
+            prow = p.row(pi, named=True); crow = c.row(ci, named=True)
+            a, b = prow["amount"], crow["amount"]
+            if not a:
+                value = b
+            elif not b:
+                value = a
+            else:
+                value = (a + b) / 2
+                if abs(a - b) > tolerance:
+                    disagreements.append(f"{prow['at']} pump {a:g} {unit} / {crow['at']} cgm {b:g} {unit}")
+            resolved.append({"at": prow["at"], "amount": value, "minutes": prow["minutes"]})
+        if disagreements:
+            logger.warning(
+                "fold_insulin_onto_grid: %d merged %s pair(s) differ by more than %g %s, averaged: %s",
+                len(disagreements), kind, tolerance, unit, "; ".join(disagreements),
+            )
+        keep_p = p.filter(~pl.col("_p").is_in([pi for pi, _ in pairs])).select("at", "amount", "minutes")
+        keep_c = c.filter(~pl.col("_c").is_in([ci for _, ci in pairs])).select("at", "amount", "minutes")
+        merged = pl.DataFrame(
+            resolved, schema={"at": pl.Datetime("ms"), "amount": pl.Float64, "minutes": pl.Float64}
+        )
+        return pl.concat([merged, keep_p, keep_c], how="vertical_relaxed").sort("at", "amount")
 
 class ExtendedFormatProcessor(FormatProcessor):
     """FormatProcessor targeting the extended unified schema.

@@ -46,7 +46,7 @@ their own changelog lines.
 
 ## RM17 — fold pump insulin onto the glucose grid
 
-**State:** after RM16 · **Owner:** lead · **Severity:** high
+**State:** building, by the lead: the fold is on main, ships in 0.13.0 with RM16 and RM21 · **Owner:** lead · **Severity:** high
 
 The proposal is [PLAN_pump.md](PLAN_pump.md) §3.2. `fold_insulin_onto_grid(cgm, pump)` takes the two
 frames apart, never bundles or re-synchronizes them (bundling first lets pump rows move the CGM's

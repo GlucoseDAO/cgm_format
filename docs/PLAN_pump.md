@@ -169,9 +169,9 @@ through the processor alone: the glucose stages do not refuse it (they run, assi
 ### 3.2 Folding insulin onto the glucose grid (RM17)
 
 ```python
-cgm   = ExtendedFormatProcessor.synchronize_timestamps(FormatParser.parse_file(dexcom_csv))
+cgm   = FormatProcessor.synchronize_timestamps(FormatParser.parse_file(dexcom_csv))  # a core frame
 pumps = [FormatParser.parse_file(p) for p in (pump_jul, pump_aug, pump_sep, pump_oct)]
-wide  = ExtendedFormatProcessor.fold_insulin_onto_grid(cgm, pumps)
+wide  = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
 ```
 
 A new classmethod, vendor-agnostic. It takes a synchronized CGM frame, whose grid it reads, and one

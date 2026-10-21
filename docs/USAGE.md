@@ -582,6 +582,37 @@ carb_intake = events_df.filter(
 ).select(['datetime', 'carbs'])
 ```
 
+### Workflow 5: A CGM export and an insulin pump
+
+A MiniMed pump CareLink export parses on its own (`MEDTRONIC_PUMP`, extended schema) but carries no
+glucose. `fold_insulin_onto_grid` gives each 5-minute row of a CGM frame the insulin and carbs the
+pump recorded around it, without moving the CGM's grid:
+
+```python
+from cgm_format import FormatParser, FormatProcessor, FoldSource
+
+cgm = FormatProcessor.synchronize_timestamps(FormatParser.parse_file("dexcom.csv"))
+pumps = [FormatParser.parse_file(p) for p in ("pump_jul.csv", "pump_aug.csv")]  # may overlap
+
+wide = FormatProcessor.fold_insulin_onto_grid(cgm, pumps)
+# sequence_id, datetime, quality, glucose, carbs, insulin_slow, insulin_fast, basal_rate
+```
+
+- **`insulin_fast`** is bolus insulin in the row's bin `[t - 2.5 min, t + 2.5 min)`; a square bolus is
+  spread over the bins it was delivered across. **`basal_rate`** is the pump's rate averaged over the
+  bin, U/h, kept apart because the forecasting models read basal and bolus as separate channels.
+  `fold_basal=True` adds the bin's basal dose (`rate × 5 / 60` for a constant rate) into
+  `insulin_fast` instead.
+- Nulls mean "not known": `basal_rate` where the pump's rate does not cover the whole bin,
+  `insulin_fast` where no source covers it, `carbs` where no entry was recorded. A suspended pump is a
+  measured 0.
+- **`source`** says where boluses and carbs come from: `FoldSource.PUMP` (default), `FoldSource.CGM`
+  (entries logged in the CGM app), or `FoldSource.MERGE`, which pairs each CGM entry with a pump entry
+  at most `merge_pair_slots` slots away (default 1), takes a 0 on either side as "did not say",
+  averages two non-zero values, and warns with both where they differ.
+- Do not `parse_bundle` the pump with the CGM before synchronizing: pump rows would move the glucose
+  grid (F19 in `docs/dogfooding.md`). The fold reads the CGM's grid and leaves both inputs untouched.
+
 ## Multi-File and Multi-Subject Sources
 
 Three source shapes, three entry points. The categories compose: a corpus's member is a bundle or an

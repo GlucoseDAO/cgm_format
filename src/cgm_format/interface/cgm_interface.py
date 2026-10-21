@@ -40,6 +40,14 @@ TOLERANCE_INTERVAL_MINUTES = 1.2*EXPECTED_INTERVAL_MINUTES
 # Matches glucose_data_processing's default small_gap_max_minutes=15.
 SMALL_GAP_MAX_MINUTES = EXPECTED_INTERVAL_MINUTES * 3
 
+MINUTES_PER_HOUR = 60  # a basal rate is U/h; a grid row's share of it is rate * interval / MINUTES_PER_HOUR
+# Folding a pump onto a CGM grid with source=MERGE (FormatProcessor.fold_insulin_onto_grid): a CGM-logged
+# entry pairs with a pump entry at most this many grid slots away; further apart, both are kept.
+MERGE_PAIR_SLOTS = 1
+# Two paired non-zero amounts further apart than this are averaged and named in a warning.
+FOLD_MERGE_INSULIN_TOLERANCE_U = 0.1
+FOLD_MERGE_CARBS_TOLERANCE_G = 1.0
+
 # Expected sequence (- = 1 minute, | = registered value, every 5 minutes):
 #|-----|-----|-----|-----|-----|
 # Fillable gap schema (x = missing value, : = synchronized value, | = registered value):
