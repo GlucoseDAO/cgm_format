@@ -12,31 +12,33 @@ The file is run as a **document-as-inbox triage loop**: the document is both the
 state, and each item's state is derived by fingerprinting the reporter's own text rather than kept
 anywhere else. The runbook an agent triaging this file should read is
 [CONSUMER_TRIAGE_LOOP.md](CONSUMER_TRIAGE_LOOP.md) — the algorithm, this repo's legality rules, the
-routing table, and what may be done unattended. The generalized pattern it adapts is published at
-<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>. Nothing below depends on the
-tooling — the ledger reads what is written, so a reply typed by hand in the right shape is a
-first-class one.
+routing table, and what may be done unattended. The generic loop it adapts is the seats kit's
+`triage` role, which this repo's triage seat fills ([seats/TRIAGE.md](seats/TRIAGE.md)). Nothing
+below depends on the tooling — the ledger reads what is written, so a reply typed by hand in the
+right shape is a first-class one.
 
 ## The ledger
 
-Three dependency-free scripts in `scripts/`, documented in
-[`scripts/README.md`](../scripts/README.md). They are stdlib-only Python and bash, import nothing
-from the package, and so are the one place in this repo that does not need `uv run`:
+Dependency-free scripts in the seats kit's `classes/triage/`, run from the kit copy this clone pins
+(`$BLUEPRINTS_KIT`, exported by the kit's plugin); the runbook's §1 has the rest. They are
+stdlib-only Python, import nothing from the package, and so are the one place in this repo that does
+not need `uv run`:
 
 ```sh
-./scripts/triage-state.py              # every item and its verdict: new / revised / unmarked-reply / current
-./scripts/triage-state.py --pending    # just the ones needing work
-./scripts/triage-state.py --next       # the next unclaimed id, computed over BOTH files
-./scripts/triage-archive.py S1         # move answered items to FEEDBACK_HISTORY.md, verifying the move
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py"             # every item and its verdict
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --pending   # just the ones needing work
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next      # the next id, over BOTH files
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-archive.py" S<n>      # move an answered item, verified
 ```
 
-The two `.py` files are Python: run them, or hand them to `python3` — **never to `bash`**, which
-executes the module docstring as commands and reaches ImageMagick's `import`.
+Below, a bare `triage-state.py` or `triage-archive.py` means that command. They are Python: **never
+hand them to `bash`**, which executes the module docstring as commands and reaches ImageMagick's
+`import`.
 
 ## Filing an item
 
-Append it at the bottom under a new `## S<n> — <what happened>` heading. **The next id is S2**, and
-that pin is a convenience rather than the authority: `./scripts/triage-state.py --next` computes it
+Append it at the bottom under a new `## S<n> — <what happened>` heading. **The next id is S6**, and
+that pin is a convenience rather than the authority: `triage-state.py --next` computes it
 over this file **and** `FEEDBACK_HISTORY.md`. Take it from both, because once answered items move out
 the highest id visible here is not the highest ever used, and an empty inbox shows none at all. Ids
 are never reused, not even for an item answered as a non-issue.
@@ -65,12 +67,12 @@ rest landed, and why any candidate repair was rejected.>
 Keep the placeholders as placeholders: an id that parses (`## S9`) makes the ledger see a phantom
 section and `--next` skip to 10.
 
-Stamp `sha 000000000000` as you write the reply, then run `./scripts/triage-state.py`: with a marker
+Stamp `sha 000000000000` as you write the reply, then run `triage-state.py`: with a marker
 present the reply is excluded whole, so the `revised` line prints the section's true fingerprint and
 that is the value to paste back. Never copy the sha the ledger prints while the reply is in and the
 marker is not — the hash then covers your own paragraphs two onward. `--backfill` computes it the same
 way, so it is for replies that predate the ledger and only those. Once the reply is in,
-archive with `./scripts/triage-archive.py S<n>` and add the item's one-line contents entry to
+archive with `triage-archive.py S<n>` and add the item's one-line contents entry to
 `FEEDBACK_HISTORY.md` — the archiver deliberately does not write that line, because naming what an
 item was and how it ended is editorial.
 

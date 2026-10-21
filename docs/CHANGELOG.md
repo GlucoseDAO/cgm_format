@@ -11,6 +11,17 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+**No package change.** The consumer triage loop now runs on the seats kit's `triage` role: the local
+`scripts/triage-state.py`, `scripts/triage-archive.py` and `scripts/watch-inbox.sh` are removed for
+the kit's `classes/triage/` copies, whose ledger gives every section of `docs/FEEDBACK.md` and
+`docs/FEEDBACK_HISTORY.md` the same verdict and fingerprint as the local one did. The inbox watchers
+are the triage seat's, run by its watchdog; `docs/CONSUMER_TRIAGE_LOOP.md`, both inbox headers,
+`scripts/README.md` and `CLAUDE.md` §8 and §11 now name the kit's commands, and the gist-sync
+procedure is gone. Roadmap ids are claimed with the kit's `item-next.py`. The inbox's pinned next id
+is corrected from S2 to S6.
+
 ## 0.12.2 — 2026-08-28
 
 **Patch.** Nightscout repairs, all of them defects on paths that already behaved this way. Nothing

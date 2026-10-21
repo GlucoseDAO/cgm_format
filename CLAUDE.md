@@ -568,23 +568,25 @@ Triage order: establish what already shipped → reproduce against the **code**,
 **The runbook is [docs/CONSUMER_TRIAGE_LOOP.md](docs/CONSUMER_TRIAGE_LOOP.md)** — the full algorithm,
 the routing table, the thresholds that call the user, what may be done unattended, and the gotcha
 list. Read it before triaging; the section you are reading is the orientation, not the procedure. The
-generalized pattern it adapts is published at
-<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>, and a change to the *pattern*
-(the algorithm, a script's contract, a gotcha in the mechanism) belongs in both. The one thing the
-gist cannot supply is this repo's own compatibility rule set, which is what the legality step reads —
+generic loop it adapts is the seats kit's `triage` role (`classes/triage/LOOP.md` in the kit), which
+the triage seat fills (`docs/seats/TRIAGE.md`); a change to the *pattern* (the algorithm, a script's
+contract, a gotcha in the mechanism) is an issue on the kit, never a patch here. The one thing the
+kit cannot supply is this repo's own compatibility rule set, which is what the legality step reads —
 that is the list just above, plus `docs/PHILOSOPHY.md`.
 
-**The scripts are installed here**, in `scripts/` (`triage-state.py`, `triage-archive.py`,
-`watch-inbox.sh`), documented in `scripts/README.md`, with defaults repointed at `docs/FEEDBACK.md`
-so they run from anywhere in the tree. They are stdlib-only and import nothing from the package,
-which is why they are the sanctioned exception to always-`uv run` (§2) — the workspace environment is
-not what they need. Run the ledger before triaging and the archiver after replying:
+**The scripts are the kit's**, in its `classes/triage/`, run from the kit copy this clone pins
+(`$BLUEPRINTS_KIT`, which the plugin exports into every session); none is installed in this repo.
+Their defaults are this clone's `docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md` and `docs/ROADMAP.md`,
+from anywhere in the tree. They are stdlib-only and import nothing from the package, which is why they
+are the sanctioned exception to always-`uv run` (§2) — the workspace environment is not what they
+need. Run the ledger before triaging and the archiver after replying:
 
 ```sh
-./scripts/triage-state.py --pending    # what is owed          (new / revised / unmarked-reply)
-./scripts/triage-state.py --next       # the next id, over BOTH documents — never guess it
-./scripts/triage-archive.py S1         # archive, verifying the prose moved byte-for-byte
-./scripts/triage-state.py docs/FEEDBACK_HISTORY.md   # post-archive lint: all `current`, nothing `new`
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --pending   # what is owed
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next      # the next Sn, over BOTH documents
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-archive.py" S<n>      # archive, verifying the move
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" docs/FEEDBACK_HISTORY.md  # lint: all `current`
+ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"  # claim the next RMn
 ```
 
 - **Never pass a `.py` script to `bash`.** The shebang is ignored, the module docstring runs as
@@ -666,17 +668,13 @@ same applies when the user corrects a preference: it goes in §10, in their word
   columns stay on the vendor schema; unified parse drops them (RM6).
 - `data/.gitignore` ignores `input/` outright (F2); new vendor fixtures are not auto-tracked. The
   mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it is absent.
-- The triage-loop scripts (`scripts/triage-state.py`, `scripts/triage-archive.py`,
-  `scripts/watch-inbox.sh`, adopted 2026-08-17, re-synced with the gist 2026-08-28) must stay in one
-  directory — the archiver now **imports** the ledger's span helpers by path (`importlib`, because of
-  the hyphen), not merely resolving it, and the watcher shells out to it the same way. Moving either
-  file alone breaks the archiver at import time. Their only local divergence from the gist is the
-  default `INBOX` / `FILE`, derived from the script's own location instead of `$PWD`.
-- **Arm the watcher at the start of a triage session** — `Monitor` on `scripts/watch-inbox.sh`,
-  `persistent: true` (2026-08-28). It used to say here that nothing arms it and that this was a
-  deliberate choice; that line was read as an instruction not to, and it was wrong. An unarmed
-  watcher means a report that lands mid-session is not seen until somebody runs the ledger by hand.
-- Section spans in both scripts are fence-aware since the 2026-08-28 sync: a `#` at column 1 inside a
+- **The triage loop runs on the seats kit since 2026-10-21.** The local copies of the scripts
+  (`scripts/triage-state.py`, `scripts/triage-archive.py`, `scripts/watch-inbox.sh`, adopted from the
+  gist 2026-08-17) are gone; the kit's `classes/triage/` replaced them after its ledger was shown to
+  give every section of both documents the same verdict and fingerprint. The inbox watchers are the
+  triage seat's (`[seat.triage.watch.*]` in `.blueprints.toml`), run by its watchdog: nothing is armed
+  with `Monitor` any more, which supersedes the 2026-08-28 line telling a triage session to arm one.
+- Section spans in the kit's ledger and archiver are fence-aware: a `#` at column 1 inside a
   fenced block is a reporter's comment, not a heading. The ledger prints `STRUCTURE` lines on stderr
   for an unclosed fence or a `## Sn` swallowed by one, and the archiver **refuses to move anything**
   while either holds — the fingerprint check cannot see a span that ends at the wrong line. Neither

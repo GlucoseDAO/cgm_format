@@ -5,14 +5,13 @@ consumer has finished writing, an agent triages what is new, and every item gets
 written back into the document itself**. The document is the transcript, and it is also the state —
 there is no queue, no database and no side-car ledger.
 
-**The pattern is not ours.** It is published as a generalized gist —
-<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254> — with the three scripts
-parameterized (`INBOX` / `HISTORY` / `PREFIX`) and every repo-specific reference stripped, and it was
-adopted here on 2026-08-17. This file is the local half: which files, which charter, which release
-rules, what an agent may do unattended in *this* repo. If you change the **pattern** — the algorithm,
-a script's contract, a gotcha in the mechanism — it belongs in the gist as well, or the next repo to
-adopt it inherits a bug we already fixed. If you change something only true of cgm-format, it stays
-here.
+**The pattern is not ours.** It was adopted here on 2026-08-17 from a published gist, and since
+2026-10-21 it is the seats kit's `triage` role, which this repo's triage seat fills
+(`docs/seats/TRIAGE.md`): the generic runbook is the kit's `classes/triage/LOOP.md`, and the scripts
+are the kit's. This file is the local half: which files, which charter, which release rules, what an
+agent may do unattended in *this* repo. A change to the **pattern** — the algorithm, a script's
+contract, a gotcha in the mechanism — is an issue on the kit (the `report-to-kit` skill), never a
+patch here. If you change something only true of cgm-format, it stays here.
 
 **The live document holds only what is unanswered.** An item moves to
 [FEEDBACK_HISTORY.md](FEEDBACK_HISTORY.md) once its reply is written, the same split as
@@ -29,127 +28,57 @@ layer that reports things we had no reason to look for.
 
 ## 1. Setup
 
-Three scripts, all in `scripts/`, none packaged and none importable:
+The loop's scripts are the seats kit's, in its `classes/triage/`, run from the kit copy this clone
+pins (`.claude/settings.local.json`); the plugin exports that copy as `$BLUEPRINTS_KIT` into every
+session's shell. None of them lives in this repo: a fix to the loop lands in the kit and arrives here
+with the pin.
 
 | | |
 |---|---|
-| `scripts/watch-inbox.sh` | debounced watcher: one line of stdout when the file stops changing. The only one that is really bash |
-| `scripts/triage-state.py` | the ledger: which sections are new, revised, or already answered. Takes a path, so it reads the history file too; `--next` prints the next unclaimed `Sn`. Also prints `STRUCTURE` lines on stderr when a fenced block breaks the section boundaries |
-| `scripts/triage-archive.py` | moves answered sections into the history file and **verifies** each fingerprint survived the move. **Refuses outright** on a `STRUCTURE` finding, before writing — a span ending at the wrong line moves the wrong bytes, and the verification cannot see that |
-
-They must stay in one directory: the archiver resolves the ledger relative to its own path, and the
-watcher shells out to it the same way. Their only divergence from the gist is that `INBOX` / `FILE`
-default to this repo's `docs/FEEDBACK.md`, derived from the script's own location rather than `$PWD`,
-so a run from `src/` or `tests/` reads the real inbox instead of nothing.
-
-**Run the two Python ones, never `bash` them** — `./scripts/triage-state.py` or
-`python3 scripts/triage-state.py`. §6 has what the mismatch costs.
-
-They are stdlib-only Python 3.11+ and bash, and import nothing from the package, so they are the
-sanctioned exception to the always-`uv run` rule in `CLAUDE.md` §2: the workspace environment is not
-what they need, and a `uv run` wrapper around them only adds a way to fail.
-
-### Arming the watcher
-
-**Arm it at the start of a triage session.** Under this harness the `Monitor` tool turns each stdout
-line into a notification that re-invokes the agent:
-
-```
-Monitor({
-  command: '/data/sources/glucosedao/cgm_format/scripts/watch-inbox.sh',
-  description: 'FEEDBACK.md settling',
-  persistent: true,
-})
-```
-
-`persistent: true` keeps it alive for the session; `TaskStop` cancels it. It reacts only while the
-session is open. **Editing the script does not reach a running monitor** — bash reads a script
-incrementally — so `TaskStop` and re-arm after changing it. Nothing needs installing: `inotify-tools`,
-`entr`, `fswatch` and python `watchdog` are all absent from this machine, and `stat` polling is enough
-at this cadence.
-
-**The watcher pauses off `main`.** It was adopted with the guard upstream grew on 2026-08-18: off the
-branch named by `BRANCH` (default `main`, or a detached HEAD) it idles at `BRANCH_PAUSE` (900s), emits
-one line saying where the tree is, and one more when it comes back. It does not touch its `last` mtime
-while paused, so a report written during the pause is picked up on the way back rather than lost;
-outside a git work tree it never pauses, and `BRANCH=` — an empty value, which `${BRANCH-main}` and not
-`${BRANCH:-main}` is what makes reachable — switches it off. **Since 2026-08-28 this guard is live,
-not inert.** It was carried while the loop could not commit precisely so that it would already be here
-and already be tested on the day the rule changed; the standing grant in §5 is that day. A triage pass
-now lands commits, so a watcher firing while the tree sits on somebody's half-finished feature branch
-is a pass committing on top of their work — which is the thing the pause exists to prevent.
-
-### Staying in sync with the gist
-
-**The published copy is an inbound channel, not only an outbound one.** More than one tree runs this
-loop now, and a defect in the *pattern* is usually met somewhere else first — the `**Status`
-front-matter collision in §6 was found while adopting the loop here, not in the tree it came from. A fix
-sitting upstream unadopted is then the same failure the whole loop is about: something answered
-somewhere nobody looks. What stays one-way is the **content** — the gist never reads our items, only our
-machinery.
-
-**Adopted through gist revision `fd7c3b5e462fcc27c8f597b24f466738c1b42991`, 2026-08-28.** That line is
-the baseline and it is ours to keep current: update it whenever an adoption lands, because a stale
-baseline silently re-diffs work already taken.
-
-**Check the digest before fetching anything.** A gist's own revision id is a digest of the whole thing
-and is public, so the check costs one unauthenticated request; the same sha back means nothing arrived:
+| `triage-state.py` | the ledger: which sections are new, revised, or already answered. Takes a path, so it reads the history file too; `--next` prints the next unclaimed `Sn`, over both files. Also prints `STRUCTURE` lines on stderr when a fenced block breaks the section boundaries |
+| `triage-archive.py` | moves answered sections into the history file and **verifies** each fingerprint survived the move. **Refuses outright** on a `STRUCTURE` finding, before writing — a span ending at the wrong line moves the wrong bytes, and the verification cannot see that |
+| `item-next.py` | the roadmap allocator: reserves the next `RMn` as a visible row in `docs/ROADMAP.md`, scanning and appending under one lock, so two sessions never claim the same number |
 
 ```sh
-GIST=54b94bda01812be937b892146d1bb254
-curl -sf "https://api.github.com/gists/$GIST" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["history"][0]["version"])'
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --pending   # what is owed
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next      # the next Sn
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-archive.py" S<n>      # archive an answered item
+ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "what it is for"
 ```
 
-`history[0]` is the newest entry — check it against the gist's `updated_at` rather than trusting it,
-because getting the orientation backwards does not announce itself: the check would read `unchanged`
-forever while the channel looked healthy. A different sha means clone the gist and read the diff, and
-read it **for logic, not for prose**: nearly every line differs because our copy is parameterized for
-this tree.
+Their defaults are this clone's `docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md` and `docs/ROADMAP.md`,
+from anywhere in the tree; the kit's `LOOP.md` §2 has the environment they take (`INBOX`, `HISTORY`,
+`PREFIX`, `INDEX`, `ITEM_PREFIX`). Below, a bare `triage-state.py` means the command above.
 
-**The API half of that check runs out of quota, and `curl -sf` reports the exhaustion as nothing at
-all.** Unauthenticated requests share one small hourly budget per IP with everything else on the
-machine, so the call returns `403` with `x-ratelimit-remaining: 0` — and `-f` makes curl exit
-non-zero while printing no body, which is a blank digest rather than an error anyone would read as
-one. It happened here on 2026-08-28, twice inside one session. **`git ls-remote` is the check that
-does not share the budget**, because it speaks the git protocol rather than the REST API, and it
-needs no clone:
+They are stdlib-only Python, run through the kit's `bin/py`, and import nothing from the package, so
+they are the sanctioned exception to the always-`uv run` rule in `CLAUDE.md` §2: the workspace
+environment is not what they need. **Never hand them to `bash`** — §6 has what that costs.
 
-```sh
-git ls-remote https://gist.github.com/54b94bda01812be937b892146d1bb254.git HEAD
+**After the kit pin moves, run the ledger over both documents.** A change to `fingerprint()` re-scores
+every stamped marker, and those sections then read `revised` — the kit's change impersonating a
+reporter's revision. If both read all-`current` just before the move, the whole delta is the function:
+restamp to the new values and say so in the commit message. `--backfill` will not do it, deliberately
+(§6).
+
+### The watchers
+
+The triage seat's watchdog runs two, declared in `.blueprints.toml`; nothing is armed by hand:
+
+```toml
+[seat.triage.watch.inbox]
+cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"
+
+[seat.triage.watch.inbox-commits]
+cmd = "sh kit:drivers/git/watch-remote.sh --path docs/FEEDBACK.md"
 ```
 
-The sha it prints is the same revision id `history[0].version` carries, so it answers the same
-question with no quota and no orientation hazard — there is no `history` array to index backwards.
-Prefer it; keep the API call for when you also want `updated_at`, and **never let a failed digest
-check read as `unchanged`** — that is the *inbound channel that looks healthy while nothing comes
-through* hazard, one layer below where this section already warns about it. If you have already
-cloned the gist, `git fetch` plus `git rev-parse origin/HEAD` is the same check for free.
-
-**Clone, or pin the fetch to the revision the digest check just returned — the bare raw URL lies for a
-while after a write.** `<gist>/raw/<name>` is CDN-cached, so immediately after a push the API reports
-the new revision while every unversioned raw URL still serves the previous one, and `Cache-Control:
-no-cache` does not shift it. The two halves then disagree in the worst direction: the digest says
-*something arrived*, the files say *nothing changed*, and the natural reading is that the digest check
-is broken. `git clone` of the gist sidesteps it entirely and gives you `git diff <base>..<new>` for
-free, which is what the 2026-08-28 adoption used; `<gist>/raw/<version>/<name>` is correct straight
-away if you fetch instead.
-
-**Diff baseline-to-newest in one step.** Intermediate revisions are covered by the single range, so
-there is no reason to walk them one at a time.
-
-**Auto-adopt is the default, and it has one gate: does adopting move a fingerprint?** A fix to the
-machinery was found by someone running the same loop, so there is rarely a local reason to differ. But a
-change to `fingerprint()` in `triage-state.py` re-scores every marker already stamped, and those
-sections then read `revised` — our own adoption impersonating a reporter's revision, which is the one
-signal the ledger exists to carry. Run the ledger over **both** documents immediately after adopting; if
-nothing moved, it is done. If something moved and the ledger read all-`current` immediately *before* the
-adoption, the whole delta is the function and no prose changed — restamp to the new values and say so in
-the commit message. `--backfill` will not do it, deliberately (§6).
-
-**What must never be adopted is our own parameterization**: the `INBOX` / `HISTORY` / `PREFIX` and
-`FILE` / `RUNBOOK` defaults repointed at this tree, and every pointer to this file under its local name.
-Taking those aims the tools at documents that do not exist here.
+`inbox` sends one line once `docs/FEEDBACK.md`, left uncommitted, differs from `HEAD` and has sat
+unchanged for 150 s, said once per state; it pauses while the tree is off the remote's default branch,
+so a pass permitted to commit (§5) stays off somebody's half-finished feature branch. `inbox-commits`
+sends one line when a commit touching `docs/FEEDBACK.md` lands on `origin`'s `main` that this clone's
+`main` does not hold: a reporter who committed and pushed, which the file watcher cannot see (§2,
+*Why not git*). The watchdog reads the table only when it starts, so after changing it run
+`watchdog.py stop triage`, then `/seats:seat triage`.
 
 **Hooks cannot do this job.** Claude Code hooks fire on the agent's own lifecycle (`PreToolUse`,
 `PostToolUse`, `SessionStart`, `Stop`); a consumer editing a file triggers none of them. The trigger
@@ -159,20 +88,18 @@ has to be a process watching the file.
 
 Consumers write these notes through an agent, so the shape is a burst — five edits in a minute — with
 gaps wherever the agent stops to read or probe something. A 60-second timer fires in the middle of
-such a run and triages half a report. `COOLDOWN` defaults to **150s**, `POLL` to 10s, so an event
-lands 150–160 seconds after the last write. Consecutive saves inside the cooldown collapse into
-**one** event, because each mtime bump restarts the timer. The only cost of waiting is latency; the
-cost of firing early is a reply to a half-written item.
+such a run and triages half a report. The file watcher's settle is **150 s**, and consecutive saves
+inside it collapse into **one** line, because each change restarts it. The only cost of waiting is
+latency; the cost of firing early is a reply to a half-written item.
 
 ### First run
 
-The watcher seeds from the current mtime with the dirty flag clear, so **it never fires for a change
-that predates it**. A standing backlog stays quiet — run the ledger by hand at startup, and after any
-context clear:
+A backlog that is already committed rings neither watcher. Run the ledger by hand at startup, and
+after any context clear:
 
 ```sh
-./scripts/triage-state.py            # every section and its verdict
-./scripts/triage-state.py --pending  # just the ones needing work
+triage-state.py            # every section and its verdict
+triage-state.py --pending  # just the ones needing work
 ```
 
 ---
@@ -378,7 +305,7 @@ individually, since one paragraph cannot carry several fingerprints.
 ### Step 4 — move the answered item to the history file
 
 ```sh
-./scripts/triage-archive.py S1 S2 [--dry-run]
+triage-archive.py S1 S2 [--dry-run]
 ```
 
 It cuts each section — heading, reporter prose, reply and marker — out of [FEEDBACK.md](FEEDBACK.md),
@@ -389,7 +316,8 @@ move**: every fingerprint is compared before and after, and the write is rejecte
   failure mode, which is why the tool refuses instead of reporting.
 - **`--dry-run` is not a rehearsal.** It returns before the write and so never reaches the fingerprint
   comparison, which is the thing worth rehearsing. Every path is env-driven, so rehearse for real
-  against copies: `INBOX=/tmp/copy.md HISTORY=/tmp/copy_HISTORY.md ./scripts/triage-archive.py S1`.
+  against copies: `INBOX=<copy>.md HISTORY=<copy>_HISTORY.md triage-archive.py S1`, the copies in
+  the session's scratch directory.
 - **Add the contents line by hand, and keep it to one line.** The tool does not generate it: naming
   what an item was and how it ended is editorial. Format
   `- **Sn** <what it was> — <status> (<RM or release, if any>)`, **under 80 characters**, because it
@@ -402,14 +330,15 @@ move**: every fingerprint is compared before and after, and the write is rejecte
   reads as part of the group above.
 - **Archive a batch in one pass at the end.** Sections append in the order given, so a group archived
   in two batches ends up with its heading twice. `grep -n '^# '` the history file afterwards.
-- **Then lint it**: `./scripts/triage-state.py docs/FEEDBACK_HISTORY.md`. Every archived item should
+- **Then lint it**: `triage-state.py docs/FEEDBACK_HISTORY.md`. Every archived item should
   read `current`. Anything reading `new` or `unmarked-reply` was archived unanswered or lost its
   marker in transit — the archiver verifies the move, not the verdict.
 
 ### Step 5 — hygiene
 
-- **Serial, one item at a time.** `RMn` is a shared counter and two concurrent triages both claim it.
-  Read it off the two roadmap files during a long pass, never from memory.
+- **Serial, one item at a time, and claim each `RMn` with `item-next.py`** (§1). `RMn` is a shared
+  counter, and reading the highest number off the roadmap claims nothing: two sessions reading it a
+  minute apart both write the same one. Replace the `🔷 reserved` row with the item's real entry.
 - **Commit as you go** (§5). Land each coherent block as it completes rather than piling a pass into
   one tree-wide commit at the end, and stage explicit paths. Pushing, tagging, branching and
   publishing remain the user's domain. `just-dna-format` runs the same loop under the same grant now;
@@ -486,8 +415,8 @@ auditable; a tidied one is not.
 
 ## 6. Gotchas
 
-Inherited from the published runbook — each was a real bug in the loop, found in the repo it was built
-in, and every one of them is still live in the scripts here because they are the same scripts:
+Inherited from the published runbook, which the kit's `LOOP.md` §5 now carries and where a new one
+goes. Each was a real bug in the loop, and every fix is in the kit's scripts this repo runs:
 
 - **A reply ends at its marker, not at the first blank line.** A multi-paragraph reply — the normal
   size for one that says what was probed, where it landed and why a candidate was rejected — otherwise
@@ -563,12 +492,6 @@ in, and every one of them is still live in the scripts here because they are the
   So the reassuring advice — re-run the ledger and confirm `current` — is exactly the check that passes
   in the worse case. **A stable wrong answer outranks an unstable one.** Use the twelve-zero placeholder
   in §3 Step 3 instead.
-- **An off-switch spelled `${VAR:-default}` is not an off-switch.** The watcher's `BRANCH` knob accepts
-  an empty value meaning *never pause*, and `${BRANCH:-main}` silently turns that back into `main` — the
-  one setting an adopter reaches for to disable the behaviour enables it instead. `${BRANCH-main}`,
-  without the colon, is the whole fix, and it is what `scripts/watch-inbox.sh` carries. It surfaced only
-  because the off-switch was *run* rather than read: the two spellings behave identically for every
-  value except the empty one nobody tests.
 - **A preamble line beginning `**Status` is read as a block reply** and marks every id it names
   answered — `**Status:** intake for field notes — S1 and S2 are open` inverts the loop's one job by a
   line of prose nobody would look at twice. The block-reply rule is right, so the fix is on the
@@ -602,9 +525,9 @@ Found while adopting the loop here, on 2026-08-17:
 Read these off the tools rather than off this sentence, which is exactly the kind that goes stale:
 
 ```sh
-./scripts/triage-state.py                          # the live inbox — empty means nothing owed
-./scripts/triage-state.py docs/FEEDBACK_HISTORY.md # every answered item, all `current`
-./scripts/triage-state.py --next                   # the next unclaimed Sn, over BOTH files
+triage-state.py                          # the live inbox — empty means nothing owed
+triage-state.py docs/FEEDBACK_HISTORY.md # every answered item, all `current`
+triage-state.py --next                   # the next unclaimed Sn, over BOTH files
 ```
 
 As of 2026-08-28 the inbox is **empty**, so nothing is owed. Two passes have run. The first, on
@@ -619,7 +542,7 @@ roadmap items are open, just under the ten that trigger the dev-start question.
 **S2–S5 arrived by a route this loop cannot see, and that is the standing hazard.** The reporter
 wrote them into `sugar-sugar`'s own tree rather than into this inbox, so the ledger read empty and
 `--pending` said nothing was owed while a blocking defect sat unanswered for a day. Nothing in the
-mechanism catches that: the watcher watches this file, and the ledger reads this file. Until
+mechanism catches that: the watchers watch this file, and the ledger reads this file. Until
 consumers write here directly — or the watcher is pointed at the siblings' feedback files too — an
 empty inbox means *nothing was filed here*, which is weaker than *nothing is owed*. When a consumer
 repo is known to be using a release, grep it before trusting the empty state.
