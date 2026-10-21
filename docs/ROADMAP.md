@@ -1,8 +1,14 @@
 # Roadmap
 
-Active-only, forward-only. One `## RMn — name` section per **open** item, each with a
-severity/status/owner line. Shipped items move to [ROADMAP_HISTORY.md](ROADMAP_HISTORY.md) with their
-rationale — nothing is deleted, only relocated.
+Active-only, forward-only. One `## RMn — name` section per **open** item. Its first line is
+
+```
+**State:** queued | building | waits until YYYY-MM-DD | after <ID> | blocked: desk #N · **Owner:** lead | triage · **Severity:** …
+```
+
+and the lead keeps it true (`docs/seats/LEAD.md`); the lead's plan watcher raises an item with no
+state, a date come, or a block with no desk question. Shipped items move to
+[ROADMAP_HISTORY.md](ROADMAP_HISTORY.md) with their rationale — nothing is deleted, only relocated.
 
 Severity orders the queue; it does not size the release. Legality does that (`CLAUDE.md` §8).
 
@@ -10,7 +16,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ## RM1 — schema-regen helper prints instead of logging
 
-**Severity:** low · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** low
 
 `interface/schema.py:519` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
 standard-library `logging` for library diagnostics; `print` belongs only to CLI output the user asked
@@ -23,7 +29,7 @@ Legality: pure legibility, so a patch.
 
 ## RM2 — hardcoded version fallback in `__init__.py`
 
-**Severity:** low · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** low
 
 `src/cgm_format/__init__.py:33` carries `__version__ = "0.10.0"` as a fallback when
 `importlib.metadata.version("cgm-format")` raises. That is a second source of truth for the version,
@@ -41,7 +47,7 @@ Legality: patch.
 
 ## RM3 — `data/` layout does not match the house convention
 
-**Severity:** low · **Status:** open, deliberately deferred · **Owner:** unassigned
+**State:** queued, as its own task (approved in principle 2026-08-13, never inside another change) · **Owner:** lead · **Severity:** low
 
 The house layout puts committed fixtures in `assets/` and reserves `data/` for git-ignored
 `input/` · `interim/` · `output/`. This repo commits `data/input/` and writes generated output to
@@ -60,7 +66,7 @@ that examples and docs quote, so the docs move with it.
 
 ## RM4 — the CLI does not load `.env`
 
-**Severity:** low · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** low
 
 `tests/conftest.py` loads `.env` via `python-dotenv`, so `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
 `NIGHTSCOUT_API_SECRET` reach the test suite. `cgm_cli.py` does not, so the same credentials that
@@ -78,7 +84,7 @@ Legality: additive (a new optional config path), so minor.
 
 ## RM6 — event type and parser mapping for ketone readings
 
-**Severity:** medium · **Status:** open, **narrowed by 0.10.0** · **Owner:** unassigned
+**State:** waits until 2027-01-21: a real Libre export with populated ketone cells (none in the tree; narrowed by 0.10.0) · **Owner:** lead · **Severity:** medium
 
 **0.10.0 settled two of the four decisions and shipped the column. What remains is the event type
 and the parser mapping, and it is blocked on a real fixture.**
@@ -116,7 +122,7 @@ exists.
 
 ## RM7 — lazy `scan_csv` ingest path
 
-**Severity:** medium · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** medium
 
 Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
 detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest
@@ -150,7 +156,7 @@ are a few megabytes and lazy evaluation buys them nothing.
 
 ## RM11 — Loop dataset support
 
-**Severity:** low · **Status:** open, blocked on RM7 · **Owner:** unassigned
+**State:** after RM7 · **Owner:** lead · **Severity:** low
 
 **RM9 no longer blocks this** — 0.10.0 shipped `parse_corpus`, so the many-subjects-out half is
 solved. Loop is subject-as-key-column rather than subject-per-directory, so it needs an *iterator*
@@ -191,7 +197,7 @@ Constraints already settled:
 
 ## RM14 — no way to ask whether `track="mean"` is defensible for a subject
 
-**Severity:** medium · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** medium
 
 Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
 
@@ -251,7 +257,7 @@ So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ## RM15 — network failures escape as third-party exceptions
 
-**Severity:** medium · **Status:** open · **Owner:** unassigned
+**State:** queued · **Owner:** lead · **Severity:** medium
 
 Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
 
