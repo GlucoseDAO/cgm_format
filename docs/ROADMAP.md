@@ -16,7 +16,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ## RM22 — exports of formats the library claims, failing on real files
 
-**State:** building, by the lead, under desk #63's default (2026-10-22) · **Owner:** lead · **Severity:** high
+**State:** building, by the lead: all five on main, ships in the next release · **Owner:** lead · **Severity:** high
 
 Found by the format survey ([FORMAT_SURVEY.md](FORMAT_SURVEY.md) §1), each seen failing on a public
 sample:

@@ -44,7 +44,11 @@ MEDTRONIC_METADATA_LINES = (1, 2, 3, 4, 5, 6)
 
 MEDTRONIC_CSV_SEPARATOR = ";"
 
+# The probe tries these on one timestamp, in order, so an ambiguous one must not come first: "3/6/15"
+# parses under "%Y/%m/%d" as the year 3. The US two-digit-year format goes first, since a CareLink
+# year-first date ("2021/07/25") cannot parse under it (no month 20).
 MEDTRONIC_TIMESTAMP_FORMATS: tuple[str, ...] = (
+    "%m/%d/%y %H:%M:%S",   # older US CareLink (a 2015 Paradigm export): 3/6/15 00:00:00
     "%Y/%m/%d %H:%M:%S",   # Primary CareLink format: 2021/07/25 09:35:28
     "%Y-%m-%d %H:%M:%S",   # ISO-like variant
     "%Y-%m-%dT%H:%M:%S",   # ISO 8601 variant
@@ -54,23 +58,27 @@ MEDTRONIC_REQUIRED_HEADERS: tuple[str, ...] = (
     "Index",
     "Date",
     "Time",
-    "Sensor Glucose (mg/dL)",
 )
 
-MEDTRONIC_DETECTION_PATTERNS = [
-    "Sensor Glucose (mg/dL)",   # Medtronic-specific glucose column name
-]
-
-MEDTRONIC_SCHEMA_OVERRIDES_UTF8: tuple[str, ...] = (
-    "Sensor Glucose (mg/dL)",
-    "BG Reading (mg/dL)",
-    "Basal Rate (U/h)",
-    "Bolus Volume Delivered (U)",
-    "BWZ Carb Input (grams)",
-    "Sensor Calibration BG (mg/dL)",
-    "Event Marker",
-    "Alarm",
+# A glucose column is "<stem> <unit suffix>"; CareLink writes the account's unit, and mmol/L exports
+# have been seen with both "(mmol/L)" and "(mmol/l)". The parser reads whichever is there and converts
+# it to the canonical unit through UNIT_CONVERSIONS.
+MEDTRONIC_GLUCOSE_UNIT_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("(mg/dL)", "mg/dL"),
+    ("(mmol/L)", "mmol/L"),
+    ("(mmol/l)", "mmol/L"),
 )
+MEDTRONIC_SENSOR_GLUCOSE_STEM = "Sensor Glucose"
+MEDTRONIC_BG_READING_STEM = "BG Reading"
+MEDTRONIC_SENSOR_GLUCOSE_HEADERS: tuple[str, ...] = tuple(
+    f"{MEDTRONIC_SENSOR_GLUCOSE_STEM} {suffix}" for suffix, _ in MEDTRONIC_GLUCOSE_UNIT_SUFFIXES
+)
+# The wizard's carbs in grams. Some exports give them in exchanges instead ("BWZ Carb Input
+# (exchanges)"), whose grams per exchange depend on the country, so those are not read as grams.
+MEDTRONIC_CARB_INPUT_PREFIX = "BWZ Carb Input ("
+
+MEDTRONIC_DETECTION_PATTERNS = list(MEDTRONIC_SENSOR_GLUCOSE_HEADERS)  # Medtronic-specific glucose column names
+
 
 
 # =============================================================================

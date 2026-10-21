@@ -21,6 +21,17 @@ patch.
   patient line, where the standard export has one metadata line. The parser now finds the header row
   (first cell `Device`, naming `Device Timestamp`) in the first ten lines instead of assuming line 2,
   and says so when there is none. Seen failing on a public Libre Pro export; 1,339 readings now.
+- **CareLink, US and older layouts.** The field separator is read off the header row (`,` in US
+  exports, `;` in EU ones) instead of assumed; every cell is read as text, so a decimal where
+  inference guessed an integer no longer fails; `Basal Rate (U/h)`, `Bolus Volume Delivered (U)` and
+  `Event Marker` are optional (an older layout lacks them: null, not an error); and `3/6/15 00:00:00`
+  dates parse, tried first because the year-first format would read `3/6/15` as the year 3. A public
+  2015 Paradigm export (US, comma-separated) now gives 1,534 rows.
+- **CareLink in mmol/L** is detected and read: `Sensor Glucose` and `BG Reading` are taken in whichever
+  unit the export wrote (`(mg/dL)`, `(mmol/L)`, `(mmol/l)`) and converted through `UNIT_CONVERSIONS`.
+- **Carbs in exchanges** (`BWZ Carb Input (exchanges)`, a Spanish export) are not read as grams, since
+  grams per exchange depend on the country; the file parses and a warning counts the entries left out.
+  `MEDTRONIC_SCHEMA_OVERRIDES_UTF8` is gone with the dtype inference it served.
 
 ### Diagnostics through logging only (RM1)
 

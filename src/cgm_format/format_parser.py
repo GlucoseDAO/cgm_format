@@ -132,7 +132,11 @@ from cgm_format.formats.medtronic import (
     MEDTRONIC_TIMESTAMP_FORMATS,
     MEDTRONIC_REQUIRED_HEADERS,
     MEDTRONIC_CSV_SEPARATOR,
-    MEDTRONIC_SCHEMA_OVERRIDES_UTF8,
+    MEDTRONIC_GLUCOSE_UNIT_SUFFIXES,
+    MEDTRONIC_SENSOR_GLUCOSE_STEM,
+    MEDTRONIC_BG_READING_STEM,
+    MEDTRONIC_SENSOR_GLUCOSE_HEADERS,
+    MEDTRONIC_CARB_INPUT_PREFIX,
 )
 from cgm_format.formats.medtronic_pump import (
     MedtronicPumpColumn,
@@ -1283,8 +1287,9 @@ class FormatParser(CGMParser):
     def _find_medtronic_header_line(cls, text_data: str, max_lines: int = 30) -> int:
         """Find the header row index in a Medtronic CareLink CSV.
 
-        Scans the first *max_lines* lines for a semicolon-separated line
-        containing all of MEDTRONIC_REQUIRED_HEADERS.
+        Scans the first *max_lines* lines for a semicolon- or comma-separated
+        line containing all of MEDTRONIC_REQUIRED_HEADERS and a sensor glucose
+        column in any unit.
 
         Returns:
             0-based line index of the header row.
@@ -1303,12 +1308,48 @@ class FormatParser(CGMParser):
             if "," in stripped:
                 candidates.append([c.strip().strip('"') for c in stripped.split(",")])
             for headers in candidates:
-                if all(req in headers for req in MEDTRONIC_REQUIRED_HEADERS):
+                if all(req in headers for req in MEDTRONIC_REQUIRED_HEADERS) and any(
+                    g in headers for g in MEDTRONIC_SENSOR_GLUCOSE_HEADERS
+                ):
                     return idx
         raise MalformedDataError(
             "Could not find Medtronic header row containing required columns: "
             + ", ".join(MEDTRONIC_REQUIRED_HEADERS)
+            + ", and one of "
+            + ", ".join(MEDTRONIC_SENSOR_GLUCOSE_HEADERS)
         )
+
+    @classmethod
+    def _medtronic_separator(cls, line: str) -> str:
+        """The field separator of a CareLink file, read off its header or section line: `;` in EU
+        exports, `,` in US ones (whose numbers then use dots)."""
+        return ";" if line.count(";") >= line.count(",") else ","
+
+    @classmethod
+    def _medtronic_glucose_mgdl(cls, df: pl.DataFrame, stem: str) -> pl.Expr:
+        """`<stem> (<unit>)` as canonical glucose, whichever unit the export wrote; null when absent."""
+        for suffix, unit in MEDTRONIC_GLUCOSE_UNIT_SUFFIXES:
+            name = f"{stem} {suffix}"
+            if name in df.columns:
+                return cls._to_canonical_unit(cls._euro_number_to_float(pl.col(name)), unit, CANONICAL_GLUCOSE_UNIT)
+        return pl.lit(None, dtype=pl.Float64)
+
+    @classmethod
+    def _medtronic_carbs_grams(cls, df: pl.DataFrame) -> pl.Expr:
+        """The wizard's carb input in grams; null when the export gives it in another unit, with a
+        warning counting the entries left out (exchanges have no country-free gram value)."""
+        grams = MedtronicColumn.BWZ_CARB_INPUT.value
+        if grams in df.columns:
+            return cls._euro_number_to_float(pl.col(grams))
+        for other in (c for c in df.columns if c.startswith(MEDTRONIC_CARB_INPUT_PREFIX)):
+            entries = df.filter(cls._euro_number_to_float(pl.col(other)) > 0).height
+            if entries:
+                logger.warning(
+                    "Medtronic export: %d bolus-wizard carb entr(ies) in '%s' are not represented: "
+                    "grams per exchange depend on the country, and the export does not say which.",
+                    entries, other,
+                )
+        return pl.lit(None, dtype=pl.Float64)
 
     @classmethod
     def _process_medtronic(cls, text_data: str) -> UnifiedFormat:
@@ -1337,18 +1378,17 @@ class FormatParser(CGMParser):
         """
         try:
             header_line_idx = cls._find_medtronic_header_line(text_data)
+            separator = cls._medtronic_separator(text_data.split("\n", header_line_idx + 1)[header_line_idx])
 
-            schema_overrides: dict[str, pl.DataType] = {
-                col: pl.Utf8 for col in MEDTRONIC_SCHEMA_OVERRIDES_UTF8
-            }
-
+            # Every cell as text: numbers carry decimal commas or dots and "-------"
+            # placeholders, and a column such as carb exchanges holds decimals where
+            # inference from its first rows would guess integers.
             df = pl.read_csv(
                 StringIO(text_data),
-                separator=MEDTRONIC_CSV_SEPARATOR,
+                separator=separator,
                 skip_lines=header_line_idx,
                 truncate_ragged_lines=True,
-                infer_schema_length=200,
-                schema_overrides=schema_overrides,
+                infer_schema=False,
             )
 
             # Clean column names (BOM, smart quotes)
@@ -1374,14 +1414,17 @@ class FormatParser(CGMParser):
             timestamp_format = cls._probe_timestamp_format(df, "_ts_raw", MEDTRONIC_TIMESTAMP_FORMATS)
 
             # Parse Euro-decimal numeric columns
-            sensor_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.SENSOR_GLUCOSE)).alias("_sensor_gl")
-            bg_gl = cls._euro_number_to_float(pl.col(MedtronicColumn.BG_READING)).alias("_bg_gl")
-            bolus_u = cls._euro_number_to_float(pl.col(MedtronicColumn.BOLUS_VOLUME_DELIVERED)).alias("_bolus_u")
-            basal_u = cls._euro_number_to_float(pl.col(MedtronicColumn.BASAL_RATE)).alias("_basal_u")
-            bwz_carbs = cls._euro_number_to_float(pl.col(MedtronicColumn.BWZ_CARB_INPUT)).alias("_bwz_carbs")
+            sensor_gl = cls._medtronic_glucose_mgdl(df, MEDTRONIC_SENSOR_GLUCOSE_STEM).alias("_sensor_gl")
+            bg_gl = cls._medtronic_glucose_mgdl(df, MEDTRONIC_BG_READING_STEM).alias("_bg_gl")
+            # Older CareLink layouts (a 2015 Paradigm export) lack some of these columns: absent is "not
+            # recorded", so null, never an error.
+            optional = lambda name: pl.col(name) if name in df.columns else pl.lit(None, dtype=pl.Utf8)
+            bolus_u = cls._euro_number_to_float(optional(MedtronicColumn.BOLUS_VOLUME_DELIVERED.value)).alias("_bolus_u")
+            basal_u = cls._euro_number_to_float(optional(MedtronicColumn.BASAL_RATE.value)).alias("_basal_u")
+            bwz_carbs = cls._medtronic_carbs_grams(df).alias("_bwz_carbs")
 
             # Extract insulin/carbs from Event Marker as fallback
-            event_marker_col = pl.col(MedtronicColumn.EVENT_MARKER).cast(pl.Utf8, strict=False).fill_null("")
+            event_marker_col = optional(MedtronicColumn.EVENT_MARKER.value).cast(pl.Utf8, strict=False).fill_null("")
             marker_insulin = cls._euro_number_to_float(
                 event_marker_col.str.extract(r"Insulin:\s*([\d,\.]+)", 1)
             ).alias("_marker_insulin")
@@ -1533,17 +1576,17 @@ class FormatParser(CGMParser):
             basal = cls._medtronic_effective_basal(pump)
 
             carbs = (
-                pump.with_columns(cls._euro_number_to_float(pl.col(col.BWZ_CARB_INPUT)).alias("carbs"))
+                pump.with_columns(cls._medtronic_carbs_grams(pump).alias("carbs"))
                 .filter(pl.col("carbs") > 0)
                 .select("datetime", "carbs", pl.lit(UnifiedEventType.CARBOHYDRATES.value).alias("event_type"))
             )
             meter = (
-                pump.with_columns(cls._euro_number_to_float(pl.col(col.BG_READING)).alias("glucose"))
+                pump.with_columns(cls._medtronic_glucose_mgdl(pump, MEDTRONIC_BG_READING_STEM).alias("glucose"))
                 .filter(pl.col("glucose").is_not_null())
                 .select("datetime", "glucose", pl.lit(UnifiedEventType.GLUCOSE_METER.value).alias("event_type"))
             )
             sensor = (
-                everything.with_columns(cls._euro_number_to_float(pl.col(col.SENSOR_GLUCOSE)).alias("glucose"))
+                everything.with_columns(cls._medtronic_glucose_mgdl(everything, MEDTRONIC_SENSOR_GLUCOSE_STEM).alias("glucose"))
                 .filter(pl.col("glucose").is_not_null())
                 .select("datetime", "glucose", pl.lit(UnifiedEventType.GLUCOSE.value).alias("event_type"))
             )
@@ -1637,10 +1680,11 @@ class FormatParser(CGMParser):
             raise MalformedDataError(
                 f"Medtronic export has no '{MEDTRONIC_SECTION_MARKER}' section line"
             )
+        separator = cls._medtronic_separator(lines[marks[0]])
         sections: Dict[str, pl.DataFrame] = {}
         for k, start in enumerate(marks):
             end = marks[k + 1] if k + 1 < len(marks) else len(lines)
-            fields = [f.strip().strip('"') for f in lines[start].split(MEDTRONIC_CSV_SEPARATOR)]
+            fields = [f.strip().strip('"') for f in lines[start].split(separator)]
             name = fields[2] if len(fields) > 2 else ""
             # "-------;<device>;<section>;<serial>;<label>": a 780G labels its daily SmartGuard totals
             # "Aggregated Auto Insulin Data" under the section name "Pump", so the label is part of the key.
@@ -1652,7 +1696,7 @@ class FormatParser(CGMParser):
                 continue
             frame = pl.read_csv(
                 StringIO(body),
-                separator=MEDTRONIC_CSV_SEPARATOR,
+                separator=separator,
                 infer_schema=False,
                 truncate_ragged_lines=True,
             )

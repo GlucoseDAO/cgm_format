@@ -7,6 +7,9 @@ of a person's file. Each case asserts the reshaped export parses to the same fra
 
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
+
+import logging
 
 import polars as pl
 import pytest
@@ -50,3 +53,93 @@ def test_libreview_patient_report_preamble() -> None:
     reshaped = "\n".join([report, patient, *lines[1:]])
     assert reshaped.split("\n")[2].startswith("Device,")  # the header really moved to line 3
     assert FormatParser.parse_from_string(reshaped).equals(FormatParser.parse_from_string(text))
+
+
+GUARDIAN = DATA_DIR / "medtronics_test_livia.csv"
+MMOL = 18.0182
+
+
+def reshape_carelink(text: str, cell: Callable[[str, str], str], sep_out: str = ";", decimal_out: str = ",") -> str:
+    """The Guardian CareLink export with each data cell passed through `cell(column, value)`, its headers
+    through `cell(column, column)`, written with `sep_out` and `decimal_out`."""
+    out, header = [], None
+    for line in text.split("\n"):
+        cells = line.split(";")
+        if cells and cells[0].strip().lstrip("﻿") == "Index":
+            header = [c.strip() for c in cells]
+            cells = [cell(h, h) for h in header]
+        elif header and len(cells) == len(header) and not cells[0].startswith("-------"):
+            cells = [cell(h, v) for h, v in zip(header, cells)]
+        if decimal_out != ",":
+            cells = [c.replace(",", decimal_out) for c in cells]
+        out.append(sep_out.join(cells))
+    return "\n".join(out)
+
+
+def readings(df: pl.DataFrame) -> pl.DataFrame:
+    return df.select("datetime", "event_type", "glucose", "insulin_fast", "carbs").sort("datetime", "event_type")
+
+
+@pytest.mark.skipif(not GUARDIAN.exists(), reason="Guardian export absent")
+def test_carelink_us_comma_delimited() -> None:
+    """US CareLink exports use commas between fields and dots in numbers (seen on public exports)."""
+    text = FormatParser.decode_raw_data(GUARDIAN.read_bytes())
+    us = reshape_carelink(text, lambda column, value: value, sep_out=",", decimal_out=".")
+    assert ";" not in us.split("\n")[6]  # the header row really is comma-separated
+    assert FormatParser.parse_from_string(us).equals(FormatParser.parse_from_string(text))
+
+
+@pytest.mark.skipif(not GUARDIAN.exists(), reason="Guardian export absent")
+@pytest.mark.parametrize("unit", ["mmol/L", "mmol/l"])
+def test_carelink_mmol(unit: str) -> None:
+    """CareLink exports in mmol/L name their glucose columns `(mmol/L)` or `(mmol/l)` and give one decimal."""
+    text = FormatParser.decode_raw_data(GUARDIAN.read_bytes())
+    glucose = {"Sensor Glucose (mg/dL)", "BG Reading (mg/dL)"}
+
+    def to_mmol(column: str, value: str) -> str:
+        if column not in glucose:
+            return value
+        if value == column:
+            return column.replace("mg/dL", unit)
+        try:
+            return f"{float(value.replace(',', '.')) / MMOL:.1f}".replace(".", ",")
+        except ValueError:
+            return value  # empty cells and "-------" placeholders stay as they are
+
+    mmol = reshape_carelink(text, to_mmol)
+    a, b = readings(FormatParser.parse_from_string(mmol)), readings(FormatParser.parse_from_string(text))
+    assert a.select("datetime", "event_type").equals(b.select("datetime", "event_type"))
+    worst = (a["glucose"] - b["glucose"]).abs().max()
+    assert worst <= 0.05 * MMOL + 1e-9  # one decimal of mmol/L, rounded
+
+
+PUMP = DATA_DIR / "medtronic_pump_synthetic.csv"
+
+
+@pytest.mark.skipif(not PUMP.exists(), reason="synthetic pump export absent")
+def test_carelink_carbs_in_exchanges(caplog: pytest.LogCaptureFixture) -> None:
+    """A Spanish CareLink export gives the wizard's carbs as `BWZ Carb Input (exchanges)`, with decimals.
+    How many grams an exchange is depends on the country, so they are not read as grams; the file still
+    parses, and a warning counts what was left out. The synthetic pump export has one wizard meal
+    (45 g at 13:00) and one wizard run with 0."""
+    text = FormatParser.decode_raw_data(PUMP.read_bytes())
+    column = "BWZ Carb Input (grams)"
+
+    def to_exchanges(name: str, value: str) -> str:
+        if name != column:
+            return value
+        if value == column:
+            return "BWZ Carb Input (exchanges)"
+        try:
+            return f"{float(value.replace(',', '.')) / 10:.1f}".replace(".", ",")
+        except ValueError:
+            return value
+
+    reshaped = reshape_carelink(text, to_exchanges)
+    assert "4,5" in reshaped  # the meal really is in exchanges now
+    with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+        df = FormatParser.parse_from_string(reshaped)
+    original = FormatParser.parse_from_string(text)
+    assert df.filter(pl.col("event_type") == "CARBS_IN").height == 0
+    assert df.filter(pl.col("event_type") != "CARBS_IN").equals(original.filter(pl.col("event_type") != "CARBS_IN"))
+    assert any("1 bolus-wizard carb entr(ies) in 'BWZ Carb Input (exchanges)'" in r.getMessage() for r in caplog.records)
