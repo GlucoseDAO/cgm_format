@@ -11,9 +11,12 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.14.0 — 2026-10-21
 
-**Minor** (a new optional parameter and a new enum). The version bump is the lead's.
+**Minor.** A caller can state a Nightscout exporter file's date order (RM19); exports that are pieces
+of one series join once (`FormatParser.parse_exports`, F21); the pump fold runs from a shell
+(`cgm-cli fold`). One repair: a MiniMed 780G's daily automatic-insulin totals, which 0.13.0 read as
+boluses at midnight, are no longer insulin rows. Additive for every consumer; `CGM_SCHEMA` unchanged.
 
 ### A caller can state a Nightscout exporter file's date order (RM19)
 

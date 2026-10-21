@@ -14,36 +14,6 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ---
 
-## RM19 — let a caller state the exporter CSV's date order
-
-**State:** building: on main (`bdbfe60`), ships in the next release; a `cgm-cli --date-order` flag not yet built · **Owner:** triage · **Severity:** medium
-
-Motivated by **S6** (`docs/FEEDBACK_HISTORY.md`), relayed from `sugar-sugar`. Queued by the
-person on 2026-10-21 for unattended work ("Add the fix to unattended to-dos"), answering the
-question whether a warning is enough or callers should be able to say the date order outright.
-
-0.12.3 reads a nightscout-exporter CSV in whichever locale reads every row. One case is left that
-the text cannot settle: a file on a 12-hour clock in which no day is past the 12th reads completely
-both month-first (en-US) and day-first (en-AU, en-NZ, en-IN). It is read month first, as before,
-with one warning. A day-first export of that shape therefore still comes back with day and month
-swapped on every row, and only the warning says it might have.
-
-Shape: an optional `date_order` parameter, a new `EnumLiteral` (`MONTH_FIRST`, `DAY_FIRST`) whose
-default `None` keeps 0.12.3's inference. Given, it restricts `_exporter_datetime_format` to the
-formats of that order, so an ambiguous file is read the way the caller says, with no warning, and
-rows that do not read that way are counted as now. It belongs on `parse_nightscout` and
-`from_nightscout_exports`. Open for the build: how `parse_to_unified` / `parse_file`, which take no
-vendor options, reach it (a dedicated exporter entry point rather than class state, since every
-method is a stateless classmethod), and whether `cgm-cli parse` grows a `--date-order` flag.
-
-Making the order **required** was the other answer, and it is rejected: it breaks every existing
-caller, which is a major, and most files (any US export, and any day-first one with a day past the
-12th) need no help.
-
-**Legality:** a new optional parameter and a new enum beside what exists, so **minor**.
-
----
-
 ## RM20 — `parse_nightscout` and `_process_nightscout` raise differently on the same failure
 
 **State:** queued, for the next major only · **Owner:** lead · **Severity:** low

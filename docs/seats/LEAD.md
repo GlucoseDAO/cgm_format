@@ -81,7 +81,10 @@ publish from dists" (2026-10-21). So the release's last step leaves the tagged v
 for them to run with their token in their own terminal. A scratch folder will not do: it is private to
 the session's sandbox, and their terminal does not see it. A `uv build` of the same tag twice is not
 byte-identical (build timestamps), so the dists in `dist/` and on the GitHub release match in content,
-not in hash.
+not in hash. `dist/` then holds **that version only** (earlier dists moved out), so `uv publish dist/*`
+cannot retry a version PyPI already has: on 2026-10-21 a stale 0.13.0 left there made the person's
+publish of what they took for 0.14.0 fail with "File already exists". And work said to ship "in the next
+release" leaves that release open in `LEAD_NOTES.md` until it is cut.
 
 ## A contributor's pull request
 
