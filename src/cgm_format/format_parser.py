@@ -1719,44 +1719,89 @@ class FormatParser(CGMParser):
         df = df.rename({col: col.strip() for col in df.columns})
         return df
 
-    # Datetime formats produced by JavaScript's toLocaleDateString() / toLocaleTimeString()
-    # in the nightscout-exporter.  We try US locale first, then ISO-ish fallbacks.
+    # The nightscout-exporter writes Date and Time with JavaScript's toLocaleDateString() /
+    # toLocaleTimeString() and no locale argument, so the shape is the browser's locale. List order
+    # is the tie-break when a file reads completely under two formats (see _exporter_datetime_format).
     _EXPORTER_DATETIME_FORMATS: ClassVar[list[str]] = [
-        "%m/%d/%Y %I:%M:%S %p",    # US locale: 3/31/2026 7:51:03 PM
-        "%d/%m/%Y %I:%M:%S %p",    # UK locale: 31/3/2026 7:51:03 PM
-        "%Y-%m-%d %H:%M:%S",       # ISO-ish: 2026-03-31 19:51:03
+        "%m/%d/%Y %I:%M:%S %p",    # en-US: 4/7/2026 7:59:42 PM
+        "%d/%m/%Y %H:%M:%S",       # en-GB, en-IE, fr-FR: 07/04/2026 19:59:42
+        "%d/%m/%Y %I:%M:%S %p",    # en-AU, en-NZ, en-IN: 7/4/2026 7:59:42 pm
+        "%Y-%m-%d %H:%M:%S",       # ISO-ish: 2026-04-07 19:59:42
     ]
 
     @classmethod
-    def _parse_exporter_datetime(cls, df: pl.DataFrame, date_col: str, time_col: str) -> pl.DataFrame:
-        """Add a ``datetime`` column by combining Date + Time with format probing."""
-        combined = df.with_columns(
-            (pl.col(date_col).cast(pl.Utf8) + " " + pl.col(time_col).cast(pl.Utf8)).alias("_datetime_str")
+    def _exporter_datetime_strings(cls, *sections: tuple[pl.DataFrame, str, str]) -> pl.Series:
+        """Every non-null ``Date + " " + Time`` of the given (frame, date column, time column) sections."""
+        parts = [
+            df.select((pl.col(date_col).cast(pl.Utf8) + " " + pl.col(time_col).cast(pl.Utf8)).alias("stamp"))
+            for df, date_col, time_col in sections
+        ]
+        return pl.concat(parts)["stamp"].drop_nulls()
+
+    @classmethod
+    def _exporter_datetime_format(cls, stamps: pl.Series) -> str:
+        """The one format a whole exporter file is read with, chosen over every row of every section.
+
+        A format wins by reading every row, not by being tried first: ``strptime(strict=False)``
+        returns null rather than raising, so a first-that-does-not-throw probe always picked the
+        first format. When no day in the file is past the 12th, US month-first and 12-hour
+        day-first both read every row; the text cannot settle it, so the list order does (month
+        first, as before) and one warning says so. When no format reads every row, the one that
+        reads most wins and the rows it cannot read are counted, since they are dropped.
+        """
+        formats = cls._EXPORTER_DATETIME_FORMATS
+        total = stamps.len()
+        if total == 0:
+            return formats[0]
+        read = {
+            fmt: int(stamps.str.strptime(pl.Datetime("ms"), fmt, strict=False).is_not_null().sum())
+            for fmt in formats
+        }
+        complete = [fmt for fmt in formats if read[fmt] == total]
+        if len(complete) > 1:
+            logger.warning(
+                "Nightscout exporter dates are ambiguous: all %d rows read both as %r and as %r, "
+                "because no day is past the 12th. They are read month first, the order a US browser "
+                "writes; if this export came from a day-first locale, day and month are swapped on "
+                "every row.",
+                total, complete[0], complete[1],
+            )
+        if complete:
+            return complete[0]
+        best = max(formats, key=lambda fmt: read[fmt])
+        if read[best] == 0:
+            raise MalformedDataError(
+                f"Cannot parse Date+Time columns with any known format. Sample: {stamps.head(3).to_list()}"
+            )
+        unreadable = stamps.filter(stamps.str.strptime(pl.Datetime("ms"), best, strict=False).is_null())
+        logger.warning(
+            "%d of %d Nightscout exporter rows have a Date+Time that no format reads alongside the "
+            "rest (read as %r); they are dropped. Sample: %s",
+            total - read[best], total, best, unreadable.head(3).to_list(),
         )
-        for fmt in cls._EXPORTER_DATETIME_FORMATS:
-            try:
-                return combined.with_columns(
-                    pl.col("_datetime_str").str.strptime(pl.Datetime("ms"), fmt, strict=False).alias("datetime")
-                )
-            except Exception:
-                continue
-        raise MalformedDataError(
-            f"Cannot parse Date+Time columns with any known format. "
-            f"Sample: {combined['_datetime_str'].head(3).to_list()}"
+        return best
+
+    @classmethod
+    def _parse_exporter_datetime(cls, df: pl.DataFrame, date_col: str, time_col: str, fmt: str) -> pl.DataFrame:
+        """Add a ``datetime`` column read from Date + Time with the file's format."""
+        return df.with_columns(
+            (pl.col(date_col).cast(pl.Utf8) + " " + pl.col(time_col).cast(pl.Utf8))
+            .str.strptime(pl.Datetime("ms"), fmt, strict=False)
+            .alias("datetime")
         )
 
     @classmethod
-    def _entries_csv_to_unified(cls, entries_df: pl.DataFrame) -> pl.DataFrame:
+    def _entries_csv_to_unified(cls, entries_df: pl.DataFrame, fmt: str) -> pl.DataFrame:
         """Convert nightscout-exporter entries CSV to unified glucose rows.
 
-        Combines locale Date + Time columns into a datetime, maps
-        Glucose (mg/dL) to the unified glucose column.
+        Combines locale Date + Time columns into a datetime with the file's
+        format, maps Glucose (mg/dL) to the unified glucose column.
         """
         date_col = NightscoutEntryColumn.DATE
         time_col = NightscoutEntryColumn.TIME
         glucose_col = NightscoutEntryColumn.GLUCOSE_MGDL
 
-        entries_df = cls._parse_exporter_datetime(entries_df, date_col, time_col)
+        entries_df = cls._parse_exporter_datetime(entries_df, date_col, time_col, fmt)
 
         return (
             entries_df
@@ -1770,8 +1815,12 @@ class FormatParser(CGMParser):
         )
 
     @classmethod
-    def _treatments_csv_to_unified(cls, treatments_df: pl.DataFrame) -> pl.DataFrame:
-        """Convert nightscout-exporter treatments CSV to unified rows."""
+    def _treatments_csv_to_unified(cls, treatments_df: pl.DataFrame, fmt: str) -> pl.DataFrame:
+        """Convert nightscout-exporter treatments CSV to unified rows.
+
+        A row whose Date + Time the file's format cannot read is dropped, as
+        on the entries side; ``_exporter_datetime_format`` has counted it.
+        """
         if len(treatments_df) == 0:
             return pl.DataFrame()
 
@@ -1781,7 +1830,9 @@ class FormatParser(CGMParser):
         insulin_col = NightscoutTreatmentColumn.INSULIN_U
         carbs_col = NightscoutTreatmentColumn.CARBS_G
 
-        treatments_df = cls._parse_exporter_datetime(treatments_df, date_col, time_col)
+        treatments_df = cls._parse_exporter_datetime(treatments_df, date_col, time_col, fmt).filter(
+            pl.col("datetime").is_not_null()
+        )
 
         all_frames: list[pl.DataFrame] = []
 
@@ -1852,12 +1903,19 @@ class FormatParser(CGMParser):
                 raise ZeroValidInputError("No entries data found in Nightscout data")
 
             entries_df = cls._parse_nightscout_entries_csv(entries_csv)
-            glucose_rows = cls._entries_csv_to_unified(entries_df)
+            sections: list[tuple[pl.DataFrame, str, str]] = [
+                (entries_df, NightscoutEntryColumn.DATE, NightscoutEntryColumn.TIME)
+            ]
+            treatments_df = cls._parse_nightscout_treatments_csv(treatments_csv) if treatments_csv else None
+            if treatments_df is not None:
+                sections.append((treatments_df, NightscoutTreatmentColumn.DATE, NightscoutTreatmentColumn.TIME))
+            fmt = cls._exporter_datetime_format(cls._exporter_datetime_strings(*sections))
+
+            glucose_rows = cls._entries_csv_to_unified(entries_df, fmt)
             all_frames: list[pl.DataFrame] = [glucose_rows]
 
-            if treatments_csv:
-                treatments_df = cls._parse_nightscout_treatments_csv(treatments_csv)
-                treatment_rows = cls._treatments_csv_to_unified(treatments_df)
+            if treatments_df is not None:
+                treatment_rows = cls._treatments_csv_to_unified(treatments_df, fmt)
                 if len(treatment_rows) > 0:
                     all_frames.append(treatment_rows)
 
@@ -1896,27 +1954,38 @@ class FormatParser(CGMParser):
         else:
             entries_text = entries_data
 
-        if cls._is_nightscout_entries_json(entries_text):
-            entries_df = cls._parse_nightscout_entries_json(entries_text)
-            glucose_rows = cls._entries_json_to_unified(entries_df)
+        if isinstance(treatments_data, bytes):
+            treatments_text: Union[str, None] = cls.decode_raw_data(treatments_data)
         else:
-            entries_df = cls._parse_nightscout_entries_csv(entries_text)
-            glucose_rows = cls._entries_csv_to_unified(entries_df)
+            treatments_text = treatments_data
+
+        # Exporter CSV sections are read first, so one date format can be chosen over all of them.
+        entries_csv_df = None
+        if not cls._is_nightscout_entries_json(entries_text):
+            entries_csv_df = cls._parse_nightscout_entries_csv(entries_text)
+        treatments_csv_df = None
+        if treatments_text is not None and not cls._is_nightscout_treatments_json(treatments_text):
+            treatments_csv_df = cls._parse_nightscout_treatments_csv(treatments_text)
+        sections: list[tuple[pl.DataFrame, str, str]] = []
+        if entries_csv_df is not None:
+            sections.append((entries_csv_df, NightscoutEntryColumn.DATE, NightscoutEntryColumn.TIME))
+        if treatments_csv_df is not None:
+            sections.append((treatments_csv_df, NightscoutTreatmentColumn.DATE, NightscoutTreatmentColumn.TIME))
+        fmt = cls._exporter_datetime_format(cls._exporter_datetime_strings(*sections)) if sections else ""
+
+        if entries_csv_df is None:
+            glucose_rows = cls._entries_json_to_unified(cls._parse_nightscout_entries_json(entries_text))
+        else:
+            glucose_rows = cls._entries_csv_to_unified(entries_csv_df, fmt)
 
         all_frames: list[pl.DataFrame] = [glucose_rows]
 
-        if treatments_data is not None:
-            if isinstance(treatments_data, bytes):
-                treatments_text = cls.decode_raw_data(treatments_data)
-            else:
-                treatments_text = treatments_data
-
-            if cls._is_nightscout_treatments_json(treatments_text):
+        if treatments_text is not None:
+            if treatments_csv_df is None:
                 treatments_df = cls._parse_nightscout_treatments_json(treatments_text)
                 treatment_rows = cls._treatments_json_to_unified(treatments_df)
             else:
-                treatments_df = cls._parse_nightscout_treatments_csv(treatments_text)
-                treatment_rows = cls._treatments_csv_to_unified(treatments_df)
+                treatment_rows = cls._treatments_csv_to_unified(treatments_csv_df, fmt)
 
             if len(treatment_rows) > 0:
                 all_frames.append(treatment_rows)

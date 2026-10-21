@@ -11,9 +11,40 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.12.3 — 2026-10-21
 
-**No package change.** The consumer triage loop now runs on the seats kit's `triage` role: the local
+**Patch.** Nightscout exporter CSVs written in a day-first locale now parse, and one written so
+that the order cannot be told says so. Nothing added that a consumer reads, nothing removed, nothing
+retyped; `CGM_SCHEMA` untouched. **If you read nightscout-exporter CSVs from outside the US,
+upgrade.** Before this, such a file either failed or came back with wrong dates and no warning.
+
+Reported by `sugar-sugar` as S6 (`docs/FEEDBACK.md`), relayed from their own `FEEDBACK.md`. Each
+case was reproduced on the code before it was touched, on day-first copies of the committed exporter
+fixture made at test time; no real non-US export is in the tree.
+
+### Exporter dates were read in the US order whatever the file said
+
+The exporter writes Date and Time with the browser's `toLocaleDateString()` /
+`toLocaleTimeString()`, so the shape is the browser's locale. The date probe kept the first format
+that did not raise, and `strptime(strict=False)` never raises: it returns null. So US month-first
+won every file. A day-first date past the 12th became null and its row was dropped; one up to the
+12th was read with day and month swapped (7 April became 4 July), silently; and on the treatments
+side a row whose date was null was kept with no time at all. The `except` around the probe was a
+guard that could not be reached.
+
+Now one format is chosen per file, over the entries and treatments sections together, as the one
+that reads every row. The UK row of the table was itself wrong: en-GB, en-IE and fr-FR write a
+24-hour clock (`07/04/2026 19:59:42`), which the old `%d/%m/%Y %I:%M:%S %p` row never matched; it
+is added beside the 12-hour day-first row that en-AU, en-NZ and en-IN do write. A file where every
+day is 12 or under reads completely both ways on a 12-hour clock: it is still read month first, as
+before, and now **one warning says the order was ambiguous and which was assumed**. A US export
+that spans only days 1–12 of a month gets that warning too, which is its honest cost. Rows that no
+format reads alongside the rest are dropped, as before on the entries side, and now counted in one
+warning. Letting a caller state the order outright is filed for the next minor.
+
+### No package change: the triage loop moved to the seats kit
+
+The consumer triage loop now runs on the seats kit's `triage` role: the local
 `scripts/triage-state.py`, `scripts/triage-archive.py` and `scripts/watch-inbox.sh` are removed for
 the kit's `classes/triage/` copies, whose ledger gives every section of `docs/FEEDBACK.md` and
 `docs/FEEDBACK_HISTORY.md` the same verdict and fingerprint as the local one did. The inbox watchers

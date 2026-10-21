@@ -17,9 +17,12 @@ Expected file naming convention:
 - nightscout_profile.json  (pump/loop profile)
 """
 
+import logging
+import re
 import pytest
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import Callable, ClassVar, Optional
 import polars as pl
 
 from cgm_format import FormatParser as FormatParserPrime
@@ -628,3 +631,134 @@ class TestNightscoutSafetyAndTolerance:
         )
         FormatParserPrime.from_nightscout_url("https://ns.example.invalid", output_dir=tmp_path)
         assert (tmp_path / "nightscout_entries.json").exists()
+
+
+# =============================================================================
+# Exporter CSV dates written in a non-US locale (S6)
+# =============================================================================
+
+EXPORTER_CSV = DATA_DIR / "nightscout-data-with-treatments.csv"
+
+# The committed exporter fixture was written by a US browser: "4/7/2026","7:59:42 PM".
+_US_ROW = re.compile(r'^"(\d{1,2}/\d{1,2}/\d{4})","(\d{1,2}:\d{2}:\d{2} [AP]M)",(.*)$')
+_US_FORMAT = "%m/%d/%Y %I:%M:%S %p"
+
+
+def _en_gb(moment: datetime) -> tuple[str, str]:
+    """What toLocaleDateString()/toLocaleTimeString() write in an en-GB browser: 07/04/2026, 19:59:42."""
+    return f"{moment:%d/%m/%Y}", f"{moment:%H:%M:%S}"
+
+
+def _en_au(moment: datetime) -> tuple[str, str]:
+    """What they write in an en-AU browser: 7/4/2026, 7:59:42 pm — day first, 12-hour clock."""
+    hour = moment.hour % 12 or 12
+    return f"{moment.day}/{moment.month}/{moment.year}", f"{hour}:{moment:%M:%S} {'pm' if moment.hour >= 12 else 'am'}"
+
+
+def _relocale(text: str, render: Callable[[datetime], tuple[str, str]],
+              shift: timedelta = timedelta(0)) -> tuple[str, set[datetime]]:
+    """Rewrite every dated row of the US fixture in another locale, optionally moved by SHIFT.
+
+    Returns the new CSV and the moments its CGM entries carry, read off the fixture with the
+    standard library rather than through the parser under test.
+    """
+    out: list[str] = []
+    entries: set[datetime] = set()
+    in_entries = False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            in_entries = "CGM ENTRIES" in line
+        m = _US_ROW.match(line)
+        if m is None:
+            out.append(line)
+            continue
+        moment = datetime.strptime(f"{m[1]} {m[2]}", _US_FORMAT) + shift
+        if in_entries:
+            entries.add(moment)
+        day, clock = render(moment)
+        out.append(f'"{day}","{clock}",{m[3]}')
+    return "\n".join(out) + "\n", entries
+
+
+@pytest.fixture(scope="module")
+def exporter_csv_text() -> str:
+    if not EXPORTER_CSV.exists():
+        pytest.skip(f"{EXPORTER_CSV.name} not present")
+    return EXPORTER_CSV.read_text()
+
+
+class TestExporterLocaleDates:
+    """S6 (docs/FEEDBACK.md): the exporter writes dates in the browser's locale.
+
+    The date probe used to keep the first format that did not raise, and with ``strict=False`` none
+    ever raises, so US month-first won every file: day-first dates past the 12th became null and
+    were dropped, and those up to the 12th were read with day and month swapped.
+    """
+
+    @staticmethod
+    def _glucose_moments(df: pl.DataFrame) -> set[datetime]:
+        rows = df.filter(pl.col("event_type") == UnifiedEventType.GLUCOSE.value)
+        return set(rows["datetime"].to_list())
+
+    def test_en_gb_export_parses_like_the_us_one(self, exporter_csv_text: str) -> None:
+        """24-hour day-first: the shape en-GB, en-IE and fr-FR browsers write."""
+        gb_text, expected = _relocale(exporter_csv_text, _en_gb)
+
+        gb = FormatParser.parse_from_string(gb_text)
+        us = FormatParser.parse_from_string(exporter_csv_text)
+
+        assert self._glucose_moments(gb) == expected
+        assert gb.equals(us), "the same readings written in another locale must give the same frame"
+
+    def test_day_first_12_hour_export_past_the_12th(self, exporter_csv_text: str) -> None:
+        """en-AU, en-NZ, en-IN: day first on a 12-hour clock, every day unambiguous."""
+        au_text, expected = _relocale(exporter_csv_text, _en_au, shift=timedelta(days=10))
+
+        au = FormatParser.parse_from_string(au_text)
+        us = FormatParser.parse_from_string(exporter_csv_text)
+
+        assert self._glucose_moments(au) == expected
+        assert au["datetime"].null_count() == 0, "a treatment row came through with no time"
+        assert au.height == us.height
+
+    def test_ambiguous_day_first_export_is_read_month_first_and_says_so(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Every day is 12 or under, so the text alone cannot tell 7 April from 4 July."""
+        au_text, written = _relocale(exporter_csv_text, _en_au)
+        assert all(m.day <= 12 for m in written), "the fixture must stay ambiguous for this test"
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            au = FormatParser.parse_from_string(au_text)
+
+        month_first = {datetime(m.year, m.day, m.month, m.hour, m.minute, m.second) for m in written}
+        assert self._glucose_moments(au) == month_first
+        ambiguity = [r for r in caplog.records if "ambiguous" in r.getMessage()]
+        assert len(ambiguity) == 1, [r.getMessage() for r in caplog.records]
+        assert "month first" in ambiguity[0].getMessage()
+
+    def test_an_unreadable_date_is_counted_not_kept_as_null(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A row no format reads is dropped with a count, never emitted with a null time."""
+        broken = exporter_csv_text.replace('"4/7/2026","7:20:22 PM","SMB"', '"31/31/2026","7:20:22 PM","SMB"', 1)
+        assert broken != exporter_csv_text, "the fixture row this test breaks has moved"
+
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            df = FormatParser.parse_from_string(broken)
+
+        assert df["datetime"].null_count() == 0
+        dropped = [r for r in caplog.records if "no format" in r.getMessage()]
+        assert len(dropped) == 1, [r.getMessage() for r in caplog.records]
+        assert "1 of" in dropped[0].getMessage()
+
+    def test_us_export_is_read_as_before(
+        self, exporter_csv_text: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fixture spans 6 and 7 April with 12-hour times, so it is ambiguous too — and is read
+        month first, as before, with the one warning saying so; nothing else is reported."""
+        with caplog.at_level(logging.WARNING, logger="cgm_format.format_parser"):
+            us = FormatParser.parse_from_string(exporter_csv_text)
+
+        assert {d for d in us["datetime"].dt.date().unique().to_list()} == {date(2026, 4, 6), date(2026, 4, 7)}
+        assert [r for r in caplog.records if "no format" in r.getMessage()] == []
