@@ -120,7 +120,6 @@ from cgm_format.formats.dexcom_eu import (
 from cgm_format.formats.libre import (
     LibreColumn,
     LibreRecordType,
-    LIBRE_HEADER_LINE,
     LIBRE_TIMESTAMP_FORMATS,
     LIBRE_SCHEMA,
 )
@@ -1110,11 +1109,12 @@ class FormatParser(CGMParser):
         Col = LibreEUColumn if european else LibreColumn
         eff_schema = LIBRE_EU_SCHEMA if european else LIBRE_SCHEMA
         try:
-            # Libre has: Row 1 = metadata, Row 2 = columns, Row 3+ = data
-            # Use skip_rows to skip the first metadata row
+            # A LibreView export puts one metadata row before its header; the
+            # "Patient report" layout puts two (a report line and a patient
+            # line). The header is found, not assumed at row 2.
             df = pl.read_csv(
                 StringIO(text_data),
-                skip_rows=LIBRE_HEADER_LINE - 1,  # Skip metadata row, next row becomes header
+                skip_rows=cls._find_libre_header_line(text_data, Col.DEVICE_TIMESTAMP.value),
                 truncate_ragged_lines=True,
                 infer_schema_length=None,
                 ignore_errors=False
@@ -1260,6 +1260,23 @@ class FormatParser(CGMParser):
             expr.cast(pl.Utf8, strict=False)
             .str.replace_all(",", ".")
             .cast(pl.Float64, strict=False)
+        )
+
+    @classmethod
+    def _find_libre_header_line(cls, text_data: str, timestamp_column: str, max_lines: int = 10) -> int:
+        """0-based index of a LibreView export's header row: the first of the first `max_lines` lines
+        whose first cell is `Device` and which names `timestamp_column`.
+
+        Raises:
+            MalformedDataError: If no such line is there.
+        """
+        for idx, line in enumerate(text_data.split("\n", max_lines + 1)[:max_lines]):
+            cells = [c.strip().strip('"').lstrip("\ufeff") for c in line.split(",")]
+            if cells and cells[0] == LibreColumn.DEVICE.value and timestamp_column in cells:
+                return idx
+        raise MalformedDataError(
+            f"Could not find the LibreView header row (first cell '{LibreColumn.DEVICE.value}', "
+            f"naming '{timestamp_column}') in the first {max_lines} lines"
         )
 
     @classmethod

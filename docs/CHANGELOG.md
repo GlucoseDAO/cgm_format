@@ -17,6 +17,10 @@ patch.
 
 - **LibreView, US Libre 3, 12-hour timestamps** (`MM-DD-YYYY hh:mm AM`) parse: a third format in
   `LIBRE_TIMESTAMP_FORMATS`, tried after the two 24-hour ones. Seen failing on a public export.
+- **LibreView "Patient report" layout** parses: its header sits on line 3, after a report line and a
+  patient line, where the standard export has one metadata line. The parser now finds the header row
+  (first cell `Device`, naming `Device Timestamp`) in the first ten lines instead of assuming line 2,
+  and says so when there is none. Seen failing on a public Libre Pro export; 1,339 readings now.
 
 ### Diagnostics through logging only (RM1)
 
