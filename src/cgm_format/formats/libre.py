@@ -46,6 +46,7 @@ LIBRE_METADATA_LINES = (1,)  # Row 1 is metadata to skip
 LIBRE_TIMESTAMP_FORMATS = (
     "%d-%m-%Y %H:%M",  # European Libre format: 22-11-2024 17:55
     "%m-%d-%Y %H:%M",  # US Libre format: 11-22-2024 21:35
+    "%m-%d-%Y %I:%M %p",  # US Libre 3 export, 12-hour clock: 11-22-2024 09:35 PM
 )
 
 # Format detection patterns (unique identifiers in CSV headers/content)

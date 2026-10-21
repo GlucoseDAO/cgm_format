@@ -13,6 +13,11 @@ patch.
 
 ## Unreleased
 
+### Drift in claimed formats (RM22)
+
+- **LibreView, US Libre 3, 12-hour timestamps** (`MM-DD-YYYY hh:mm AM`) parse: a third format in
+  `LIBRE_TIMESTAMP_FORMATS`, tried after the two 24-hour ones. Seen failing on a public export.
+
 ### Diagnostics through logging only (RM1)
 
 `CGMSchemaDefinition.export_to_json` logged its "Regenerated" line with `print`; it now goes through
