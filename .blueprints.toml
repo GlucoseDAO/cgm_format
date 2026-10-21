@@ -1,0 +1,36 @@
+[repo]
+# The repo's channel takes this name too; the seats talk in agent-chat and announcements (D104).
+id = "cgm-format"
+
+[seat.triage]
+# Answers consumer feedback (docs/seats/TRIAGE.md). The lead relays a consumer report it came across;
+# a desk's secretary relays the person's answers.
+wake_from = "cgm-format/lead */secretary"
+
+[seat.triage.watch.inbox]
+# One line when docs/FEEDBACK.md differs from HEAD and has settled (150 s unchanged), said once per
+# state, a restart included; paused off the remote's default branch. The kit's watcher (#76).
+cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"
+
+[seat.triage.watch.inbox-commits]
+# One line when a commit to docs/FEEDBACK.md lands on origin's main that this clone's main does not
+# hold: a report a consumer committed and pushed, which watch-file.sh cannot see.
+cmd = "sh kit:drivers/git/watch-remote.sh --path docs/FEEDBACK.md"
+
+[seat.triage.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"
+
+[seat.lead]
+# The person's own coding sessions here (docs/seats/LEAD.md): the roadmap, the design, the build, the
+# releases. Also this clone's kit pin and the leak gate's install, there being no tooling seat here, so
+# an announcement for tooling seats wakes it; the kit's tooling seat may reach it about a kit issue.
+wake_from = "cgm-format/triage agents-kit/tooling */secretary"
+tags = "tooling"
+
+[seat.lead.watch.plan]
+# The plan's items that need the lead (the kit's D116): no state or owner, a date come, a blocked item
+# with no desk question, a desk question answered. Hourly; each said once.
+cmd = "sh kit:bin/py kit:classes/lead/plan-watch.py"
+
+[seat.lead.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"
