@@ -45,7 +45,7 @@ Nothing to build until a major is scheduled; it waits for one.
 
 ## RM3 — `data/` layout does not match the house convention
 
-**State:** queued, as its own task (approved in principle 2026-08-13, never inside another change) · **Owner:** lead · **Severity:** low
+**State:** blocked: desk #71 (which layout: split committed fixtures into `assets/fixtures/`, rename only the output folders, or keep it; recommended the split) · **Owner:** lead · **Severity:** low
 
 The house layout puts committed fixtures in `assets/` and reserves `data/` for git-ignored
 `input/` · `interim/` · `output/`. This repo commits `data/input/` and writes generated output to
