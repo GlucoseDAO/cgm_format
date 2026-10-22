@@ -11,7 +11,13 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.14.1 — 2026-10-22
+
+**Patch.** Exports of formats the library already claims, in layouts real files were seen in, now
+parse (RM22): US Libre 3 12-hour timestamps, LibreView's patient-report header, US and older CareLink
+exports (comma-separated, `3/6/15` dates, columns an older layout lacks), CareLink in mmol/L, and
+carbs given in exchanges (left out with a warning). Library diagnostics go through `logging` only
+(RM1). Nothing a consumer reads is added, removed or retyped.
 
 ### Drift in claimed formats (RM22)
 

@@ -8,6 +8,39 @@ changed and where, so a later reader can find the code without a git archaeology
 
 ---
 
+## RM22 — exports of formats the library claims, failing on real files
+
+**Severity:** high · **Status:** shipped 2026-10-22 in 0.14.1 (`ed6accc`, `5c2142d`, `cd2dc21`) · **Owner:** lead
+
+Found by the format survey ([FORMAT_SURVEY.md](FORMAT_SURVEY.md) §1), each seen failing on a public
+sample:
+
+1. LibreView, US Libre 3: 12-hour `MM-DD-YYYY hh:mm AM` timestamps (no `%I %p` format).
+2. LibreView "Patient report" layout: one extra line before the header.
+3. CareLink, US: comma-delimited, the parser assumes `;`.
+4. CareLink in mmol/L (`Sensor Glucose (mmol/L)`, also `(mmol/l)`).
+5. CareLink, Spanish: `BWZ Carb Input (exchanges)` holds decimals, read as `i64`.
+
+Format drift, so a **patch** each (`CLAUDE.md` §12): widen what is read, never what is emitted. Each
+fixture is synthetic, built at test time from a committed synthetic export reshaped into the public
+sample's layout, never a copy of a person's file. Asked as desk #63; its default is this item, built
+while the person is away.
+
+---
+
+## RM1 — schema-regen helper prints instead of logging
+
+**Severity:** low · **Status:** shipped 2026-10-22 in 0.14.1 (`b4080c8`) · **Owner:** lead
+
+`interface/schema.py:519` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
+standard-library `logging` for library diagnostics; `print` belongs only to CLI output the user asked
+to see. The helper is called from `scripts/regenerate_all_schemas.py`, so the honest fix is either a
+`logger.info` here, or moving the message to the script that owns the user-facing output.
+
+Legality: pure legibility, so a patch.
+
+---
+
 ## RM19 — let a caller state the exporter CSV's date order
 
 **Severity:** medium · **Status:** shipped 2026-10-21 in 0.14.0 (`bdbfe60`); the `cgm-cli --date-order` flag was not built · **Owner:** triage

@@ -14,26 +14,6 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ---
 
-## RM22 — exports of formats the library claims, failing on real files
-
-**State:** building, by the lead: all five on main, ships in the next release · **Owner:** lead · **Severity:** high
-
-Found by the format survey ([FORMAT_SURVEY.md](FORMAT_SURVEY.md) §1), each seen failing on a public
-sample:
-
-1. LibreView, US Libre 3: 12-hour `MM-DD-YYYY hh:mm AM` timestamps (no `%I %p` format).
-2. LibreView "Patient report" layout: one extra line before the header.
-3. CareLink, US: comma-delimited, the parser assumes `;`.
-4. CareLink in mmol/L (`Sensor Glucose (mmol/L)`, also `(mmol/l)`).
-5. CareLink, Spanish: `BWZ Carb Input (exchanges)` holds decimals, read as `i64`.
-
-Format drift, so a **patch** each (`CLAUDE.md` §12): widen what is read, never what is emitted. Each
-fixture is synthetic, built at test time from a committed synthetic export reshaped into the public
-sample's layout, never a copy of a person's file. Asked as desk #63; its default is this item, built
-while the person is away.
-
----
-
 ## RM20 — `parse_nightscout` and `_process_nightscout` raise differently on the same failure
 
 **State:** queued, for the next major only · **Owner:** lead · **Severity:** low
@@ -60,19 +40,6 @@ recovery path, which is what the charter rules out; `CLAUDE.md` §2 forbids the 
 
 **Legality:** either repair changes the exception type an existing call raises, so **major**.
 Nothing to build until a major is scheduled; it waits for one.
-
----
-
-## RM1 — schema-regen helper prints instead of logging
-
-**State:** building, by the lead: on main, ships in the next release · **Owner:** lead · **Severity:** low
-
-`interface/schema.py:519` does `print(f"✓ Regenerated {schema_file}")`. The house rule is
-standard-library `logging` for library diagnostics; `print` belongs only to CLI output the user asked
-to see. The helper is called from `scripts/regenerate_all_schemas.py`, so the honest fix is either a
-`logger.info` here, or moving the message to the script that owns the user-facing output.
-
-Legality: pure legibility, so a patch.
 
 ---
 
