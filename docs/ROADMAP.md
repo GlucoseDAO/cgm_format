@@ -64,7 +64,7 @@ that examples and docs quote, so the docs move with it.
 
 ## RM4 — the CLI does not load `.env`
 
-**State:** queued · **Owner:** lead · **Severity:** low
+**State:** building, by the lead: on main, ships in the next release · **Owner:** lead · **Severity:** low
 
 `tests/conftest.py` loads `.env` via `python-dotenv`, so `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
 `NIGHTSCOUT_API_SECRET` reach the test suite. `cgm_cli.py` does not, so the same credentials that

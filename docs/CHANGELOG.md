@@ -11,6 +11,18 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+### The CLI reads `.env` (RM4)
+
+- `cgm-cli` loads `.env` from the current directory at startup; values already in the environment
+  win. `download-nightscout` takes its URL, token and secret from `NIGHTSCOUT_URL`,
+  `NIGHTSCOUT_TOKEN` and `NIGHTSCOUT_API_SECRET` when they are not given, so the credentials that let
+  the test suite reach a Nightscout instance work for the CLI too. `.env.template` lists them.
+- It prints the URL it uses, and an unreachable instance (refused, DNS, timeout) is one line naming
+  the URL instead of a traceback.
+- `python-dotenv` moves from the `dev` extra to `cli`. The core still depends on Polars alone.
+
 ## 0.14.1 — 2026-10-22
 
 **Patch.** Exports of formats the library already claims, in layouts real files were seen in, now

@@ -19,6 +19,7 @@ from typing import List, Optional, Dict, Type, Union, Protocol, TypedDict
 
 import typer
 import polars as pl
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -60,6 +61,16 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+@app.callback()
+def _load_environment() -> None:
+    """Load `.env` from the current directory before any command reads its configuration.
+
+    Values already in the environment win (`override=False`), so `NIGHTSCOUT_URL=... cgm-cli ...`
+    still beats the file. A missing file is not an error: most commands read no configuration.
+    """
+    load_dotenv(Path.cwd() / ".env", override=False)
 
 
 def _processor_for(dataframe: pl.DataFrame) -> Type[FormatProcessor]:
@@ -912,35 +923,48 @@ def batch(
 
 @app.command(name="download-nightscout")
 def download_nightscout_cmd(
-    url: str = typer.Argument(..., help="Nightscout base URL (e.g. https://my-ns.example.com)"),
+    url: Optional[str] = typer.Argument(None, envvar="NIGHTSCOUT_URL", show_envvar=True, help="Nightscout base URL (e.g. https://my-ns.example.com)"),
     output_dir: Path = typer.Option(Path("."), "--output", "-o", help="Output directory for JSON files"),
     count: int = typer.Option(10_000, "--count", "-c", help="Maximum entries to fetch"),
     days: Optional[int] = typer.Option(None, "--days", "-d", help="Only fetch last N days"),
-    token: Optional[str] = typer.Option(None, "--token", "-t", help="Readable access token"),
-    api_secret: Optional[str] = typer.Option(None, "--api-secret", "-s", help="API_SECRET (hashed and sent as header)"),
+    token: Optional[str] = typer.Option(None, "--token", "-t", envvar="NIGHTSCOUT_TOKEN", show_envvar=True, help="Readable access token"),
+    api_secret: Optional[str] = typer.Option(None, "--api-secret", "-s", envvar="NIGHTSCOUT_API_SECRET", show_envvar=True, help="API_SECRET (hashed and sent as header)"),
     parse: bool = typer.Option(False, "--parse", "-p", help="Also parse to unified CSV"),
 ) -> None:
     """Download CGM data from a Nightscout instance via its REST API.
 
     Fetches entries, treatments, and profile as JSON from the Nightscout API
     and saves them to the output directory. Use --parse to also convert to
-    unified CSV format.
+    unified CSV format. The URL, token and secret may come from NIGHTSCOUT_URL,
+    NIGHTSCOUT_TOKEN and NIGHTSCOUT_API_SECRET, in the environment or in `.env`
+    in the current directory (see `.env.template`).
     """
+    if not url:
+        console.print("[red]✗ No Nightscout URL: pass it, or set NIGHTSCOUT_URL (in the environment or .env).[/red]")
+        raise typer.Exit(1)
     try:
+        import httpx
         from cgm_format.nightscout_downloader import download_nightscout as _download
     except ImportError:
         console.print("[red]httpx is required for Nightscout downloads. Install with: uv add httpx[/red]")
         raise typer.Exit(1)
 
-    with console.status(f"[bold green]Downloading from {url}..."):
-        entries_path, treatments_path, profile_path = _download(
-            base_url=url,
-            output_dir=output_dir,
-            count=count,
-            token=token,
-            api_secret=api_secret,
-            days=days,
-        )
+    console.print(f"Nightscout: {url}")
+    try:
+        with console.status(f"[bold green]Downloading from {url}..."):
+            entries_path, treatments_path, profile_path = _download(
+                base_url=url,
+                output_dir=output_dir,
+                count=count,
+                token=token,
+                api_secret=api_secret,
+                days=days,
+            )
+    except httpx.TransportError as e:
+        # The instance could not be reached at all (refused, DNS, timeout): one line, not a
+        # traceback. HTTP status failures already raise with the token redacted.
+        console.print(f"[red]✗ Could not reach {url}: {type(e).__name__}: {e}[/red]")
+        raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] Entries:    {entries_path}")
     console.print(f"[green]✓[/green] Treatments: {treatments_path}")

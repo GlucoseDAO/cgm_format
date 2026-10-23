@@ -79,6 +79,7 @@ cli = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyarrow" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -103,7 +104,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.39.3" },
     { name = "pyarrow", marker = "extra == 'cli'", specifier = ">=23.0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.2.2" },
+    { name = "python-dotenv", marker = "extra == 'cli'", specifier = ">=1.2.2" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=14.3.3" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.24.1" },
 ]

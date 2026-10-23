@@ -38,11 +38,11 @@ cli = [
     "pandas>=2.3.3",
     "pyarrow>=23.0.1",
     "frictionless>=5.18.1",
+    "python-dotenv>=1.2.2",
 ]
 dev = [
     "cgm-format[cli]",
     "pytest>=8.0.0",
-    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

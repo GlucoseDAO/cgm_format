@@ -354,8 +354,8 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
   install instructions if missing. The core `FormatParser` / `FormatProcessor` must import cleanly
   with only Polars installed.
 - **Dependency tiers are load-bearing.** Core may import Polars and the standard library, nothing
-  else. `typer`, `rich`, `httpx`, `pandas`, `pyarrow`, `frictionless` live behind the `cli` extra;
-  `pytest` and `python-dotenv` behind `dev`. Nothing is forbidden outright, but a new core dependency
+  else. `typer`, `rich`, `httpx`, `pandas`, `pyarrow`, `frictionless`, `python-dotenv` live behind
+  the `cli` extra; `pytest` behind `dev`. Nothing is forbidden outright, but a new core dependency
   is a charter change, not a judgement call.
 - **No Pydantic — a deliberate, reasoned exemption from the house rule.** The house ruleset says
   Pydantic 2 at every boundary, and the reasoning is sound: schemas and validation want a real model
@@ -652,11 +652,14 @@ same applies when the user corrects a preference: it goes in §10, in their word
 *Append-only. Environment, paths, credential layout, host quirks.*
 
 - Source layout `src/cgm_format/` (hatchling, `tool.hatch.build.targets.wheel.packages`).
-- Optional-dep groups: `cli` (typer, rich, httpx, pandas, pyarrow, frictionless), `dev` (cli + pytest
-  + python-dotenv).
+- Optional-dep groups: `cli` (typer, rich, httpx, pandas, pyarrow, frictionless, python-dotenv), `dev`
+  (cli + pytest).
 - `download_nightscout()` always fetches JSON (entries, treatments, profile); `token` = query param,
   `api_secret` = SHA1-hashed header. Credentials come from `.env` at the project root, read by
-  `tests/conftest.py`; the CLI does **not** load `.env` today (RM4).
+  `tests/conftest.py`, and by `cgm-cli` from the current directory at startup (values already in the
+  environment win). `download-nightscout` takes `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
+  `NIGHTSCOUT_API_SECRET` when not given; `.env.template` lists them. python-dotenv is in the `cli`
+  extra since 0.14.2 (RM4).
 - Sibling repos live side by side under `/data/sources/glucosedao/`: `sugar-sugar` and `glucosedao`
   depend on `cgm-format[cli]`; `glucose_data_processing` is the sister lib for gap conventions.
 - When upgrading deps (`uv lock --upgrade`), also raise the lower-bound constraints in
