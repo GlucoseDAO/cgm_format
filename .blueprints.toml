@@ -32,5 +32,11 @@ tags = "tooling"
 # with no desk question, a desk question answered. Hourly; each said once.
 cmd = "sh kit:bin/py kit:classes/lead/plan-watch.py"
 
+[seat.lead.watch.desk]
+# The desk's answers to this seat's questions, each said once (the kit's D133, since v0.1.88): the plan
+# watcher reads only the questions an item is blocked on, so an answer to one that holds no item
+# (a choice whose default is already being built) reached the lead by nobody.
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py cgm-format lead"
+
 [seat.lead.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
