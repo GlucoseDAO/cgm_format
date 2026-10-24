@@ -2,12 +2,13 @@
 
 State, not rules: rewritten to the present before a reset (`README.md` here, "Notes files").
 
-**As of 2026-10-23, unattended.** 0.14.0 and 0.14.1 are tagged and on GitHub with their dists; `dist/`
+**As of 2026-10-24, unattended.** 0.14.0 and 0.14.1 are tagged and on GitHub with their dists; `dist/`
 holds both. **Open: the person's PyPI publish of both** (`uv publish dist/*`; PyPI is at 0.13.0).
 
 **Unreleased on `main`:** RM4 (`b58faf1`: the CLI loads `.env`, `download-nightscout` reads
-`NIGHTSCOUT_*`, python-dotenv into the `cli` extra, an unreachable instance is one line). A minor
-(a new config path), so 0.15.0 when cut; not run through the full suite yet.
+`NIGHTSCOUT_*`, python-dotenv into the `cli` extra, an unreachable instance is one line). Its version is
+desk #106 (asked 2026-10-24; default: no release). `CLAUDE.md` §11 says "since 0.14.2": correct it
+to whatever ships. Not run through the full suite yet.
 
 **On the desk, asked 2026-10-22 while the person was away:** #63 which surveyed formats come next
 (default: the drift fixes, now built as RM22); #64 Excel behind the `cli` extra (default: no Excel);
@@ -20,9 +21,10 @@ match the person's uploaded names is unconfirmed.
 
 **The plan's order** (`docs/ROADMAP.md`): RM4 (built, unreleased), RM20 (next major only), RM3
 (blocked: desk #71), RM6 (waits until 2027-01-21), RM7, RM11 (after RM7), RM14, RM15. RM7, RM14 and
-RM15 each need a design decision before code (RM7: what the lazy entry point returns; RM14: whether
-the agreement thresholds live in the library; RM15: the exception hierarchy's scope): the next step is
-a desk question each, or the person's word. `docs/FORMAT_SURVEY.md` §5's later items (localized
+RM15 each wait on a design decision, asked 2026-10-24: desk #107 (RM7, what the streaming reader
+returns; recommended LazyFrame plus a sink-to-Parquet helper), #108 (RM14, thresholds as settings
+with a warning on `mean`), #109 (RM15, a `NightscoutError` family whose kinds also subclass the httpx
+errors, so a minor). Default for each: nothing built. `docs/FORMAT_SURVEY.md` §5's later items (localized
 headers, Tidepool, AZT1D, Jaeb) wait on desk #63.
 
 **In flight:** nothing.
