@@ -17,6 +17,11 @@ cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"
 # hold: a report a consumer committed and pushed, which watch-file.sh cannot see.
 cmd = "sh kit:drivers/git/watch-remote.sh --path docs/FEEDBACK.md"
 
+[seat.triage.watch.desk]
+# The desk's answers to this seat's questions, each said once (the kit's D133, since v0.1.88): triage
+# asks the desk while the person is away, and an answer holds no roadmap item the plan watcher reads.
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py cgm-format triage"
+
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
 
