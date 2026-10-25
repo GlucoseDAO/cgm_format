@@ -1,6 +1,9 @@
 [repo]
 # The repo's channel takes this name too; the seats talk in agent-chat and announcements (D104).
 id = "cgm-format"
+# The forge gate checks every session's gh writes, seated or not (kit #162): the repo is public and
+# local exports carry a person's name.
+forge_gate_unseated = true
 
 [seat.triage]
 # Answers consumer feedback (docs/seats/TRIAGE.md). The lead relays a consumer report it came across;
