@@ -8,7 +8,7 @@ holds both. **Open: the person's PyPI publish of both** (`uv publish dist/*`; Py
 **Unreleased on `main`:** RM4 (`b58faf1`: the CLI loads `.env`, `download-nightscout` reads
 `NIGHTSCOUT_*`, python-dotenv into the `cli` extra, an unreachable instance is one line). Its version is
 desk #106 (asked 2026-10-24; default: no release). `CLAUDE.md` §11 says "since 0.14.2": correct it
-to whatever ships. Not run through the full suite yet.
+to whatever ships. Full suite green on `9bafa5b` (2026-10-25: 1715 passed, 16 skipped).
 
 **On the desk, asked 2026-10-22 while the person was away:** #63 which surveyed formats come next
 (default: the drift fixes, now built as RM22); #64 Excel behind the `cli` extra (default: no Excel);
