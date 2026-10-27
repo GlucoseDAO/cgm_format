@@ -63,7 +63,8 @@ The role's steps, with these here:
   verbatim before a release.
 - **Real exports stay out of tracked paths.** A fixture is synthetic; a real one lives in the
   git-ignored `data/input/`, worked through counts and aggregates, never printed row by row into the
-  session. A synthetic fixture goes in `assets/fixtures/`.
+  session. A synthetic fixture goes in `assets/fixtures/`; nothing under `data/` is ever force-added
+  (`git add -f`).
 
 ## Releasing
 
