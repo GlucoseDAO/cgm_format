@@ -3,7 +3,7 @@
 Active-only, forward-only. One `## RMn — name` section per **open** item. Its first line is
 
 ```
-**State:** queued | building | waits until YYYY-MM-DD | after <ID> | blocked: desk #N · **Owner:** lead | triage · **Severity:** …
+**State:** unattended | urgent | building | waits until YYYY-MM-DD | after <ID> | blocked: desk #N · **Owner:** lead | triage · **Severity:** …
 ```
 
 and the lead keeps it true (`docs/seats/LEAD.md`); the lead's plan watcher raises an item with no
@@ -16,7 +16,7 @@ Severity orders the queue; it does not size the release. Legality does that (`CL
 
 ## RM20 — `parse_nightscout` and `_process_nightscout` raise differently on the same failure
 
-**State:** queued, for the next major only · **Owner:** lead · **Severity:** low
+**State:** waits until 2027-01-21: breaking, so it ships with the next major only; looked at again then · **Owner:** lead · **Severity:** low
 
 Motivated by **S6** (and S5 before it, whose reply did not address this bullet). The two public
 routes into the Nightscout parsing code have different error contracts. `_process_nightscout`,
@@ -64,7 +64,7 @@ that examples and docs quote, so the docs move with it.
 
 ## RM4 — the CLI does not load `.env`
 
-**State:** building, by the lead: on main, ships in the next release · **Owner:** lead · **Severity:** low
+**State:** blocked: desk #106 (the release's version, 0.15.0 or 0.14.2; built, and the full suite green on main) · **Owner:** lead · **Severity:** low
 
 `tests/conftest.py` loads `.env` via `python-dotenv`, so `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
 `NIGHTSCOUT_API_SECRET` reach the test suite. `cgm_cli.py` does not, so the same credentials that
@@ -120,7 +120,7 @@ exists.
 
 ## RM7 — lazy `scan_csv` ingest path
 
-**State:** queued · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #107 (what the streaming reader returns; recommended a LazyFrame plus a sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
 
 Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
 detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest
@@ -195,7 +195,7 @@ Constraints already settled:
 
 ## RM14 — no way to ask whether `track="mean"` is defensible for a subject
 
-**State:** queued · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #108 (whether the library warns on averaging two sensors that disagree; recommended a warning, cut-offs as settings) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
 
@@ -255,7 +255,7 @@ So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ## RM15 — network failures escape as third-party exceptions
 
-**State:** queued · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #109 (which errors a failed download raises; recommended a NightscoutError family that also subclasses the httpx errors) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
 
