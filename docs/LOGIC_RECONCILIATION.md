@@ -5,7 +5,7 @@ deployed models were fitted on, measured rather than asserted, and where the two
 disagree.
 
 **Measured:** 2026-08-18, against `cgm_format` 0.12.0 and the committed fixtures in
-`data/comparison/`.
+`assets/fixtures/comparison/`.
 **Gate:** `tests/test_livia_reference_alignment.py`.
 **Planning document:** [modification_plan.md](modification_plan.md) — this file reports outcomes,
 that one holds the open ladder of remaining work.
@@ -30,7 +30,7 @@ covariates land. [modification_plan.md §3](modification_plan.md) holds the alig
 ## Headline result
 
 The gate compares the last valid sequence, truncated to 1440 minutes — the window a server actually
-feeds a model — against `data/comparison/livia_reference.csv`, produced by GDP from the same raw
+feeds a model — against `assets/fixtures/comparison/livia_reference.csv`, produced by GDP from the same raw
 Dexcom export.
 
 | Metric | 0.11.0 | **0.12.0** | Gate threshold |
@@ -78,8 +78,8 @@ uv run pytest tests/test_livia_reference_alignment.py -s -v     # prints the met
 To see that the change is confined to the glucose column:
 
 ```sh
-uv run cgm-cli pipeline data/comparison/livia_test.csv -o retimed.csv
-uv run cgm-cli pipeline data/comparison/livia_test.csv --no-retime-glucose -o measured.csv
+uv run cgm-cli pipeline assets/fixtures/comparison/livia_test.csv -o retimed.csv
+uv run cgm-cli pipeline assets/fixtures/comparison/livia_test.csv --no-retime-glucose -o measured.csv
 ```
 
 Both emit 289 rows. `datetime`, `carbs`, `insulin_slow`, `insulin_fast` and `exercise` are
@@ -93,8 +93,8 @@ the two committed CSVs:
 
 ```python
 import polars as pl, numpy as np
-ref = pl.read_csv("data/comparison/livia_reference.csv", try_parse_dates=True)
-raw = pl.read_csv("data/comparison/livia_test.csv", infer_schema_length=0, encoding="utf8-lossy")
+ref = pl.read_csv("assets/fixtures/comparison/livia_reference.csv", try_parse_dates=True)
+raw = pl.read_csv("assets/fixtures/comparison/livia_test.csv", infer_schema_length=0, encoding="utf8-lossy")
 ts, ev, gl = (next(c for c in raw.columns if k in c) for k in ("Timestamp", "Event Type", "Glucose Value"))
 
 base = raw.select(
@@ -207,7 +207,7 @@ This document covers the numeric path for glucose. Open items live in
 
 ## Provenance, and one caveat about it
 
-`data/comparison/livia_reference.csv` is the definition of "correct" used above. It is a committed
+`assets/fixtures/comparison/livia_reference.csv` is the definition of "correct" used above. It is a committed
 artifact that **cannot currently be regenerated** — three places name a
 `scripts/generate_livia_reference.py` that has never existed in any commit (F16 in
 [dogfooding.md](dogfooding.md)). Independent corroboration that it reflects what the model actually

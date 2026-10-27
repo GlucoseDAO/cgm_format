@@ -1,9 +1,9 @@
 """Pytest tests for format_parser module.
 
 Tests cover:
-1. Format detection for all files in data/input/
+1. Format detection for all files in assets/fixtures/ (and data/input/ when present)
 2. Parsing to unified format
-3. Saving parsed results to data/parsed/
+3. Saving parsed results to data/output/parsed/
 
 Note: Gap detection and sequence assignment tests are in test_format_processor.py
 since those operations are processor responsibilities.
@@ -16,6 +16,7 @@ import polars as pl
 from typing import ClassVar
 from cgm_format import FormatParser as FormatParserPrime
 from cgm_format.interface.cgm_interface import ValidationMethod
+from tests.paths import FIXTURES_DIR, input_csv_files, LOCAL_INPUT_DIR, OUTPUT_DIR
 
 class FormatParser(FormatParserPrime):
     """Format parser for testing."""
@@ -33,9 +34,7 @@ from cgm_format.format_processor import FormatProcessor
 
 
 # Constants - relative to project root
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
-PARSED_DIR = PROJECT_ROOT / "data" / "parsed"
+PARSED_DIR = OUTPUT_DIR / "parsed"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -48,9 +47,9 @@ def setup_parsed_directory():
 
 @pytest.fixture(scope="session")
 def all_data_files():
-    """Get all CSV files from the data/input directory."""
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
-    assert len(csv_files) > 0, f"No CSV files found in {DATA_DIR}"
+    """The committed fixtures' CSV files, then the local exports' when present."""
+    csv_files = input_csv_files()
+    assert len(csv_files) > 0, f"No CSV files found in {FIXTURES_DIR}"
     return csv_files
 
 
@@ -97,7 +96,7 @@ class TestFormatDetection:
         
         # Report results
         print(f"\n\n=== Format Detection Summary ===")
-        print(f"Total files in data/input/: {len(all_data_files)}")
+        print(f"Total input files: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully detected: {sum(format_counts.values())}")
@@ -268,7 +267,7 @@ class TestUnifiedParsing:
         
         # Report results
         print(f"\n\n=== Unified Parsing Summary ===")
-        print(f"Total files in data/input/: {len(all_data_files)}")
+        print(f"Total input files: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully parsed: {len(successful_parses)}")
@@ -345,10 +344,10 @@ class TestUnifiedParsing:
 
 
 class TestSaveToDirectory:
-    """Test saving all parsed files to data/parsed/."""
+    """Test saving all parsed files to data/output/parsed/."""
     
     def test_save_all_parsed_files(self, all_data_files, supported_data_files):
-        """Parse all supported files and save them to data/parsed/."""
+        """Parse all supported files and save them to data/output/parsed/."""
         saved_files = []
         failed_files = []
         skipped_files = [f for f in all_data_files if f not in supported_data_files]
@@ -376,7 +375,7 @@ class TestSaveToDirectory:
         
         # Report results
         print(f"\n\n=== Save to Parsed Directory Summary ===")
-        print(f"Total files in data/input/: {len(all_data_files)}")
+        print(f"Total input files: {len(all_data_files)}")
         print(f"Skipped (unsupported): {len(skipped_files)}")
         print(f"Tested: {len(supported_data_files)}")
         print(f"Successfully saved: {len(saved_files)}")
@@ -418,9 +417,15 @@ class TestSaveToDirectory:
                 text_data = FormatParser.decode_raw_data(raw_data)
                 detected_format = FormatParser.detect_format(text_data)
                 
-                # Should be detected as unified format
-                assert detected_format == SupportedCGMFormat.UNIFIED_CGM, \
-                    f"Saved unified file should be detected as UNIFIED_CGM, got {detected_format}"
+                # Should be detected as the unified format whose schema the source parses to: an
+                # extended-schema source (a pump export) saves as UNIFIED_EXTENDED, the rest as UNIFIED_CGM
+                source_format = FormatParser.detect_format(FormatParser.decode_raw_data(csv_file.read_bytes()))
+                expected = next(
+                    f for f in (SupportedCGMFormat.UNIFIED_EXTENDED, SupportedCGMFormat.UNIFIED_CGM)
+                    if UNIFIED_TARGET_SCHEMA[f] is UNIFIED_TARGET_SCHEMA[source_format]
+                )
+                assert detected_format == expected, \
+                    f"Saved unified file should be detected as {expected}, got {detected_format}"
                 
                 # Should be parseable
                 reloaded_df = FormatParser.parse_to_unified(text_data, detected_format)
@@ -665,7 +670,7 @@ class TestLibreviewHeaderDrift:
     absorb it without a new format or a parser branch (regression: it used to
     crash with polars ColumnNotFound)."""
 
-    LIBREVIEW = DATA_DIR / "Libreview2026-07-23-17_55_12.csv"
+    LIBREVIEW = LOCAL_INPUT_DIR / "Libreview2026-07-23-17_55_12.csv"
 
     def _skip_if_missing(self):
         if not self.LIBREVIEW.exists():
@@ -765,7 +770,7 @@ class TestDexcomExerciseDuration:
     core data column, silently, on real committed exports.
     """
 
-    EXPORT = DATA_DIR / "000-14 oct-28 oct 2019.csv"
+    EXPORT = LOCAL_INPUT_DIR / "000-14 oct-28 oct 2019.csv"
 
     def _rows(self) -> pl.DataFrame:
         if not self.EXPORT.exists():

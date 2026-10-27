@@ -1,6 +1,6 @@
 """Integration tests for Medtronic Guardian Connect / CareLink format support.
 
-Tests dynamically discover Medtronic files from data/input/ using detect_format,
+Tests dynamically discover Medtronic files from assets/fixtures/ and data/input/ using detect_format,
 then validate parsing, schema conformance, roundtrip, and pipeline processing.
 """
 
@@ -22,6 +22,7 @@ from cgm_format.formats.unified import (
     Quality,
 )
 from cgm_format.formats.medtronic import MedtronicColumn
+from tests.paths import input_csv_files
 
 
 class FormatParser(FormatParserPrime):
@@ -29,16 +30,11 @@ class FormatParser(FormatParserPrime):
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT | ValidationMethod.OUTPUT
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
 
 
 def get_medtronic_files() -> List[Path]:
-    """Discover all Medtronic-format CSV files in the data directory."""
-    if not DATA_DIR.exists():
-        return []
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
-    csv_files = [f for f in csv_files if "parsed" not in str(f)]
+    """Discover all Medtronic-format CSV files among the fixtures and the local exports."""
+    csv_files = input_csv_files()
 
     medtronic_files = []
     for f in csv_files:
@@ -56,7 +52,7 @@ def get_medtronic_files() -> List[Path]:
 MEDTRONIC_FILES = get_medtronic_files()
 
 if not MEDTRONIC_FILES:
-    pytest.skip("No Medtronic files found in data/input/", allow_module_level=True)
+    pytest.skip("No Medtronic files found in assets/fixtures/ or data/input/", allow_module_level=True)
 
 
 @pytest.fixture(scope="session")

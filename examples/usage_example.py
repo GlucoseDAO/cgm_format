@@ -594,10 +594,10 @@ def main() -> None:
     print("="*70)
     
     # Check for test data
-    data_dir = Path("data/input")
+    data_dir = Path("assets/fixtures")
     if not data_dir.exists():
         print(f"\n⚠ Warning: Data directory '{data_dir}' not found")
-        print("   Please create 'data/input/' directory with sample CGM files")
+        print("   Run this from the repository root, where assets/fixtures/ holds sample CGM files")
         print("   Supported formats: Dexcom, Libre, Unified")
         return
     
@@ -620,7 +620,7 @@ def main() -> None:
         
         # Batch processing (if multiple files)
         if len(csv_files) > 1:
-            output_dir = Path("data/processed_examples")
+            output_dir = Path("data/output/processed_examples")
             example_3_batch_processing(data_dir, output_dir)
         
         # Custom processing (might fail if data quality is insufficient)

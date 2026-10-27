@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run python
-"""Write the synthetic MiniMed pump CareLink export, data/input/medtronic_pump_synthetic.csv.
+"""Write the synthetic MiniMed pump CareLink export, assets/fixtures/medtronic_pump_synthetic.csv.
 
 Hand-authored, not scrubbed: every row below is invented, one or two per kind of record a real 720G
 export carries (docs/PLAN_pump.md §2.2), so tests/test_medtronic_pump.py can state its expected values
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from cgm_format.formats.medtronic_pump import MedtronicPumpColumn as C
 
-OUT = Path(__file__).resolve().parent.parent / "data" / "input" / "medtronic_pump_synthetic.csv"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "fixtures" / "medtronic_pump_synthetic.csv"
 DATE = "1961/04/12"
 DEVICE = "MiniMed 720G MMT-1810"
 

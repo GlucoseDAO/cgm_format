@@ -271,24 +271,21 @@ one is a real behavior change — gate it on a test demonstrating the new behavi
 src/cgm_format/       source (src layout; hatchling packages = ["src/cgm_format"])
 tests/                pytest suite
 docs/                 all markdown except this file and README.md
-data/input/           committed vendor fixtures + cached Nightscout pulls
-data/parsed/          generated output          ─┐
-data/cli_test_output/ generated output           ├─ git-ignored, never travels
-data/cli_examples_output/ generated output      ─┘
+assets/fixtures/      committed test fixtures: synthetic vendor exports, the comparison reference
+data/input/           a person's own exports + cached Nightscout pulls   ─┐
+data/output/          generated output (tests, examples, CLI)              ├─ git-ignored, never travels
+data/interim/         intermediate steps (reserved; nothing writes it yet) ─┘
 scripts/              one-off operational scripts, not importable code
 examples/             runnable usage examples — documentation, keep them working
 ```
 
-- **`data/` is git-ignored by ignore-all.** `data/.gitignore` is `*`, then `input/` / `input/**`
-  *without* the `!` (dropped in `44e3bb9`). Generated output, local dumps and downloaded Nightscout
-  pulls stay ignored. Fixtures already in git history under `data/input/` remain tracked; a new
-  fixture cannot be committed without `git add -f`. That gap is F2 in `docs/dogfooding.md`. To
-  commit another top-level subtree under `data/`, add explicit `!<dir>/` and `!<dir>/**` lines.
-- **Deviation from the house layout, deliberate:** committed fixtures live in `data/input/`, not
-  `assets/`, and the generated dirs are not named `interim` / `output`. Every integration test, the
-  gitignore rule and the sdist exclusion are built on the current names and all work. The
-  rename is tracked as an open item in `docs/ROADMAP.md`, not something to do opportunistically
-  mid-task.
+- **Committed fixtures live in `assets/fixtures/`; nothing under `data/` is committed** (RM3, in the
+  release after 0.14.1). `data/.gitignore` is `*` plus `!.gitignore`, with no allowlist, so a real
+  export in `data/input/` cannot be staged by accident. A new fixture is an ordinary `git add` under
+  `assets/fixtures/`, and it is synthetic: a new person's export never goes there. Tests take their paths
+  from `tests/paths.py` (`FIXTURES_DIR`, `LOCAL_INPUT_DIR`, `OUTPUT_DIR`, `input_csv_files()`); a
+  test that needs a person's own export skips when `data/input/` lacks it. The sdist excludes both
+  `assets/` and `data/`.
 - Never hardcode a platform-specific cache path; resolve it at runtime.
 - **Anything over ~5 MB that must travel goes through Git LFS**: `git lfs install` once,
   `git lfs track "<path>"`, commit the pointer, never the raw blob.
@@ -426,7 +423,8 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
 ## 6. Testing — layer 1
 
 - **Run via uv, always** (§4). Use `-vvv` when diagnosing.
-- **Real data + ground truth.** Integration tests against real vendor files in `data/input/`.
+- **Real data + ground truth.** Integration tests against the vendor-shaped fixtures in
+  `assets/fixtures/`, and against real exports in `data/input/` when present.
   Exercise the actual parse/process paths — do not mock a data transformation. **Compute expected
   values at runtime from the fixture**, and not by running the code under test (§2, the
   redundancy-check rule).
@@ -457,7 +455,8 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
   `load_dotenv` at import time, and that mutation stays in `os.environ` for the whole session.
 - `tests/conftest.py` provides a session-scoped `nightscout_data_dir` fixture that downloads
   Nightscout JSON from `NIGHTSCOUT_URL` (optional `NIGHTSCOUT_TOKEN` / `NIGHTSCOUT_API_SECRET`) into
-  `data/input/`, cached; `--nightscout-redownload` forces refresh.
+  `data/input/`, cached; `--nightscout-redownload` forces refresh. Without a pull there, it returns
+  the committed JSON in `assets/fixtures/`.
 
 ---
 
@@ -669,8 +668,9 @@ same applies when the user corrects a preference: it goes in §10, in their word
   `FormatParser._glucose_to_canonical`, which reads the column's declared unit. `derive_schema`
   accepts `append_data_columns` for columns a variant grew (Libre EU ketones). Those ketone
   columns stay on the vendor schema; unified parse drops them (RM6).
-- `data/.gitignore` ignores `input/` outright (F2); new vendor fixtures are not auto-tracked. The
-  mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it is absent.
+- Committed fixtures are in `assets/fixtures/`, local exports in the git-ignored `data/input/`
+  (RM3; F2 resolved). The mmol/L Libre fixture stays local and `tests/test_libre_eu.py` skips when it
+  is absent.
 - **The triage loop runs on the seats kit since 2026-10-21.** The local copies of the scripts
   (`scripts/triage-state.py`, `scripts/triage-archive.py`, `scripts/watch-inbox.sh`, adopted from the
   gist 2026-08-17) are gone; the kit's `classes/triage/` replaced them after its ledger was shown to
@@ -747,7 +747,7 @@ register the more-specific identity first.
   takes the combined file whole, and is the only route that takes `date_order` (the exporter writes
   dates in the browser's locale). The built-in Nightscout
   API CSV endpoints are **not** supported (headerless 5-col entries; treatments returns JSON anyway)
-  — `data/input/nightscout_entries.csv` is kept as a negative control. JSON files do **not** go
+  — `assets/fixtures/nightscout_entries.csv` is kept as a negative control. JSON files do **not** go
   through `detect_format()`.
 - **Detection order.** `FORMAT_DETECTION_PATTERNS` returns on first match. `DEXCOM_EU` before
   `DEXCOM`, `LIBRE_EU` before `LIBRE` — the mmol/L exports also match the generic patterns.

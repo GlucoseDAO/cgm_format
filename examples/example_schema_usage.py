@@ -363,8 +363,8 @@ def run_format_detection_and_validation(data_dir: Path, parsed_dir: Path | None,
 if __name__ == "__main__":
     # Setup paths
     project_root = Path(__file__).parent.parent
-    data_dir = project_root / "data" / "input"
-    parsed_dir = project_root / "data" / "parsed"
+    data_dir = project_root / "assets" / "fixtures"
+    parsed_dir = project_root / "data" / "output" / "parsed"
     output_file = project_root / "validation_report.txt"
     
     # Check data directory exists

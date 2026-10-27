@@ -43,13 +43,6 @@ onto the 5-minute grid. `mark_time_duplicates` flags the later row `TIME_DUPLICA
 first. Whether a duplicate pair should be reconciled into one reading rather than flagged is a
 policy decision, not a parser bug — left open.
 
-### F2 — `data/.gitignore` no longer allowlists `input/`
-
-Commit `44e3bb9` dropped the `!` so `data/input/` is ignored outright. Only fixtures already in git
-history stay tracked; a new vendor file cannot be committed without `git add -f`. The mmol/L
-Libre fixture therefore stays local, and tests skip when it is absent. CLAUDE.md §3 records the
-current ignore rule.
-
 ### F3 — a stale `cgm_format.egg-info` silently shadows the installed version
 
 Found while verifying the 0.10.0 bump. `cgm_format.__version__` reported **0.2.2** on a checkout
@@ -209,11 +202,11 @@ field beside `rows` rather than a redefinition of it.
 
 ### F16 — the alignment gate's reference fixture cannot be regenerated
 
-`data/comparison/livia_reference.csv` is the training-side ground truth
+`assets/fixtures/comparison/livia_reference.csv` is the training-side ground truth
 `tests/test_livia_reference_alignment.py` gates against. Three places tell you how to regenerate it:
 
 - `tests/test_livia_reference_alignment.py:10` and its skip message at `:48`
-- `data/comparison/glucose_config_livia_reference.yaml:8` — `uv run python scripts/generate_livia_reference.py --force`
+- `assets/fixtures/comparison/glucose_config_livia_reference.yaml:8` — `uv run python scripts/generate_livia_reference.py --force`
 - `docs/modification_plan.md`, in the fixture table and the key-file reference
 
 `scripts/generate_livia_reference.py` does not exist, and `git log --all -- '*generate_livia_reference*'`

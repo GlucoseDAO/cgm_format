@@ -48,7 +48,7 @@ uv run pytest tests/ -k "idempotency"
 **Purpose:** Validates format detection and Frictionless schema compliance for all CGM formats.
 
 **Key Features:**
-- Parametrized tests run on all CSV files in `data/input/` directory
+- Parametrized tests run on all CSV files in `assets/fixtures/`, and in `data/input/` when present
 - Validates format detection for Dexcom, Libre, and Unified formats
 - Uses Frictionless library to validate CSV files against their schemas
 - Suppresses known vendor format issues (e.g., Dexcom's "Low"/"High" text markers)
@@ -86,7 +86,7 @@ is absent.
 - Validates unified format schema compliance
 - Tests roundtrip: vendor → unified → CSV → unified
 - Tests sequence detection with large gaps
-- No mocking - uses real data files from `data/input/` directory
+- No mocking - uses the fixtures in `assets/fixtures/` (and real exports in `data/input/` when present)
 
 **Test Classes:**
 - **TestFormatDetection** - Format detection for all data files
@@ -100,7 +100,7 @@ is absent.
   - `test_datetime_column_type()` - Verifies datetime column has correct Polars type
   - `test_glucose_values_reasonable()` - Checks glucose values are in valid range (20-500 mg/dL)
 
-- **TestSaveToDirectory** - Saving parsed files to `data/parsed/`
+- **TestSaveToDirectory** - Saving parsed files to `data/output/parsed/`
   - `test_save_all_parsed_files()` - Parses and saves all files to parsed directory
   - `test_parsed_files_can_be_read_back()` - Tests roundtrip: parse → save → read → compare
 
@@ -319,7 +319,7 @@ is absent.
 
 **Key Features:**
 - Parametrized tests run on each file individually (clear pass/fail per file)
-- No mocking - uses actual data files from `data/input/` directory
+- No mocking - uses the fixtures in `assets/fixtures/` (and real exports in `data/input/` when present)
 - Tests complete pipeline: parse → interpolate → synchronize → prepare → convert
 - Tests error handling, data consistency, and timestamp ordering
 
@@ -361,10 +361,11 @@ is absent.
 
 ## Test Data
 
-All tests use real CGM data files from the `data/input/` directory:
+Tests read the committed fixtures in `assets/fixtures/` and, when present, a person's own exports in
+the git-ignored `data/input/` (paths in `tests/paths.py`):
 - Tests automatically discover and parametrize over all CSV files
 - Unsupported formats (e.g., Medtronic Guardian Connect) are skipped using `format_supported()`
-- Parsed output is saved to `data/parsed/` for inspection
+- Parsed output is saved to `data/output/parsed/` for inspection
 
 ## Test Principles
 

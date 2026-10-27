@@ -164,7 +164,7 @@ These principles translate into a concrete checklist:
 
 5. **Export public symbols**: Add new enums and schemas to `__init__.py` and `__all__`.
 
-6. **Write integration tests**: Use real vendor CSV files in `data/input/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
+6. **Write integration tests**: Use vendor-shaped CSV fixtures in `assets/fixtures/`. Test detection, parsing, round-trip serialization, and full pipeline execution. Do not mock.
 
 The processor and schema validation require no changes for a new *vendor* — they only see `UnifiedFormat`, and the processor reads its target schema from `FormatProcessor.schema` rather than naming one. A source that carries measurement channels the core six data columns cannot hold (macronutrients, wearable streams, free-form annotations) targets `CGM_SCHEMA_EXTENDED` and is processed by `ExtendedFormatProcessor`; that is a schema choice, not a vendor branch.
 

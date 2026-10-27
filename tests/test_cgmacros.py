@@ -38,8 +38,9 @@ from cgm_format.interface.cgm_interface import (
     MultiTrackSourceError,
     SupportedCGMFormat,
 )
+from tests.paths import FIXTURES_DIR
 
-FIXTURE_DIR = Path(__file__).parent.parent / "data" / "input" / "cgmacros_synthetic"
+FIXTURE_DIR = FIXTURES_DIR / "cgmacros_synthetic"
 
 
 def _corpus_root() -> Path:
@@ -176,7 +177,7 @@ class TestMultiTrackRefusal:
 
     def test_single_track_formats_are_unaffected(self) -> None:
         """The refusal must not leak into the export path."""
-        dexcom = Path(__file__).parent.parent / "data" / "input" / "Clarity_Export_synthetic.csv"
+        dexcom = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
         _skip_if_missing(dexcom)
 
         frame = FormatParser.parse_file(dexcom)
@@ -185,7 +186,7 @@ class TestMultiTrackRefusal:
 
     def test_parse_tracks_refuses_a_single_track_format(self) -> None:
         """A one-entry mapping would blur the distinction the categories draw."""
-        dexcom = Path(__file__).parent.parent / "data" / "input" / "Clarity_Export_synthetic.csv"
+        dexcom = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
         _skip_if_missing(dexcom)
 
         with pytest.raises(NotImplementedError, match="single-track"):

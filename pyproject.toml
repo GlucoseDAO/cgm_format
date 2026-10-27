@@ -57,6 +57,7 @@ packages = ["src/cgm_format"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "assets/",
     "data/",
     "data/**/*.csv",
     ".pytest_cache/",

@@ -481,8 +481,7 @@ identity is directory shape (`*/Dexcom_*.csv` ∧ `*/Food_Log_*.csv`).
 
 ## Fixtures
 
-`data/.gitignore` ignores `input/` outright (finding F2 in [dogfooding.md](dogfooding.md)), so any
-new fixture needs `git add -f`. None of the three real datasets travels with the repo: CGMacros is
+Committed fixtures live in `assets/fixtures/`; `data/` is git-ignored whole. None of the three real datasets travels with the repo: CGMacros is
 CC BY-NC-SA, D1NAMO is CC BY-**SA** (share-alike, so a derived excerpt carries obligations onward),
 and Loop is DUA-bound. Size alone would rule out the last two regardless.
 

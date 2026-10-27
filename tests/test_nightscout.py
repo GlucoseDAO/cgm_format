@@ -38,6 +38,7 @@ from cgm_format.formats.unified import (
     CGM_SCHEMA,
     UnifiedEventType,
 )
+from tests.paths import FIXTURES_DIR, nightscout_json_dir
 
 
 class FormatParser(FormatParserPrime):
@@ -45,15 +46,13 @@ class FormatParser(FormatParserPrime):
     validation_mode: ClassVar[ValidationMethod] = ValidationMethod.INPUT | ValidationMethod.OUTPUT
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
-
-ENTRIES_JSON = DATA_DIR / "nightscout_entries.json"
-TREATMENTS_JSON = DATA_DIR / "nightscout_treatments.json"
-PROFILE_JSON = DATA_DIR / "nightscout_profile.json"
+NIGHTSCOUT_DIR = nightscout_json_dir()
+ENTRIES_JSON = NIGHTSCOUT_DIR / "nightscout_entries.json"
+TREATMENTS_JSON = NIGHTSCOUT_DIR / "nightscout_treatments.json"
+PROFILE_JSON = NIGHTSCOUT_DIR / "nightscout_profile.json"
 
 if not ENTRIES_JSON.exists():
-    pytest.skip("No Nightscout entries JSON found in data/input/", allow_module_level=True)
+    pytest.skip(f"No Nightscout entries JSON found in {NIGHTSCOUT_DIR}", allow_module_level=True)
 
 
 # =============================================================================
@@ -532,7 +531,7 @@ class TestJsonRouting:
 
     def test_exporter_csv_is_still_routed_to_the_csv_parser(self) -> None:
         """The JSON branch must not swallow the CSV path it shares an entry point with."""
-        exporter_csv = DATA_DIR / "nightscout-data-with-treatments.csv"
+        exporter_csv = FIXTURES_DIR / "nightscout-data-with-treatments.csv"
         if not exporter_csv.exists():
             pytest.skip(f"{exporter_csv.name} not present")
         assert FormatParserPrime._is_nightscout_entries_json(exporter_csv.read_text()) is False
@@ -638,7 +637,7 @@ class TestNightscoutSafetyAndTolerance:
 # Exporter CSV dates written in a non-US locale (S6)
 # =============================================================================
 
-EXPORTER_CSV = DATA_DIR / "nightscout-data-with-treatments.csv"
+EXPORTER_CSV = FIXTURES_DIR / "nightscout-data-with-treatments.csv"
 
 # The committed exporter fixture was written by a US browser: "4/7/2026","7:59:42 PM".
 _US_ROW = re.compile(r'^"(\d{1,2}/\d{1,2}/\d{4})","(\d{1,2}:\d{2}:\d{2} [AP]M)",(.*)$')

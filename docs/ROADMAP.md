@@ -43,25 +43,6 @@ Nothing to build until a major is scheduled; it waits for one.
 
 ---
 
-## RM3 — `data/` layout does not match the house convention
-
-**State:** blocked: desk #71 (which layout: split committed fixtures into `assets/fixtures/`, rename only the output folders, or keep it; recommended the split) · **Owner:** lead · **Severity:** low
-
-The house layout puts committed fixtures in `assets/` and reserves `data/` for git-ignored
-`input/` · `interim/` · `output/`. This repo commits `data/input/` and writes generated output to
-`data/parsed/`, `data/cli_test_output/` and `data/cli_examples_output/`.
-
-Deferred on purpose, and out of scope for any task that is not this task: every integration test
-path, the `.gitignore` ignore-all (F2: `input/` is not allowlisted), the sdist exclusion and `tests/conftest.py`'s
-Nightscout download target are built on the current names and all work today. Doing it properly
-means one change that moves the fixtures, updates every test path, rewrites the allowlist, and fixes
-the docs that name these directories — planned as a unit, not smuggled into an unrelated edit.
-
-Legality: no effect on anything a consumer imports, so a patch — but it touches `data/input/` paths
-that examples and docs quote, so the docs move with it.
-
----
-
 ## RM4 — the CLI does not load `.env`
 
 **State:** blocked: desk #106 (the release's version, 0.15.0 or 0.14.2; built, and the full suite green on main) · **Owner:** lead · **Severity:** low

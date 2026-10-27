@@ -1,6 +1,6 @@
 """Regression gate: cgm_format inference vs GDP reference on Livia Dexcom data.
 
-Fixtures (committed under data/comparison/):
+Fixtures (committed under assets/fixtures/comparison/):
   - livia_test.csv              — raw Dexcom input (copy from glucose_data_processing)
   - glucose_config_livia_reference.yaml — GDP config for reference generation
   - livia_reference.csv         — training-grid reference (regenerate via script)
@@ -30,9 +30,10 @@ from tests.comparison.livia_alignment import (
     filter_reference_to_inference_window,
     format_alignment_report,
 )
+from tests.paths import FIXTURES_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-COMPARISON_DIR = PROJECT_ROOT / "data" / "comparison"
+COMPARISON_DIR = FIXTURES_DIR / "comparison"
 INPUT_CSV = COMPARISON_DIR / "livia_test.csv"
 REFERENCE_CSV = COMPARISON_DIR / "livia_reference.csv"
 

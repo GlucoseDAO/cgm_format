@@ -20,10 +20,7 @@ import pandas as pd
 from cgm_format import FormatParser
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
 from cgm_format.formats.unified import CGM_SCHEMA as UNIFIED_SCHEMA
-
-
-# Test data directory
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
+from tests.paths import FIXTURES_DIR, input_csv_files, LOCAL_INPUT_DIR
 
 
 def get_test_files_by_format():
@@ -32,14 +29,9 @@ def get_test_files_by_format():
     Returns:
         List of tuples (file_path, expected_format)
     """
-    if not DATA_DIR.exists():
-        pytest.skip(f"Data directory not found: {DATA_DIR}")
-    
-    csv_files = list(DATA_DIR.glob("*.csv"))
-    csv_files = [f for f in csv_files if "parsed" not in str(f)]
-    
+    csv_files = input_csv_files()
     if not csv_files:
-        pytest.skip(f"No CSV files found in {DATA_DIR}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR}")
     
     # Detect format for each file using format_supported
     files_by_format = []
@@ -351,7 +343,7 @@ class TestLibreCoverageInGlob:
         assert SupportedCGMFormat.LIBRE in formats
 
     def test_libre_eu_fixture_discovered_when_present(self) -> None:
-        jongrove = DATA_DIR / "JonGrove_glucose_13-8-2026.csv"
+        jongrove = LOCAL_INPUT_DIR / "JonGrove_glucose_13-8-2026.csv"
         if not jongrove.exists():
             pytest.skip(f"Fixture not found: {jongrove}")
         by_format = get_test_files_by_format()

@@ -35,13 +35,13 @@ from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     UnknownFormatError,
 )
+from tests.paths import FIXTURES_DIR, nightscout_json_dir
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-NIGHTSCOUT_ENTRIES = DATA_DIR / "nightscout_entries.json"
-NIGHTSCOUT_TREATMENTS = DATA_DIR / "nightscout_treatments.json"
-NIGHTSCOUT_PROFILE = DATA_DIR / "nightscout_profile.json"
-DEXCOM_FIXTURE = DATA_DIR / "Clarity_Export_synthetic.csv"
-LIBRE_FIXTURE = DATA_DIR / "FreeStyle_Libre_3_synthetic.csv"
+NIGHTSCOUT_ENTRIES = nightscout_json_dir() / "nightscout_entries.json"
+NIGHTSCOUT_TREATMENTS = nightscout_json_dir() / "nightscout_treatments.json"
+NIGHTSCOUT_PROFILE = nightscout_json_dir() / "nightscout_profile.json"
+DEXCOM_FIXTURE = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
+LIBRE_FIXTURE = FIXTURES_DIR / "FreeStyle_Libre_3_synthetic.csv"
 
 
 def _skip_if_missing(path: Path) -> None:

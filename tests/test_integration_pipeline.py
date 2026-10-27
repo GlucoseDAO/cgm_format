@@ -26,23 +26,14 @@ from cgm_format.interface.cgm_interface import (
     SMALL_GAP_MAX_MINUTES,
     EXPECTED_INTERVAL_MINUTES,
 )
-
-
-# Data directory relative to project root
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
+from tests.paths import FIXTURES_DIR, input_csv_files
 
 
 def get_test_files() -> List[Path]:
-    """Get all CSV files from the data directory."""
-    if not DATA_DIR.exists():
-        pytest.skip(f"Data directory not found: {DATA_DIR}")
-    
-    csv_files = list(DATA_DIR.glob("*.csv"))
-    # Exclude the parsed subdirectory
-    csv_files = [f for f in csv_files if "parsed" not in str(f)]
-    
+    """The committed fixtures' CSV files, then the local exports' when present."""
+    csv_files = input_csv_files()
     if not csv_files:
-        pytest.skip(f"No CSV files found in {DATA_DIR}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR}")
     
     return csv_files
 

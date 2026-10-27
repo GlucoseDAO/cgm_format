@@ -15,9 +15,9 @@ import polars as pl
 import pytest
 
 from cgm_format import FormatParser
+from tests.paths import FIXTURES_DIR
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-LIBRE = DATA_DIR / "FreeStyle_Libre_3_synthetic.csv"
+LIBRE = FIXTURES_DIR / "FreeStyle_Libre_3_synthetic.csv"
 
 
 def rewrite_libre_timestamps(text: str, to_format: str) -> str:
@@ -55,7 +55,7 @@ def test_libreview_patient_report_preamble() -> None:
     assert FormatParser.parse_from_string(reshaped).equals(FormatParser.parse_from_string(text))
 
 
-GUARDIAN = DATA_DIR / "medtronics_test_livia.csv"
+GUARDIAN = FIXTURES_DIR / "medtronics_test_livia.csv"
 MMOL = 18.0182
 
 
@@ -113,7 +113,7 @@ def test_carelink_mmol(unit: str) -> None:
     assert worst <= 0.05 * MMOL + 1e-9  # one decimal of mmol/L, rounded
 
 
-PUMP = DATA_DIR / "medtronic_pump_synthetic.csv"
+PUMP = FIXTURES_DIR / "medtronic_pump_synthetic.csv"
 
 
 @pytest.mark.skipif(not PUMP.exists(), reason="synthetic pump export absent")

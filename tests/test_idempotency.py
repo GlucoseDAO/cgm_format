@@ -25,9 +25,9 @@ from cgm_format.interface.cgm_interface import (
 )
 from cgm_format.formats.unified import CGM_SCHEMA, Quality, UnifiedEventType
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
+from tests.paths import FIXTURES_DIR, input_csv_files, LOCAL_INPUT_DIR
 
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 # Every chain that calls synchronize_timestamps runs twice: once re-timing
 # glucose onto the grid (the 0.12.0 default) and once keeping each reading's
@@ -64,19 +64,13 @@ def get_supported_test_files() -> List[Path]:
     """Get only supported CSV files from the data directory.
 
     Uses format_supported to filter out unsupported formats. Discovers every
-    ``*.csv`` under data/input/, so the committed synthetic Libre (now with
+    ``*.csv`` in assets/fixtures/ and data/input/, so the committed synthetic Libre (now with
     scan rows) always participates, and the local mmol/L ``LIBRE_EU`` fixture
     participates when present.
     """
-    if not DATA_DIR.exists():
-        pytest.skip(f"Data directory not found: {DATA_DIR}")
-    
-    csv_files = list(DATA_DIR.glob("*.csv"))
-    # Exclude the parsed subdirectory
-    csv_files = [f for f in csv_files if "parsed" not in str(f)]
-    
+    csv_files = input_csv_files()
     if not csv_files:
-        pytest.skip(f"No CSV files found in {DATA_DIR}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR}")
     
     supported_files = []
     
@@ -591,7 +585,7 @@ class TestGridRetiming:
     recompute after the first pass would satisfy every chain above and be wrong.
     """
 
-    COMPARISON_DIR = Path(__file__).parent.parent / "data" / "comparison"
+    COMPARISON_DIR = FIXTURES_DIR / "comparison"
 
     @pytest.mark.parametrize("file_path", get_supported_test_files(), ids=lambda p: p.name)
     def test_retiming_never_consumes_its_own_output(
@@ -775,7 +769,7 @@ class TestLibreCoverageInGlob:
         assert "FreeStyle_Libre_3_synthetic.csv" in names
 
     def test_libre_eu_fixture_discovered_when_present(self) -> None:
-        jongrove = DATA_DIR / "JonGrove_glucose_13-8-2026.csv"
+        jongrove = LOCAL_INPUT_DIR / "JonGrove_glucose_13-8-2026.csv"
         if not jongrove.exists():
             pytest.skip(f"Fixture not found: {jongrove}")
         files = get_supported_test_files()

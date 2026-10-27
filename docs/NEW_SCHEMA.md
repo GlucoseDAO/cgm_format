@@ -21,7 +21,7 @@ is "supported" when **all** of these exist and agree:
 
 Plus, non-code-but-expected:
 - **Real-data integration tests** in `tests/` (detection, parse, round-trip, full pipeline).
-- A committed **fixture** under `data/input/` (the only committed `data/` subtree).
+- A committed synthetic **fixture** under `assets/fixtures/`.
 - Optionally, a generated **`formats/<vendor>.json`** Frictionless schema (via the module's
   `regenerate_schema_json()`; batch-regen with `scripts/regenerate_all_schemas.py`).
 
@@ -294,9 +294,9 @@ metadata row is drift, not a new format. Work top to bottom; each step reference
 - [ ] **6. Regenerate the JSON schema** (optional but conventional): call the module's
   `regenerate_schema_json()`, or run `scripts/regenerate_all_schemas.py`, and commit `formats/<vendor>.json`.
 
-- [ ] **7. Add a real fixture** under `data/input/`. Fixtures already in git history stay tracked;
-  `data/.gitignore` ignores `input/` outright (F2), so a *new* file needs `git add -f`. Do not
-  invent a row. Add `!<dir>/` + `!<dir>/**` if you introduce a new top-level `data/` subtree.
+- [ ] **7. Add a fixture** under `assets/fixtures/`: a synthetic export in the vendor's real layout,
+  never a person's file (those stay in the git-ignored `data/input/`). Do not invent a row's shape the
+  vendor never writes.
 
 - [ ] **8. Write real-data integration tests** in `tests/` (no mocking). The four things a supported
   format must demonstrably do — **recognized, parses, round-trips, Frictionless-validatable** — each get

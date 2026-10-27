@@ -35,8 +35,9 @@ from cgm_format.formats.d1namo import (
 )
 from cgm_format.formats.supported import FORMAT_CATEGORY, PATH_DETECTION_PROBES
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
+from tests.paths import FIXTURES_DIR
 
-FIXTURE_DIR = Path(__file__).parent.parent / "data" / "input" / "d1namo_synthetic"
+FIXTURE_DIR = FIXTURES_DIR / "d1namo_synthetic"
 DIABETES_FIXTURE = FIXTURE_DIR / "diabetes_subset" / "001"
 HEALTHY_FIXTURE = FIXTURE_DIR / "healthy_subset" / "012_diabetes"
 

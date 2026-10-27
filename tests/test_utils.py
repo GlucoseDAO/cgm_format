@@ -11,17 +11,13 @@ import polars as pl
 
 from cgm_format import FormatParser, FormatProcessor
 from cgm_format.formats.unified import UnifiedEventType, CGM_SCHEMA
-
-
-# Constants - relative to project root
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
+from tests.paths import input_csv_files
 
 
 @pytest.fixture(scope="session")
 def sample_unified_df():
     """Get a sample unified format DataFrame for testing."""
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
+    csv_files = input_csv_files()
     if len(csv_files) == 0:
         pytest.skip("No CSV files found in data directory")
     

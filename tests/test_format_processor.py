@@ -17,6 +17,7 @@ from cgm_format.interface.cgm_interface import (
 from cgm_format.formats.unified import CGM_SCHEMA, CGM_SCHEMA_EXTENDED, UnifiedEventType, Quality, GOOD_QUALITY
 from cgm_format.interface.cgm_interface import ValidationMethod
 from typing import ClassVar
+from tests.paths import FIXTURES_DIR, input_csv_files
 
 class FormatProcessor(FormatProcessorPrime):
     """Format processor for testing."""
@@ -1829,16 +1830,9 @@ def test_synchronize_timestamps_is_lossless():
     from pathlib import Path
     from cgm_format.format_parser import FormatParser
     
-    # Get test data directory
-    data_dir = Path(__file__).parent.parent / "data" / "input"
-    if not data_dir.exists():
-        pytest.skip(f"Data directory not found: {data_dir}")
-    
-    csv_files = list(data_dir.glob("*.csv"))
-    csv_files = [f for f in csv_files if "parsed" not in str(f)]
-    
+    csv_files = input_csv_files()
     if not csv_files:
-        pytest.skip(f"No CSV files found in {data_dir}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR}")
     
     tested_files = 0
     

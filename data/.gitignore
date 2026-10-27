@@ -1,14 +1,5 @@
-# Default: ignore all new/untracked paths under data/ (CLI output, local dumps, etc.).
-# Version control is limited to this file. `input/` is listed without `!` (F2), so
-# fixtures already in git history stay tracked; a new file under input/ needs `git add -f`.
-
+# Nothing under data/ is committed (RM3): data/input/ holds a person's own exports and local downloads,
+# data/output/ what the tests, examples and CLI write, data/interim/ intermediate steps. Committed test
+# fixtures live in assets/fixtures/.
 *
 !.gitignore
-
-# input/ is ignored for *new* untracked files. See docs/dogfooding.md F2.
-# Add !<dir>/ + !<dir>/** only when committing another top-level subtree.
-input/
-input/**
-
-!comparison/
-!comparison/**

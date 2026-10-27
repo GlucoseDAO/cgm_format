@@ -1,6 +1,6 @@
 """MiniMed pump CareLink exports (MEDTRONIC_PUMP, RM16).
 
-The synthetic fixture, data/input/medtronic_pump_synthetic.csv, is hand-authored by
+The synthetic fixture, assets/fixtures/medtronic_pump_synthetic.csv, is hand-authored by
 scripts/make_synthetic_medtronic_pump.py, one or two rows per kind of record a real 720G export
 carries. Every expected value below is worked out by hand from that script's row list, never by
 running the parser. Real exports, when present under data/input/, are checked for the properties that
@@ -22,10 +22,10 @@ from cgm_format.formats.unified import CGM_SCHEMA_EXTENDED, UnifiedEventType
 from cgm_format.formats.medtronic import MedtronicColumn
 from cgm_format.formats.medtronic_pump import MedtronicPumpColumn
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormatError
+from tests.paths import FIXTURES_DIR, LOCAL_INPUT_DIR
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-SYNTHETIC = DATA_DIR / "medtronic_pump_synthetic.csv"
-GUARDIAN = DATA_DIR / "medtronics_test_livia.csv"
+SYNTHETIC = FIXTURES_DIR / "medtronic_pump_synthetic.csv"
+GUARDIAN = FIXTURES_DIR / "medtronics_test_livia.csv"
 
 pytestmark = pytest.mark.skipif(not SYNTHETIC.exists(), reason="synthetic pump fixture absent")
 
@@ -62,9 +62,7 @@ def caplog_module() -> List[logging.LogRecord]:
 
 def real_pump_exports() -> List[Path]:
     found = []
-    for f in sorted(DATA_DIR.glob("*.csv")):
-        if f == SYNTHETIC:
-            continue
+    for f in sorted(LOCAL_INPUT_DIR.glob("*.csv")):
         try:
             if FormatParser.detect_format(FormatParser.decode_raw_data(f.read_bytes())) == SupportedCGMFormat.MEDTRONIC_PUMP:
                 found.append(f)

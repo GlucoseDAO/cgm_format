@@ -56,7 +56,7 @@ def run_cli_command(args: List[str], description: str = "") -> subprocess.Comple
 @app.command()
 def main(
     data_dir: Path = typer.Option(
-        Path(__file__).parent.parent / "data" / "input",
+        Path(__file__).parent.parent / "assets" / "fixtures",
         "--data-dir",
         "-d",
         help="Directory containing CGM data files"
@@ -83,8 +83,7 @@ def main(
         raise typer.Exit(1)
     
     # Find a test file
-    csv_files = list(data_dir.glob("*.csv"))
-    csv_files = [f for f in csv_files if "parsed" not in str(f) and "cli_test" not in str(f)]
+    csv_files = sorted(data_dir.glob("*.csv"))
     
     if not csv_files:
         console.print(f"\n[red]Error: No CSV files found in {data_dir}[/red]")
@@ -95,8 +94,8 @@ def main(
     console.print(f"[bold]Data directory:[/bold] {data_dir}")
     
     # Create output directory
-    output_dir = data_dir / "cli_examples_output"
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path(__file__).parent.parent / "data" / "output" / "cli_examples"
+    output_dir.mkdir(parents=True, exist_ok=True)
     console.print(f"[bold]Output directory:[/bold] {output_dir}\n")
     
     # ===== 1. Format Detection =====

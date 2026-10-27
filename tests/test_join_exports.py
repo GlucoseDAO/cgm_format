@@ -13,8 +13,9 @@ import pytest
 
 from cgm_format import FormatParser, FormatProcessor
 from cgm_format.formats.unified import UnifiedEventType
+from tests.paths import FIXTURES_DIR
 
-DEXCOM = Path(__file__).parent.parent / "data" / "input" / "Clarity_Export_synthetic.csv"
+DEXCOM = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
 
 pytestmark = pytest.mark.skipif(not DEXCOM.exists(), reason="synthetic Dexcom export absent")
 

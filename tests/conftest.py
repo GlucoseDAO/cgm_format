@@ -18,25 +18,20 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
+from tests.paths import LOCAL_INPUT_DIR, NIGHTSCOUT_JSON, PROJECT_ROOT, nightscout_json_dir
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-NIGHTSCOUT_EXPECTED_FILES = [
-    DATA_DIR / "nightscout_entries.json",
-    DATA_DIR / "nightscout_treatments.json",
-    DATA_DIR / "nightscout_profile.json",
-]
+NIGHTSCOUT_EXPECTED_FILES = [LOCAL_INPUT_DIR / name for name in NIGHTSCOUT_JSON]
 
 
 def _nightscout_download(force: bool) -> Path:
-    """Download Nightscout JSON data to data/input/ if needed.
+    """Download Nightscout JSON data to data/input/ (local, git-ignored) if needed.
 
     Called once during collection so files are available for test
     parameterisation.
     """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOCAL_INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     nightscout_url = os.environ.get("NIGHTSCOUT_URL")
     nightscout_token = os.environ.get("NIGHTSCOUT_TOKEN")
@@ -48,22 +43,22 @@ def _nightscout_download(force: bool) -> Path:
                 "--nightscout-redownload requires NIGHTSCOUT_URL to be set "
                 "(in .env or environment)"
             )
-        return DATA_DIR
+        return LOCAL_INPUT_DIR
 
     all_exist = all(f.exists() and f.stat().st_size > 0 for f in NIGHTSCOUT_EXPECTED_FILES)
     if all_exist and not force:
-        return DATA_DIR
+        return LOCAL_INPUT_DIR
 
     from cgm_format.nightscout_downloader import download_nightscout
 
     download_nightscout(
         base_url=nightscout_url,
-        output_dir=DATA_DIR,
+        output_dir=LOCAL_INPUT_DIR,
         token=nightscout_token,
         api_secret=nightscout_secret,
     )
 
-    return DATA_DIR
+    return LOCAL_INPUT_DIR
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -84,6 +79,6 @@ def pytest_configure(config: pytest.Config) -> None:
 
 @pytest.fixture(scope="session")
 def nightscout_data_dir() -> Path:
-    """Return the data/input/ directory (download already happened during
-    ``pytest_configure``)."""
-    return DATA_DIR
+    """The directory the Nightscout JSON is read from: a live pull in data/input/ when there is one
+    (downloaded during ``pytest_configure``), else the committed fixtures."""
+    return nightscout_json_dir()

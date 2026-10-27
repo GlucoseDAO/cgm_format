@@ -170,7 +170,7 @@ Cheap and mechanical here: grep the item's symbols in `src/cgm_format/`, then
 Compare the claim against the **code**, not only against the docs, because the docs are often the
 thing that is wrong. This is the only step separating a real defect from bucket **(b)**.
 
-Reproduce with the library, on real data. `data/input/` holds committed vendor fixtures; the research
+Reproduce with the library, on real data. `assets/fixtures/` holds the committed vendor fixtures and `data/input/` any local real exports; the research
 corpora are behind `CGM_FORMAT_*_DIR` env vars and `scripts/download_*.py`. If the reporter names a
 corpus we do not have locally, say so in the reply rather than reasoning about it — an unreproduced
 finding answered as though it reproduced is worse than an honest "not reproduced here, and why".

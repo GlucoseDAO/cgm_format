@@ -5,7 +5,7 @@ This test ensures that:
 2. All detected files validate against their Frictionless schemas
 3. Known vendor format issues are properly suppressed
 
-Tests parametrized for all CSV files in the data/input directory.
+Tests parametrized for all CSV files in assets/fixtures/, and in data/input/ when present.
 """
 
 import pytest
@@ -17,6 +17,7 @@ from cgm_format.interface.cgm_interface import SupportedCGMFormat, UnknownFormat
 from cgm_format.formats.supported import SCHEMA_MAP, KNOWN_ISSUES_TO_SUPPRESS
 from cgm_format.formats.medtronic_pump import MEDTRONIC_PUMP_DETECTION_PATTERNS
 from cgm_format.cgm_cli import FrictionlessError, _should_suppress_error
+from tests.paths import FIXTURES_DIR, input_csv_files, LOCAL_INPUT_DIR
 
 # Optional: Use frictionless library if available
 try:
@@ -27,7 +28,6 @@ except ImportError:
 
 
 # Test data directory
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
 
 def is_medtronic_file(file_path: Path) -> bool:
     """Check if a file is a Medtronic CareLink export (Guardian Connect or a MiniMed pump).
@@ -51,10 +51,7 @@ def get_all_csv_files():
     Returns:
         List of Path objects for CSV files
     """
-    if not DATA_DIR.exists():
-        pytest.skip(f"Data directory not found: {DATA_DIR}")
-    
-    csv_files = list(DATA_DIR.glob("*.csv"))
+    csv_files = input_csv_files()
     # Exclude Medtronic files (not yet supported)
     csv_files = [f for f in csv_files if not is_medtronic_file(f)]
     # Exclude Nightscout supplementary files:
@@ -66,7 +63,7 @@ def get_all_csv_files():
     )]
     
     if not csv_files:
-        pytest.skip(f"No CSV files found in {DATA_DIR}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR} or {LOCAL_INPUT_DIR}")
     
     return sorted(csv_files)
 

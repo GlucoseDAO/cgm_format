@@ -8,6 +8,32 @@ changed and where, so a later reader can find the code without a git archaeology
 
 ---
 
+## RM3 — `data/` layout does not match the house convention
+
+**Severity:** low · **Status:** shipped 2026-10-27, in the release after 0.14.1 · **Owner:** lead
+
+The house layout puts committed fixtures in `assets/` and reserves `data/` for git-ignored
+`input/` · `interim/` · `output/`. This repo commits `data/input/` and writes generated output to
+`data/parsed/`, `data/cli_test_output/` and `data/cli_examples_output/`.
+
+Deferred on purpose, and out of scope for any task that is not this task: every integration test
+path, the `.gitignore` ignore-all (F2: `input/` is not allowlisted), the sdist exclusion and `tests/conftest.py`'s
+Nightscout download target are built on the current names and all work today. Doing it properly
+means one change that moves the fixtures, updates every test path, rewrites the allowlist, and fixes
+the docs that name these directories — planned as a unit, not smuggled into an unrelated edit.
+
+Legality: no effect on anything a consumer imports, so a patch — but it touches `data/input/` paths
+that examples and docs quote, so the docs move with it.
+
+**What changed.** Desk #71 chose option 1, the house layout. Committed fixtures moved with `git mv`
+to `assets/fixtures/` (`data/comparison/` became `assets/fixtures/comparison/`); `data/` is ignored
+whole; generated output goes to `data/output/` (`parsed/`, `cli_test/`, `cli_examples/`,
+`processed_examples/`), with `data/interim/` reserved. Tests take their paths from `tests/paths.py`;
+`tests/conftest.py` downloads a Nightscout pull into `data/input/` and reads the committed JSON from
+`assets/fixtures/` when there is none. The sdist excludes `assets/` as it does `data/`. F2 resolved.
+
+---
+
 ## RM22 — exports of formats the library claims, failing on real files
 
 **Severity:** high · **Status:** shipped 2026-10-22 in 0.14.1 (`ed6accc`, `5c2142d`, `cd2dc21`) · **Owner:** lead

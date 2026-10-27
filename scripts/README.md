@@ -242,7 +242,7 @@ uv run python scripts/scrub_synthetic_libre.py INPUT_FILE OUTPUT_FILE [--seed SE
 ```bash
 uv run python scripts/scrub_synthetic_libre.py \
     data/input/FreeStyle_Libre_3__11-12-2024.csv \
-    data/input/FreeStyle_Libre_3_synthetic.csv
+    assets/fixtures/FreeStyle_Libre_3_synthetic.csv
 ```
 
 ### Transformations Applied
@@ -284,7 +284,7 @@ uv run python scripts/scrub_synthetic_dexcom.py INPUT_FILE OUTPUT_FILE [--seed S
 ```bash
 uv run python scripts/scrub_synthetic_dexcom.py \
     data/input/Clarity_Export__Patient_2025-05-14_154517.csv \
-    data/input/Clarity_Export_synthetic.csv
+    assets/fixtures/Clarity_Export_synthetic.csv
 ```
 
 ### Transformations Applied

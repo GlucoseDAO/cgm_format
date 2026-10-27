@@ -16,23 +16,17 @@ from cgm_format.interface.cgm_interface import (
     SMALL_GAP_MAX_MINUTES,
     SupportedCGMFormat,
 )
+from tests.paths import FIXTURES_DIR, input_csv_files, LOCAL_INPUT_DIR, OUTPUT_DIR
 
 # Data directory relative to project root
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-TEST_OUTPUT_DIR = Path(__file__).parent.parent / "data" / "cli_test_output"
+TEST_OUTPUT_DIR = OUTPUT_DIR / "cli_test"
 
 
 def get_test_files() -> List[Path]:
-    """Get all CSV files from the data directory."""
-    if not DATA_DIR.exists():
-        pytest.skip(f"Data directory not found: {DATA_DIR}")
-    
-    csv_files = list(DATA_DIR.glob("*.csv"))
-    # Exclude the parsed subdirectory and test output
-    csv_files = [f for f in csv_files if "parsed" not in str(f) and "cli_test_output" not in str(f)]
-    
+    """The committed fixtures' CSV files, then the local exports' when present."""
+    csv_files = input_csv_files()
     if not csv_files:
-        pytest.skip(f"No CSV files found in {DATA_DIR}")
+        pytest.skip(f"No CSV files found in {FIXTURES_DIR} or {LOCAL_INPUT_DIR}")
     
     return csv_files
 
@@ -336,7 +330,7 @@ class TestCLIReport:
         
         result = run_cli_command([
             "report",
-            str(DATA_DIR),
+            str(FIXTURES_DIR),
             "--output", str(report_file),
             "--pattern", "*.csv",
             "--frictionless",
@@ -377,7 +371,7 @@ class TestCLIReport:
         
         result = run_cli_command([
             "report",
-            str(DATA_DIR),
+            str(FIXTURES_DIR),
             "--output", str(report_file),
             "--no-frictionless",
         ])
@@ -395,7 +389,7 @@ class TestCLIReport:
         
         result = run_cli_command([
             "report",
-            str(DATA_DIR),
+            str(FIXTURES_DIR),
             "--output", str(report_file),
             "--show-all",  # Don't suppress known issues
         ])
@@ -414,7 +408,7 @@ class TestCLIBatch:
         
         result = run_cli_command([
             "batch",
-            str(DATA_DIR),
+            str(FIXTURES_DIR),
             "--output", str(batch_output),
             "--pattern", "*.csv",
             "--command", "parse",
@@ -529,7 +523,7 @@ class TestAliasAwareSuppression:
     alias data, not a KNOWN_ISSUES entry, so it works even for LIBRE (empty
     suppression list)."""
 
-    LIBREVIEW = DATA_DIR / "Libreview2026-07-23-17_55_12.csv"
+    LIBREVIEW = LOCAL_INPUT_DIR / "Libreview2026-07-23-17_55_12.csv"
 
     def _label_err(self, field_name: str, label: str) -> dict:
         # frictionless IncorrectLabelError exposes field_name (expected) + label (actual)

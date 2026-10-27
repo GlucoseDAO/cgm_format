@@ -46,8 +46,9 @@ from cgm_format.formats.supported import (
     UNIFIED_TARGET_SCHEMA,
 )
 from cgm_format.interface.cgm_interface import SupportedCGMFormat
+from tests.paths import FIXTURES_DIR
 
-FIXTURE_DIR = Path(__file__).parent.parent / "data" / "input" / "bigideas_synthetic"
+FIXTURE_DIR = FIXTURES_DIR / "bigideas_synthetic"
 SUBJECT_001 = FIXTURE_DIR / "001"
 SUBJECT_003 = FIXTURE_DIR / "003"
 SUBJECT_007 = FIXTURE_DIR / "007"

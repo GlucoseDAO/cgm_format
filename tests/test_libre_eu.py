@@ -20,6 +20,7 @@ from cgm_format.formats.unified import CGM_SCHEMA, MMOL_TO_MGDL, Quality, Unifie
 from cgm_format.interface.cgm_interface import SupportedCGMFormat, ValidationMethod
 from cgm_format.formats.libre import LibreColumn, LibreRecordType
 from cgm_format.formats.libre_eu import LibreEUColumn
+from tests.paths import FIXTURES_DIR, LOCAL_INPUT_DIR
 
 
 class FormatParser(FormatParserPrime):
@@ -28,12 +29,11 @@ class FormatParser(FormatParserPrime):
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "input"
 
-JONGROVE = DATA_DIR / "JonGrove_glucose_13-8-2026.csv"
-SYNTHETIC_LIBRE = DATA_DIR / "FreeStyle_Libre_3_synthetic.csv"
-SYNTHETIC_DEXCOM = DATA_DIR / "Clarity_Export_synthetic.csv"
-LIBREVIEW = DATA_DIR / "Libreview2026-07-23-17_55_12.csv"
+JONGROVE = LOCAL_INPUT_DIR / "JonGrove_glucose_13-8-2026.csv"
+SYNTHETIC_LIBRE = FIXTURES_DIR / "FreeStyle_Libre_3_synthetic.csv"
+SYNTHETIC_DEXCOM = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
+LIBREVIEW = LOCAL_INPUT_DIR / "Libreview2026-07-23-17_55_12.csv"
 
 LIBRE_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M"
 

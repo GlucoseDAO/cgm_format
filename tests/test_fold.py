@@ -24,10 +24,10 @@ import pytest
 from cgm_format import FormatParser, FormatProcessor
 from cgm_format.format_processor import ExtendedFormatProcessor, FoldSource
 from cgm_format.formats.unified import CGM_SCHEMA, UnifiedEventType
+from tests.paths import FIXTURES_DIR, LOCAL_INPUT_DIR
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-DEXCOM = DATA_DIR / "Clarity_Export_synthetic.csv"
-PUMP = DATA_DIR / "medtronic_pump_synthetic.csv"
+DEXCOM = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
+PUMP = FIXTURES_DIR / "medtronic_pump_synthetic.csv"
 
 pytestmark = pytest.mark.skipif(not (DEXCOM.exists() and PUMP.exists()), reason="synthetic fixtures absent")
 
@@ -214,14 +214,12 @@ class TestContract:
         assert ExtendedFormatProcessor.fold_insulin_onto_grid(cgm, pump, source=FoldSource.PUMP).equals(folded)
 
 
-REAL_CGM = DATA_DIR / "Clarity_Export__Patient_2026-07-17_215123.csv"
+REAL_CGM = LOCAL_INPUT_DIR / "Clarity_Export__Patient_2026-07-17_215123.csv"
 
 
 def _real_pumps() -> List[Path]:
     found = []
-    for f in sorted(DATA_DIR.glob("*.csv")):
-        if f == PUMP:
-            continue
+    for f in sorted(LOCAL_INPUT_DIR.glob("*.csv")):
         head = f.read_bytes()[:4000].decode("utf-8", errors="ignore")
         if "Estimated Reservoir Volume after Fill (U)" in head:
             found.append(f)

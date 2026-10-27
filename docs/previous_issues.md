@@ -12,6 +12,21 @@ Ids are never reused, including ids that landed here. Compute the next one from 
 
 ---
 
+## F2 — `data/.gitignore` no longer allowlists `input/`
+
+Commit `44e3bb9` dropped the `!` so `data/input/` is ignored outright. Only fixtures already in git
+history stay tracked; a new vendor file cannot be committed without `git add -f`. The mmol/L
+Libre fixture therefore stays local, and tests skip when it is absent. CLAUDE.md §3 records the
+current ignore rule.
+
+**Resolution (RM3, desk #71, 2026-10-27).** The layout split by what is committed: every tracked file
+under `data/` moved to `assets/fixtures/` (the synthetic exports, the corpus trees, the Nightscout
+fixtures and `comparison/`), and `data/.gitignore` became `*` plus `!.gitignore`. A new fixture is an
+ordinary `git add` under `assets/fixtures/`; `data/input/` holds only a person's own exports and
+Nightscout pulls, and cannot be staged by accident. Tests read their paths from `tests/paths.py`.
+
+---
+
 ## F4 — the D1NAMO refusal named an entry point that could not do what it said
 
 Found on 2026-08-15 while auditing the 0.10.0 branch for merge readiness, by following the library's

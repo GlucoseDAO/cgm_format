@@ -48,12 +48,12 @@ from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     UnknownFormatError,
 )
+from tests.paths import FIXTURES_DIR
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "input"
-CGMACROS_ROOT = DATA_DIR / "cgmacros_synthetic"
-D1NAMO_DIABETES_ROOT = DATA_DIR / "d1namo_synthetic" / "diabetes_subset"
-D1NAMO_HEALTHY_ROOT = DATA_DIR / "d1namo_synthetic" / "healthy_subset"
-BIGIDEAS_ROOT = DATA_DIR / "bigideas_synthetic"
+CGMACROS_ROOT = FIXTURES_DIR / "cgmacros_synthetic"
+D1NAMO_DIABETES_ROOT = FIXTURES_DIR / "d1namo_synthetic" / "diabetes_subset"
+D1NAMO_HEALTHY_ROOT = FIXTURES_DIR / "d1namo_synthetic" / "healthy_subset"
+BIGIDEAS_ROOT = FIXTURES_DIR / "bigideas_synthetic"
 
 
 def _skip_if_missing(path: Path) -> None:

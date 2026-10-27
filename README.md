@@ -536,7 +536,7 @@ from pathlib import Path
 # Validate all files in data directory
 run_format_detection_and_validation(
     data_dir=Path("data"),
-    parsed_dir=Path("data/parsed"),
+    parsed_dir=Path("data/output/parsed"),
     output_file=Path("validation_report.txt")
 )
 ```

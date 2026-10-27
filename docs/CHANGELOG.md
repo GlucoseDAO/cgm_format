@@ -13,6 +13,14 @@ patch.
 
 ## Unreleased
 
+### Committed fixtures move to `assets/fixtures/` (RM3)
+
+- Every committed test file under `data/` moved to `assets/fixtures/`; `data/` is now git-ignored
+  whole, so a person's export in `data/input/` cannot be staged by accident (F2 resolved). Generated
+  output goes to `data/output/`. Paths quoted from `data/input/…_synthetic.csv` or `data/comparison/`
+  in older notes now live under `assets/fixtures/`.
+- Nothing a consumer imports changed: the package, its schema and the CLI are untouched.
+
 ### The CLI reads `.env` (RM4)
 
 - `cgm-cli` loads `.env` from the current directory at startup; values already in the environment
