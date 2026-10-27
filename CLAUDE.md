@@ -281,7 +281,7 @@ examples/             runnable usage examples — documentation, keep them worki
 
 - **Committed fixtures live in `assets/fixtures/`; nothing under `data/` is committed** (RM3, in the
   release after 0.14.1). `data/.gitignore` is `*` plus `!.gitignore`, with no allowlist, so a real
-  export in `data/input/` cannot be staged by accident. A new fixture is an ordinary `git add` under
+  export in `data/input/` cannot be staged by accident; never `git add -f` anything under `data/`. A new fixture is an ordinary `git add` under
   `assets/fixtures/`, and it is synthetic: a new person's export never goes there. Tests take their paths
   from `tests/paths.py` (`FIXTURES_DIR`, `LOCAL_INPUT_DIR`, `OUTPUT_DIR`, `input_csv_files()`); a
   test that needs a person's own export skips when `data/input/` lacks it. The sdist excludes both
