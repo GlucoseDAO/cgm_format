@@ -34,6 +34,9 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 # an announcement for tooling seats wakes it; the kit's tooling seat may reach it about a kit issue.
 wake_from = "cgm-format/triage agents-kit/tooling */secretary"
 tags = "tooling"
+# The tooling role's duties the lead holds here (the kit's D181, since v0.1.165): the pin and the kit's
+# gaps. With no seat holding pin-mover, every seat is woken to move the pin on a release; triage never does.
+duties = "pin-mover kit-gaps"
 
 [seat.lead.watch.plan]
 # The plan's items that need the lead (the kit's D116): no state or owner, a date come, a blocked item
