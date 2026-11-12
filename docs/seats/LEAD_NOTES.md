@@ -28,6 +28,11 @@ headers, Tidepool, AZT1D, Jaeb) wait on desk #63.
 
 **In flight:** nothing.
 
+**Acting pm duty "milestones"** (kit v0.1.187, no pm seat here): `docs/seats/LEAD_STATE.md` is the source of
+the one post kept in `#cgm-format>state`; after editing it, `watchdog.sh keep lead state '#cgm-format>state'
+docs/seats/LEAD_STATE.md` edits that post in place. A landed result also gets one post in
+`#cgm-format>milestones`.
+
 **Polars 2:** 2.1.0 is out and the floor `polars>=1.39.3` has no cap, so a fresh install takes it while
 the lock holds 1.43.2. The full suite on `a259264` under 2.1.0 (`uv run --with 'polars==2.1.0'`, the
 lock untouched), 2026-11-05: 1715 passed, 16 skipped, no warning, the same counts as on 1.x. Nothing
