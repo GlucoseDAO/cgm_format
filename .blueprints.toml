@@ -38,6 +38,11 @@ tags = "tooling"
 # gaps. With no seat holding pin-mover, every seat is woken to move the pin on a release; triage never does.
 duties = "pin-mover kit-gaps"
 
+[seat.lead.watch.pypi]
+# Each version of cgm-format the package index publishes, said once (the kit's lead text, from v0.1.188):
+# the person publishes by hand, so a reminder is checked against the index, never against the notes.
+cmd = "python3 kit:drivers/pypi/watch-pypi.py"
+
 [seat.lead.watch.plan]
 # The plan's items that need the lead (the kit's D116): no state or owner, a date come, a blocked item
 # with no desk question, a desk question answered. Hourly; each said once.
