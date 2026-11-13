@@ -45,9 +45,9 @@ cmd = "python3 kit:drivers/pypi/watch-pypi.py"
 
 [seat.lead.watch.upstream-index]
 # The key upstream's releases from the package index (the kit's L136, L143; the liaison's duty upstream-index, held
-# by the lead acting, there being no liaison here). Polars only: the core's one dependency (CLAUDE.md §2). Plain PKG
-# rather than --upstream, which this kit release lacks; this table has no [on_publish] for it to run.
-cmd = "python3 kit:drivers/pypi/watch-pypi.py polars"
+# by the lead acting, there being no liaison here). Polars only: the core's one dependency (CLAUDE.md §2).
+# --upstream as the duty declares it; --final (kit #470, v0.1.201) keeps Polars' betas and rcs from waking the lead.
+cmd = "python3 kit:drivers/pypi/watch-pypi.py polars --upstream --final"
 
 [seat.lead.watch.plan]
 # The plan's items that need the lead (the kit's D116): no state or owner, a date come, a blocked item
