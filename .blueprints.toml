@@ -43,6 +43,12 @@ duties = "pin-mover kit-gaps"
 # the person publishes by hand, so a reminder is checked against the index, never against the notes.
 cmd = "python3 kit:drivers/pypi/watch-pypi.py"
 
+[seat.lead.watch.upstream-index]
+# The key upstream's releases from the package index (the kit's L136, L143; the liaison's duty upstream-index, held
+# by the lead acting, there being no liaison here). Polars only: the core's one dependency (CLAUDE.md §2). Plain PKG
+# rather than --upstream, which this kit release lacks; this table has no [on_publish] for it to run.
+cmd = "python3 kit:drivers/pypi/watch-pypi.py polars"
+
 [seat.lead.watch.plan]
 # The plan's items that need the lead (the kit's D116): no state or owner, a date come, a blocked item
 # with no desk question, a desk question answered. Hourly; each said once.
