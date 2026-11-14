@@ -10,9 +10,9 @@ holds both. **Open: the person's PyPI publish of both** (`uv publish dist/*`; Py
 desk #106 (asked 2026-10-24; default: no release). `CLAUDE.md` §11 says "since 0.14.2": correct it
 to whatever ships. Full suite green on `9bafa5b` (2026-10-25: 1715 passed, 16 skipped).
 
-**On the desk, asked 2026-10-22 while the person was away:** #63 which surveyed formats come next
-(default: the drift fixes, now built as RM22); #64 Excel behind the `cli` extra (default: no Excel);
-#65 split / study-group values in `to_sugarone_ready_df` (default: no). #71 answered 2026-10-27
+**Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
+shipped in 0.14.1; localized headers, Tidepool, AZT1D, Jaeb stay unfiled until a user or dataset asks), #64 (no
+Excel), #65 (no split values). #106-#109 got an **Update:** that they still hold. #71 answered 2026-10-27
 (option 1): RM3 built as `8825c7b`, pushed, unreleased; it rides the same release as RM4.
 
 The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its repro scripts
@@ -23,8 +23,7 @@ match the person's uploaded names is unconfirmed.
 RM15 each wait on a design decision, asked 2026-10-24: desk #107 (RM7, what the streaming reader
 returns; recommended LazyFrame plus a sink-to-Parquet helper), #108 (RM14, thresholds as settings
 with a warning on `mean`), #109 (RM15, a `NightscoutError` family whose kinds also subclass the httpx
-errors, so a minor). Default for each: nothing built. `docs/FORMAT_SURVEY.md` §5's later items (localized
-headers, Tidepool, AZT1D, Jaeb) wait on desk #63.
+errors, so a minor). Default for each: nothing built.
 
 **In flight:** nothing.
 

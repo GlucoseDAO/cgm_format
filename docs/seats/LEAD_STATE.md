@@ -9,4 +9,3 @@
 2. ❓ Lazy streaming reader for large exports, RM7 (lead; waits on desk #107).
 3. ❓ A warning when averaging two sensors that disagree, RM14 (lead; waits on desk #108).
 4. ❓ Network errors as the library's own exception types, RM15 (lead; waits on desk #109).
-5. ❓ Which surveyed formats to add next (lead; waits on desk #63).
