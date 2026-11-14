@@ -37,6 +37,9 @@ tags = "tooling"
 # The tooling role's duties the lead holds here (the kit's D181, since v0.1.165): the pin and the kit's
 # gaps. With no seat holding pin-mover, every seat is woken to move the pin on a release; triage never does.
 duties = "pin-mover kit-gaps"
+# How many of the lead's roadmap items it may build now (the kit's D200, from v0.1.207): idle 2 h with that above 0,
+# its watchdog wakes it. Urgent items, and unattended ones while the person is away; blocked and dated ones never count.
+queue = "sh kit:bin/py.sh kit:classes/lead/plan-watch.py --count docs/ROADMAP.md"
 
 [seat.lead.watch.pypi]
 # Each version of cgm-format the package index publishes, said once (the kit's lead text, from v0.1.188):
