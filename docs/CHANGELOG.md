@@ -28,6 +28,21 @@ patch.
   column warnings are logged once.
 - Additive throughout: a new class, a new method, two constants, two keyword arguments. A minor.
 
+### Nightscout download failures raise the library's own errors (RM15)
+
+- `NightscoutError` and its three kinds, `NightscoutUnreachableError` (no reply),
+  `NightscoutStatusError` (an error status, in `.status_code`) and `NightscoutResponseError` (a reply
+  that is not JSON), come from `cgm_format` without importing `httpx`. `download_nightscout`,
+  `FormatParser.from_nightscout_url` and `cgm-cli download-nightscout` raise them (desk #109, option 1).
+- Each raised error is also the exception raised before: `httpx.ConnectError`, `httpx.HTTPStatusError`,
+  `json.JSONDecodeError` and the rest, with their attributes. Code catching those keeps working,
+  so nothing a caller catches today is lost. Every message has the read token redacted.
+- `cgm-cli download-nightscout` prints one line for each kind instead of a traceback for an error
+  status or a reply that is not JSON.
+- A profile endpoint that replies with something that is not JSON is now a warning, as an error status
+  on it already was: the profile is not used. `nightscout_profile.json` then holds `null`.
+- Additive: four new exception classes. A minor.
+
 ## 0.14.2 — 2026-11-15
 
 **Patch.** The CLI reads `.env`, and `download-nightscout` takes its URL and keys from the

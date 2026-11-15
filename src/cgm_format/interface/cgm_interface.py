@@ -334,6 +334,36 @@ class MultiTrackSourceError(ValueError):
     """
     pass
 
+class NightscoutError(Exception):
+    """A Nightscout download that failed (RM15, desk #109).
+
+    Catch it without importing `httpx`, which the library keeps behind the `cli`
+    extra. Each raised error is one of three kinds below, and is **also** the
+    exception the download raised before this family existed: a refused
+    connection is still an `httpx.ConnectError`, an error reply still an
+    `httpx.HTTPStatusError`, a reply that is not JSON still a
+    `json.JSONDecodeError`. So code that catches those keeps working, and the
+    original's attributes (`request`, `response`) are on the error itself.
+    """
+
+
+class NightscoutUnreachableError(NightscoutError):
+    """No reply: the connection was refused, the name did not resolve, or it
+    timed out. Retrying later may succeed."""
+
+
+class NightscoutStatusError(NightscoutError):
+    """The instance replied with an error status. `status_code` holds it: a 401
+    or 403 is a credential problem, a 5xx the instance's own."""
+
+    status_code: int
+
+
+class NightscoutResponseError(NightscoutError):
+    """The instance replied, but not with the JSON a Nightscout endpoint returns
+    (an HTML page from a proxy, a truncated body)."""
+
+
 # Maximum length for error messages to prevent huge CSV dumps in logs
 MAX_ERROR_MESSAGE_LENGTH = 8192
 

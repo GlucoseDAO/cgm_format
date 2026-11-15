@@ -35,9 +35,19 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple, Type, TypeVar
+
+from cgm_format.interface.cgm_interface import (
+    NightscoutError,
+    NightscoutResponseError,
+    NightscoutStatusError,
+    NightscoutUnreachableError,
+)
 
 logger = logging.getLogger(__name__)
+
+_Kind = TypeVar("_Kind", bound=NightscoutError)
+_KIND_CLASSES: Dict[Tuple[type, type], type] = {}
 
 
 def _ensure_httpx():  # type: ignore[no-untyped-def]
@@ -81,17 +91,44 @@ def _build_headers(api_secret: Optional[str]) -> dict[str, str]:
 _TOKEN_QUERY_RE = re.compile(r"([?&]token=)[^&\s]*")
 
 
+def _redact(text: str) -> str:
+    return _TOKEN_QUERY_RE.sub(r"\1<redacted>", text)
+
+
+def _as_kind(kind: Type[_Kind], exc: Exception, message: Optional[str] = None) -> _Kind:
+    """`exc` remade as an instance of `kind` that is still an instance of `type(exc)`.
+
+    This is how each `NightscoutError` kind is also the exception it replaces (desk
+    #109): the class derives from both, and the instance carries the original's
+    attributes (`request`, `response`, a JSON error's `doc` and `pos`), so code
+    catching `httpx.ConnectError` or `json.JSONDecodeError` catches it as before.
+    The message is redacted of the read token whatever its source.
+    """
+    original = type(exc)
+    cls = _KIND_CLASSES.get((kind, original))
+    if cls is None:
+        cls = type(
+            kind.__name__,
+            (kind, original),
+            {"__module__": kind.__module__, "__qualname__": f"{kind.__name__}[{original.__name__}]"},
+        )
+        _KIND_CLASSES[(kind, original)] = cls
+    made = cls.__new__(cls)
+    made.__dict__.update(exc.__dict__)
+    made.args = (_redact(message if message is not None else str(exc)),)
+    return made  # type: ignore[return-value]
+
+
 def _raise_for_status_without_token(response: "httpx.Response") -> None:
-    """``raise_for_status`` with the read token stripped from the message.
+    """``raise_for_status`` as a `NightscoutStatusError`, the read token stripped from the message.
 
     httpx builds ``HTTPStatusError`` messages containing the full request URL, and the
     Nightscout read token travels as a ``?token=`` query parameter. So any caller that
     logs the exception -- which is the normal thing to do with a failed download --
     writes a live credential into its logs (S5).
 
-    The exception type is preserved deliberately: callers already catching
-    ``httpx.HTTPStatusError`` keep working, and this is a redaction rather than a new
-    error contract.
+    The error is still an ``httpx.HTTPStatusError``: callers already catching that keep
+    working. The unredacted original is not chained, since it carries the token.
     """
     if not response.is_error:
         return
@@ -99,11 +136,51 @@ def _raise_for_status_without_token(response: "httpx.Response") -> None:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise httpx.HTTPStatusError(
-            _TOKEN_QUERY_RE.sub(r"\1<redacted>", str(exc)),
-            request=exc.request,
-            response=exc.response,
-        ) from None
+        error = _as_kind(NightscoutStatusError, exc)
+        error.status_code = response.status_code
+        raise error from None
+
+
+def _get(client: "httpx.Client", url: str, params: dict[str, str]) -> "httpx.Response":
+    """One GET, its failure to get any reply raised as a `NightscoutError` kind."""
+    httpx = _ensure_httpx()
+    try:
+        return client.get(url, params=params)
+    except httpx.TransportError as exc:
+        # Refused, unresolvable, timed out: nothing came back.
+        raise _as_kind(NightscoutUnreachableError, exc) from exc
+    except (httpx.TooManyRedirects, httpx.DecodingError) as exc:
+        # Something came back, but not a reply that could be read.
+        raise _as_kind(NightscoutResponseError, exc) from exc
+
+
+def _json(response: "httpx.Response", endpoint: str) -> object:
+    """The reply's JSON, or a `NightscoutResponseError` naming the endpoint."""
+    try:
+        return response.json()
+    except json.JSONDecodeError as exc:
+        raise _as_kind(
+            NightscoutResponseError, exc, f"{endpoint}: the reply is not JSON ({exc})"
+        ) from exc
+
+
+def _profile(response: "httpx.Response") -> object:
+    """The profile's JSON, or None with a warning: the profile holds settings rather
+    than readings and is not used, so neither an error status nor a reply that is not
+    JSON may fail an import over it (S5)."""
+    if response.is_error:
+        reason = f"returned {response.status_code}"
+    else:
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            reason = "replied with something that is not JSON"
+    logger.warning(
+        "Nightscout profile endpoint %s; continuing without it, and nightscout_profile.json "
+        "holds null. The profile holds settings rather than readings and is not used.",
+        reason,
+    )
+    return None
 
 
 def download_nightscout(
@@ -128,6 +205,13 @@ def download_nightscout(
 
     Returns:
         Tuple of (entries_json_path, treatments_json_path, profile_json_path)
+
+    Raises:
+        NightscoutUnreachableError: No reply (refused, unresolvable, timed out).
+        NightscoutStatusError: An error status on entries or treatments. The profile's,
+            or a profile that is not JSON, is a warning: the profile is not used.
+        NightscoutResponseError: A reply that is not JSON, or could not be read.
+        Each is also the httpx or json exception this raised before RM15.
     """
     httpx = _ensure_httpx()
 
@@ -150,29 +234,26 @@ def download_nightscout(
     # raise_for_status below with "Redirect response '301 Moved Permanently'" instead of
     # working, and users type bare hostnames constantly (S3).
     with httpx.Client(timeout=timeout, headers=headers, follow_redirects=True) as client:
-        entries_resp = client.get(f"{base}/api/v1/entries.json", params=entry_params)
+        entries_resp = _get(client, f"{base}/api/v1/entries.json", entry_params)
         _raise_for_status_without_token(entries_resp)
 
-        treatments_resp = client.get(f"{base}/api/v1/treatments.json", params=treatment_params)
+        treatments_resp = _get(client, f"{base}/api/v1/treatments.json", treatment_params)
         _raise_for_status_without_token(treatments_resp)
 
         # The profile is fetched and then discarded -- it holds settings, not readings.
         # So a permission that allows entries but denies profile must not fail the whole
         # import on an endpoint whose result is thrown away (S5).
-        profile_resp = client.get(f"{base}/api/v1/profile.json", params=profile_params)
-        if profile_resp.is_error:
-            logger.warning(
-                "Nightscout profile endpoint returned %s; continuing without it. "
-                "The profile holds settings rather than readings and is not used.",
-                profile_resp.status_code,
-            )
+        profile_resp = _get(client, f"{base}/api/v1/profile.json", profile_params)
+        entries = _json(entries_resp, "entries.json")
+        treatments = _json(treatments_resp, "treatments.json")
+        profile = _profile(profile_resp)
 
     entries_path = output_dir / "nightscout_entries.json"
     treatments_path = output_dir / "nightscout_treatments.json"
     profile_path = output_dir / "nightscout_profile.json"
 
-    entries_path.write_text(json.dumps(entries_resp.json(), indent=2, ensure_ascii=False))
-    treatments_path.write_text(json.dumps(treatments_resp.json(), indent=2, ensure_ascii=False))
-    profile_path.write_text(json.dumps(profile_resp.json(), indent=2, ensure_ascii=False))
+    entries_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+    treatments_path.write_text(json.dumps(treatments, indent=2, ensure_ascii=False))
+    profile_path.write_text(json.dumps(profile, indent=2, ensure_ascii=False))
 
     return entries_path, treatments_path, profile_path

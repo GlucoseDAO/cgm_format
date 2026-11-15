@@ -29,6 +29,9 @@ from cgm_format.format_processor import FormatProcessor, ExtendedFormatProcessor
 from cgm_format.interface.cgm_interface import (
     SupportedCGMFormat,
     MultiTrackSourceError,
+    NightscoutResponseError,
+    NightscoutStatusError,
+    NightscoutUnreachableError,
     UnknownFormatError,
     MalformedDataError,
     ZeroValidInputError,
@@ -943,7 +946,6 @@ def download_nightscout_cmd(
         console.print("[red]✗ No Nightscout URL: pass it, or set NIGHTSCOUT_URL (in the environment or .env).[/red]")
         raise typer.Exit(1)
     try:
-        import httpx
         from cgm_format.nightscout_downloader import download_nightscout as _download
     except ImportError:
         console.print("[red]httpx is required for Nightscout downloads. Install with: uv add httpx[/red]")
@@ -960,10 +962,15 @@ def download_nightscout_cmd(
                 api_secret=api_secret,
                 days=days,
             )
-    except httpx.TransportError as e:
-        # The instance could not be reached at all (refused, DNS, timeout): one line, not a
-        # traceback. HTTP status failures already raise with the token redacted.
-        console.print(f"[red]✗ Could not reach {url}: {type(e).__name__}: {e}[/red]")
+    except NightscoutUnreachableError as e:
+        # One line per kind, not a traceback; every message is already redacted of the token.
+        console.print(f"[red]✗ Could not reach {url}: {e}[/red]")
+        raise typer.Exit(1)
+    except NightscoutStatusError as e:
+        console.print(f"[red]✗ {url} replied {e.status_code}: {e}[/red]")
+        raise typer.Exit(1)
+    except NightscoutResponseError as e:
+        console.print(f"[red]✗ {url} replied with something that is not Nightscout's JSON: {e}[/red]")
         raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] Entries:    {entries_path}")

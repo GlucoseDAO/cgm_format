@@ -742,6 +742,9 @@ register the more-specific identity first.
   otherwise — and a skipped report is reported as skipped, never as clean (§5, three-valued).
 - **`httpx` is optional.** `nightscout_downloader` needs it (in `cli` / `dev` extras); import inside
   functions and raise a clear `ImportError` with install instructions if missing.
+  A failure on the network path raises a `NightscoutError` kind (`interface/cgm_interface.py`, RM15),
+  made by `_as_kind` so it is also the httpx or json exception it replaces; a new request path goes
+  through `_get` / `_json` rather than letting a raw httpx error escape.
 - **Nightscout dual-path.** (1) JSON API path — `parse_nightscout()` / `from_nightscout_exports()` /
   `from_nightscout_url()`, combining entries + treatments, `token` / `api_secret` auth. (2)
   nightscout-exporter CSV — a combined file with `# CGM ENTRIES` / `# TREATMENTS` section headers,

@@ -218,7 +218,7 @@ So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ## RM15 — network failures escape as third-party exceptions
 
-**State:** unattended (desk #109 answered 2026-11-15, option 1: a `NightscoutError` family whose kinds also subclass the matching httpx errors; a minor) · **Owner:** lead · **Severity:** medium
+**State:** built 2026-11-15, unreleased; blocked: desk #324 (0.15.0, with RM14) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
 

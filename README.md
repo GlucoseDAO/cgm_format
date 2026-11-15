@@ -588,6 +588,27 @@ df = FormatParser.from_nightscout_url("https://my-ns.example.com", api_secret="m
 df = FormatParser.parse_file("nightscout-data-with-treatments.csv")
 ```
 
+A failed download raises a `NightscoutError`, which you can catch without importing `httpx`. It
+comes in three kinds:
+
+- `NightscoutUnreachableError`: no reply (refused, unresolvable, timed out).
+- `NightscoutStatusError`: an error status, kept in `.status_code`.
+- `NightscoutResponseError`: a reply that is not Nightscout's JSON.
+
+Each is also the `httpx` or `json` exception raised before, so existing `except httpx.HTTPStatusError`
+code keeps working. The read token never appears in a message.
+
+```python
+from cgm_format import FormatParser, NightscoutError, NightscoutStatusError
+
+try:
+    df = FormatParser.from_nightscout_url("https://my-ns.example.com", token="my-token")
+except NightscoutStatusError as e:
+    print("Nightscout said", e.status_code)    # 401/403: the token; 5xx: the instance
+except NightscoutError as e:
+    print("download failed:", e)
+```
+
 The exporter writes dates in the exporting browser's locale. The parser infers the order from the
 file, but a file on a 12-hour clock in which no day is past the 12th reads both ways; it is read
 month first, with a warning. If you know the export came from a day-first locale, say so:
