@@ -6,9 +6,10 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 `dist/` holds all three. **Open: the person's PyPI publish** (`uv publish dist/*`; PyPI is at 0.13.0).
 0.14.2 (desk #106: patch) carries RM4 and RM3.
 
-**Building: RM14** (desk #108, option 2: `track_agreement()` measures; `track="mean"` warns when the tracks
-disagree, cut-offs as settings with defaults slope within 10 % and r above 0.9; no yes/no field). It is a
-minor, so its release needs the person's word on 0.15.0 (house rule: confirm a minor).
+**RM14 built** (`51e4b89`, unreleased): `track_agreement()` and the warning on `track="mean"`. Its release is
+0.15.0, a minor: desk #324 (asked 2026-11-15; recommended 0.15.0 once RM15 is built; default no release).
+**Building: RM15** (desk #109 option 1). CI was red from 2026-10-21 to 2026-11-15 on the collection-time
+Nightscout pull timing out; fixed in `66e940d` (fall back to fixtures with a warning), green on 3.10-3.14.
 
 **Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
 shipped in 0.14.1; localized headers, Tidepool, AZT1D, Jaeb stay unfiled until a user or dataset asks), #64 (no
@@ -19,7 +20,7 @@ The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its
 (`repro/`, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output names
 match the person's uploaded names is unconfirmed.
 
-**The plan's order** (`docs/ROADMAP.md`): RM14 (building), then RM15 and RM7 (both unattended), RM11 (after
+**The plan's order** (`docs/ROADMAP.md`): RM14 (built, desk #324), RM15 (building), RM7 (unattended), RM11 (after
 RM7), RM20 (next major only), RM6 (waits until 2027-01-21). Desk answers of 2026-11-15: #107 option 1 (RM7
 returns a `LazyFrame`, no Parquet helper), #108 option 2 (RM14), #109 option 1 (RM15: `NightscoutError` kinds
 that also subclass the httpx errors, a minor).

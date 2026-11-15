@@ -158,7 +158,7 @@ Constraints already settled:
 
 ## RM14 — no way to ask whether `track="mean"` is defensible for a subject
 
-**State:** building (desk #108 answered 2026-11-15, option 2: measure, and warn on averaging, with the cut-offs as settings; no yes/no answer on the result) · **Owner:** lead · **Severity:** medium
+**State:** built 2026-11-15, unreleased; blocked: desk #324 (0.15.0, a minor; recommended once RM15 is built too) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
 
