@@ -160,7 +160,7 @@ Constraints already settled:
 
 ## RM14 — no way to ask whether `track="mean"` is defensible for a subject
 
-**State:** built 2026-11-15, unreleased; blocked: desk #324 (0.15.0, a minor; recommended once RM15 is built too) · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #324 (built 2026-11-15, unreleased; its release, 0.15.0, a minor) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
 
@@ -220,7 +220,7 @@ So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ## RM15 — network failures escape as third-party exceptions
 
-**State:** built 2026-11-15, unreleased; blocked: desk #324 (0.15.0, with RM14) · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #324 (built 2026-11-15, unreleased; rides 0.15.0 with RM14) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
 
