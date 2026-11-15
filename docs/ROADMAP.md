@@ -83,7 +83,9 @@ exists.
 
 ## RM7 — lazy `scan_csv` ingest path
 
-**State:** building (desk #107 answered 2026-11-15, option 1: the streaming reader returns a `LazyFrame`; no sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
+**State:** blocked: desk #325 (whether the lazy reader keeps the file's row order; #107 chose a `LazyFrame`, and a measurement since shows the schema's sort defeats it) · **Owner:** lead · **Severity:** medium
+
+**Measured 2026-11-15** (Polars 1.43.2; a synthetic unsorted unified-layout CSV, 1.95 GB, 24 M rows): `scan_csv` → `sink_parquet` without a sort finishes under a 1 GB `MemoryMax` cgroup cap; with the total-order `sort` it is OOM-killed (137). Uncapped peaks: sort 3.6 GB, eager `read_csv` + sort 4.7 GB, so the sorted lazy path saves about a quarter. Peak RSS alone misleads here: `scan_csv` memory-maps the file, so a cap is the test. Polars 2.1.0 behaved the same at 484 MB. RM11 (Loop) needs a per-`PtID` split on top of whichever reader this becomes.
 
 Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
 detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest
