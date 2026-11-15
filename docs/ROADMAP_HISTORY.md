@@ -8,9 +8,34 @@ changed and where, so a later reader can find the code without a git archaeology
 
 ---
 
+## RM4 — the CLI does not load `.env`
+
+**Severity:** low · **Status:** shipped 2026-11-15 in 0.14.2 (`b58faf1`) · **Owner:** lead
+
+`tests/conftest.py` loads `.env` via `python-dotenv`, so `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
+`NIGHTSCOUT_API_SECRET` reach the test suite. `cgm_cli.py` does not, so the same credentials that
+make tests pass do nothing for `cgm-cli`. The house rule is that every CLI loads `.env` at startup
+before reading configuration, with the values documented in a `.env.template`.
+
+Two things to settle before writing code: `python-dotenv` currently sits in `dev`, not `cli`, so
+adopting this moves it (or adds it) to the `cli` extra; and the credential-neutralizing rule from
+`CLAUDE.md` §6 applies — a test asserting "no credential" must `setenv(VAR, "")`, never `delenv`,
+because `load_dotenv(override=False)` skips a key that is merely present.
+
+Legality: additive (a new optional config path), so minor.
+
+**What changed.** `cgm_cli.py` calls `load_dotenv(override=False)` from the current directory at
+startup, so values already in the environment win. `download-nightscout` falls back to
+`NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` / `NIGHTSCOUT_API_SECRET`, prints the URL it uses, and reports
+an unreachable instance in one line. `python-dotenv` moved to the `cli` extra; `.env.template` lists
+the keys. Desk #106 chose 0.14.2, a patch: the house default, since the Python interface did not
+change, over the minor that the sizing rule for a new configuration path suggested.
+
+---
+
 ## RM3 — `data/` layout does not match the house convention
 
-**Severity:** low · **Status:** shipped 2026-10-27, in the release after 0.14.1 · **Owner:** lead
+**Severity:** low · **Status:** built 2026-10-27, shipped 2026-11-15 in 0.14.2 · **Owner:** lead
 
 The house layout puts committed fixtures in `assets/` and reserves `data/` for git-ignored
 `input/` · `interim/` · `output/`. This repo commits `data/input/` and writes generated output to

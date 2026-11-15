@@ -43,24 +43,6 @@ Nothing to build until a major is scheduled; it waits for one.
 
 ---
 
-## RM4 — the CLI does not load `.env`
-
-**State:** blocked: desk #106 (the release's version, 0.15.0 or 0.14.2; built, and the full suite green on main) · **Owner:** lead · **Severity:** low
-
-`tests/conftest.py` loads `.env` via `python-dotenv`, so `NIGHTSCOUT_URL` / `NIGHTSCOUT_TOKEN` /
-`NIGHTSCOUT_API_SECRET` reach the test suite. `cgm_cli.py` does not, so the same credentials that
-make tests pass do nothing for `cgm-cli`. The house rule is that every CLI loads `.env` at startup
-before reading configuration, with the values documented in a `.env.template`.
-
-Two things to settle before writing code: `python-dotenv` currently sits in `dev`, not `cli`, so
-adopting this moves it (or adds it) to the `cli` extra; and the credential-neutralizing rule from
-`CLAUDE.md` §6 applies — a test asserting "no credential" must `setenv(VAR, "")`, never `delenv`,
-because `load_dotenv(override=False)` skips a key that is merely present.
-
-Legality: additive (a new optional config path), so minor.
-
----
-
 ## RM6 — event type and parser mapping for ketone readings
 
 **State:** waits until 2027-01-21: a real Libre export with populated ketone cells (none in the tree; narrowed by 0.10.0) · **Owner:** lead · **Severity:** medium

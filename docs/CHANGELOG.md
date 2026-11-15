@@ -11,7 +11,12 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.14.2 — 2026-11-15
+
+**Patch.** The CLI reads `.env`, and `download-nightscout` takes its URL and keys from the
+environment (RM4); committed test fixtures moved to `assets/fixtures/` and `data/` is ignored whole
+(RM3). Nothing the library's Python interface exposes is added, removed or retyped; `python-dotenv`
+moves from the `dev` extra to `cli`.
 
 ### Committed fixtures move to `assets/fixtures/` (RM3)
 
