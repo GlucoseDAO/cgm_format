@@ -456,7 +456,9 @@ open and merge without asking (`docs/seats/LEAD.md`). Installation-specific file
 - `tests/conftest.py` provides a session-scoped `nightscout_data_dir` fixture that downloads
   Nightscout JSON from `NIGHTSCOUT_URL` (optional `NIGHTSCOUT_TOKEN` / `NIGHTSCOUT_API_SECRET`) into
   `data/input/`, cached; `--nightscout-redownload` forces refresh. Without a pull there, it returns
-  the committed JSON in `assets/fixtures/`.
+  the committed JSON in `assets/fixtures/`. An instance that cannot be reached falls back the same way
+  with a warning in pytest's summary, rather than ending the session (CI was red on it from 2026-10-21);
+  under `--nightscout-redownload` it still fails.
 
 ---
 

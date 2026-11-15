@@ -8,6 +8,11 @@ that ``test_nightscout.py`` can discover the downloaded files for
 parameterisation.  Pass ``--nightscout-redownload`` to force a fresh download;
 this flag **requires** ``NIGHTSCOUT_URL`` to be set and will fail the session
 immediately if it is missing.
+
+An instance that cannot be reached (refused, timed out, an error reply) does not
+end the session: the tests read the committed fixtures instead, and pytest's
+summary carries a warning saying so. With ``--nightscout-redownload`` the failure
+still ends the session, since a fresh pull is what was asked for.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import httpx
 import pytest
 from dotenv import load_dotenv
 
@@ -74,7 +80,18 @@ def pytest_configure(config: pytest.Config) -> None:
     """Run Nightscout download at collection time so files are available for
     parameterised test discovery."""
     force = config.getoption("--nightscout-redownload", default=False)
-    _nightscout_download(force)
+    try:
+        _nightscout_download(force)
+    except httpx.HTTPError as e:
+        if force:
+            raise
+        config.issue_config_time_warning(
+            pytest.PytestWarning(
+                f"NIGHTSCOUT_URL could not be read ({type(e).__name__}): no live pull this "
+                "session; the Nightscout tests read the committed fixtures in assets/fixtures/."
+            ),
+            stacklevel=2,
+        )
 
 
 @pytest.fixture(scope="session")
