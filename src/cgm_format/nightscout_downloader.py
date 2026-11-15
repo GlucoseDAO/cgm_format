@@ -110,13 +110,27 @@ def _as_kind(kind: Type[_Kind], exc: Exception, message: Optional[str] = None) -
         cls = type(
             kind.__name__,
             (kind, original),
-            {"__module__": kind.__module__, "__qualname__": f"{kind.__name__}[{original.__name__}]"},
+            {
+                "__module__": kind.__module__,
+                "__qualname__": f"{kind.__name__}[{original.__name__}]",
+                "__str__": _kind_str,
+            },
         )
         _KIND_CLASSES[(kind, original)] = cls
-    made = cls.__new__(cls)
-    made.__dict__.update(exc.__dict__)
-    made.args = (_redact(message if message is not None else str(exc)),)
+    text = _redact(message if message is not None else str(exc))
+    if isinstance(exc, UnicodeDecodeError):
+        # A C-level error whose fields only its constructor sets; its args are those fields.
+        made = cls(exc.encoding, exc.object, exc.start, exc.end, exc.reason)
+    else:
+        made = cls.__new__(cls)
+        made.__dict__.update(exc.__dict__)
+        made.args = (text,)
+    made._nightscout_message = text
     return made  # type: ignore[return-value]
+
+
+def _kind_str(self: BaseException) -> str:
+    return getattr(self, "_nightscout_message", "") or BaseException.__str__(self)
 
 
 def _raise_for_status_without_token(response: "httpx.Response") -> None:
@@ -158,7 +172,7 @@ def _json(response: "httpx.Response", endpoint: str) -> object:
     """The reply's JSON, or a `NightscoutResponseError` naming the endpoint."""
     try:
         return response.json()
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise _as_kind(
             NightscoutResponseError, exc, f"{endpoint}: the reply is not JSON ({exc})"
         ) from exc
@@ -173,7 +187,7 @@ def _profile(response: "httpx.Response") -> object:
     else:
         try:
             return response.json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             reason = "replied with something that is not JSON"
     logger.warning(
         "Nightscout profile endpoint %s; continuing without it, and nightscout_profile.json "

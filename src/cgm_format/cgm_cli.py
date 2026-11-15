@@ -946,7 +946,8 @@ def download_nightscout_cmd(
         console.print("[red]✗ No Nightscout URL: pass it, or set NIGHTSCOUT_URL (in the environment or .env).[/red]")
         raise typer.Exit(1)
     try:
-        from cgm_format.nightscout_downloader import download_nightscout as _download
+        from cgm_format.nightscout_downloader import _ensure_httpx, download_nightscout as _download
+        _ensure_httpx()
     except ImportError:
         console.print("[red]httpx is required for Nightscout downloads. Install with: uv add httpx[/red]")
         raise typer.Exit(1)

@@ -35,7 +35,7 @@ patch.
   that is not JSON), come from `cgm_format` without importing `httpx`. `download_nightscout`,
   `FormatParser.from_nightscout_url` and `cgm-cli download-nightscout` raise them (desk #109, option 1).
 - Each raised error is also the exception raised before: `httpx.ConnectError`, `httpx.HTTPStatusError`,
-  `json.JSONDecodeError` and the rest, with their attributes. Code catching those keeps working,
+  `json.JSONDecodeError`, `UnicodeDecodeError` and the rest, with their attributes. Code catching those keeps working,
   so nothing a caller catches today is lost. Every message has the read token redacted.
 - `cgm-cli download-nightscout` prints one line for each kind instead of a traceback for an error
   status or a reply that is not JSON.

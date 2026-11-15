@@ -16,7 +16,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 import pytest
 
@@ -40,7 +40,10 @@ Replies = Dict[str, Tuple[int, str, str]]
 
 
 @contextlib.contextmanager
-def _server(replies: Replies) -> Iterator[str]:
+def _server(replies: Replies, raw: Optional[Dict[str, bytes]] = None) -> Iterator[str]:
+    """A local HTTP server answering each endpoint from `replies`; `raw` overrides a body
+    with bytes that need not be text."""
+    raw = raw or {}
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             pass
@@ -51,7 +54,7 @@ def _server(replies: Replies) -> Iterator[str]:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.end_headers()
-            self.wfile.write(body.encode())
+            self.wfile.write(raw.get(endpoint, body.encode()))
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -109,6 +112,14 @@ class TestTheThreeKinds:
         assert isinstance(error, json.JSONDecodeError)
         assert str(error).startswith("entries.json: the reply is not JSON")
         assert not (tmp_path / "pull" / "nightscout_entries.json").exists()
+
+    def test_a_reply_that_is_not_utf8_is_a_bad_reply_too(self, tmp_path: Path, healthy: Replies) -> None:
+        healthy["entries.json"] = (200, "application/json", "")
+        with _server(healthy, raw={"entries.json": b'[{"sgv": 1\xff\xfe}]'}) as url:
+            with pytest.raises(NightscoutResponseError) as excinfo:
+                _download(url, tmp_path)
+        assert isinstance(excinfo.value, UnicodeDecodeError)
+        assert str(excinfo.value).startswith("entries.json: the reply is not JSON")
 
     def test_the_family_is_caught_without_naming_httpx(self, tmp_path: Path) -> None:
         caught = None
