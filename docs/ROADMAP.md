@@ -83,7 +83,7 @@ exists.
 
 ## RM7 — lazy `scan_csv` ingest path
 
-**State:** blocked: desk #107 (what the streaming reader returns; recommended a LazyFrame plus a sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
+**State:** unattended (desk #107 answered 2026-11-15, option 1: the streaming reader returns a `LazyFrame`; no sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
 
 Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
 detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest
@@ -158,7 +158,7 @@ Constraints already settled:
 
 ## RM14 — no way to ask whether `track="mean"` is defensible for a subject
 
-**State:** blocked: desk #108 (whether the library warns on averaging two sensors that disagree; recommended a warning, cut-offs as settings) · **Owner:** lead · **Severity:** medium
+**State:** building (desk #108 answered 2026-11-15, option 2: measure, and warn on averaging, with the cut-offs as settings; no yes/no answer on the result) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
 
@@ -218,7 +218,7 @@ So **minor**. The warning alone would be a patch, but it rides the additive API.
 
 ## RM15 — network failures escape as third-party exceptions
 
-**State:** blocked: desk #109 (which errors a failed download raises; recommended a NightscoutError family that also subclasses the httpx errors) · **Owner:** lead · **Severity:** medium
+**State:** unattended (desk #109 answered 2026-11-15, option 1: a `NightscoutError` family whose kinds also subclass the matching httpx errors; a minor) · **Owner:** lead · **Severity:** medium
 
 Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
 

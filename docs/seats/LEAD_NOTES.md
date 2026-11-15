@@ -2,13 +2,13 @@
 
 State, not rules: rewritten to the present before a reset (`README.md` here, "Notes files").
 
-**As of 2026-10-27, unattended.** 0.14.0 and 0.14.1 are tagged and on GitHub with their dists; `dist/`
-holds both. **Open: the person's PyPI publish of both** (`uv publish dist/*`; PyPI is at 0.13.0).
+**As of 2026-11-15, unattended.** 0.14.0, 0.14.1 and 0.14.2 are tagged and on GitHub with their dists;
+`dist/` holds all three. **Open: the person's PyPI publish** (`uv publish dist/*`; PyPI is at 0.13.0).
+0.14.2 (desk #106: patch) carries RM4 and RM3.
 
-**Unreleased on `main`:** RM4 (`b58faf1`: the CLI loads `.env`, `download-nightscout` reads
-`NIGHTSCOUT_*`, python-dotenv into the `cli` extra, an unreachable instance is one line). Its version is
-desk #106 (asked 2026-10-24; default: no release). `CLAUDE.md` §11 says "since 0.14.2": correct it
-to whatever ships. Full suite green on `9bafa5b` (2026-10-25: 1715 passed, 16 skipped).
+**Building: RM14** (desk #108, option 2: `track_agreement()` measures; `track="mean"` warns when the tracks
+disagree, cut-offs as settings with defaults slope within 10 % and r above 0.9; no yes/no field). It is a
+minor, so its release needs the person's word on 0.15.0 (house rule: confirm a minor).
 
 **Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
 shipped in 0.14.1; localized headers, Tidepool, AZT1D, Jaeb stay unfiled until a user or dataset asks), #64 (no
@@ -19,11 +19,10 @@ The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its
 (`repro/`, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output names
 match the person's uploaded names is unconfirmed.
 
-**The plan's order** (`docs/ROADMAP.md`): RM4 (built, unreleased), RM20 (next major only), RM6 (waits until 2027-01-21), RM7, RM11 (after RM7), RM14, RM15. RM7, RM14 and
-RM15 each wait on a design decision, asked 2026-10-24: desk #107 (RM7, what the streaming reader
-returns; recommended LazyFrame plus a sink-to-Parquet helper), #108 (RM14, thresholds as settings
-with a warning on `mean`), #109 (RM15, a `NightscoutError` family whose kinds also subclass the httpx
-errors, so a minor). Default for each: nothing built.
+**The plan's order** (`docs/ROADMAP.md`): RM14 (building), then RM15 and RM7 (both unattended), RM11 (after
+RM7), RM20 (next major only), RM6 (waits until 2027-01-21). Desk answers of 2026-11-15: #107 option 1 (RM7
+returns a `LazyFrame`, no Parquet helper), #108 option 2 (RM14), #109 option 1 (RM15: `NightscoutError` kinds
+that also subclass the httpx errors, a minor).
 
 **In flight:** nothing.
 
