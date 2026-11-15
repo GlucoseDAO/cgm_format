@@ -83,7 +83,7 @@ exists.
 
 ## RM7 — lazy `scan_csv` ingest path
 
-**State:** unattended (desk #107 answered 2026-11-15, option 1: the streaming reader returns a `LazyFrame`; no sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
+**State:** building (desk #107 answered 2026-11-15, option 1: the streaming reader returns a `LazyFrame`; no sink-to-Parquet helper) · **Owner:** lead · **Severity:** medium
 
 Every public entry point funnels through `parse_file → bytes → decode_raw_data → str →
 detect_format`, which materializes the entire file as a Python string before parsing starts. Ingest

@@ -6,5 +6,5 @@
 
 **Next**
 1. ⏳ A measure of how well two sensors agree, and a warning when averaging two that disagree, RM14: built on `main`, unreleased (its release, 0.15.0, waits on desk #324).
-2. 🔨 Network errors as the library's own exception types, RM15 (lead; building, desk #109 answered).
-3. 📋 Lazy streaming reader for large exports, RM7 (lead; after RM15, desk #107 answered).
+2. ⏳ Network errors as the library's own exception types, RM15: built on `main`, unreleased (rides 0.15.0 with RM14, desk #324).
+3. 🔨 Lazy streaming reader for large exports, RM7 (lead; building, desk #107 answered).
