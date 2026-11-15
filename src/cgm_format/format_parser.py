@@ -3,6 +3,7 @@
 import csv
 import json
 import logging
+import math
 import tempfile
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Union, ClassVar, Optional
@@ -87,7 +88,10 @@ from cgm_format.interface.cgm_interface import (
     ZeroValidInputError,
     MultiTrackSourceError,
     SubjectEntry,
+    TrackAgreement,
     TrackCoverage,
+    AGREEMENT_MIN_CORRELATION,
+    AGREEMENT_SLOPE_TOLERANCE,
     ValidationMethod,
     truncate_error_message,
 )
@@ -2681,34 +2685,13 @@ class FormatParser(CGMParser):
     # ===== CGMacros: a multi-track corpus =====
 
     @classmethod
-    def _process_cgmacros(
-        cls,
-        text_data: str,
-        track: str = CGMACROS_TRACKS[0],
-    ) -> UnifiedFormat:
-        """Parse one CGMacros subject CSV into one sensor's unified frame.
+    def _read_cgmacros(cls, text_data: str) -> pl.DataFrame:
+        """Read one CGMacros subject CSV into its raw columns plus a parsed `datetime`.
 
-        The non-glucose rows — meals, macronutrients, heart rate, photo
-        annotations — are **replicated into every track**, because each track is
-        a complete self-contained view of those ten days as seen through one
-        sensor. Tracks are alternatives, never shards; concatenating two of them
-        double-counts every meal.
-
-        Args:
-            text_data: Decoded contents of one subject CSV.
-            track: Which sensor's series becomes `glucose`. One of
-                `CGMACROS_TRACKS`, or `CGMACROS_MEAN_TRACK` for the opt-in
-                synthetic average.
-
-        Returns:
-            One extended-schema frame for the requested track.
+        Shared by every track of one file and by `track_agreement`, so a file is
+        read once per call however many tracks come out of it, and the agreement
+        is measured on exactly the rows the tracks are built from.
         """
-        if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
-            raise ValueError(
-                f"Unknown CGMacros track {track!r}; expected one of "
-                f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
-            )
-
         try:
             raw = pl.read_csv(
                 StringIO(text_data),
@@ -2769,6 +2752,36 @@ class FormatParser(CGMParser):
         if len(raw) == 0:
             raise ZeroValidInputError(
                 "No CGMacros rows carried a parseable timestamp"
+            )
+        return raw
+
+    @classmethod
+    def _process_cgmacros(
+        cls,
+        raw: pl.DataFrame,
+        track: str = CGMACROS_TRACKS[0],
+    ) -> UnifiedFormat:
+        """Build one sensor's unified frame from a CGMacros subject's raw rows.
+
+        The non-glucose rows — meals, macronutrients, heart rate, photo
+        annotations — are **replicated into every track**, because each track is
+        a complete self-contained view of those ten days as seen through one
+        sensor. Tracks are alternatives, never shards; concatenating two of them
+        double-counts every meal.
+
+        Args:
+            raw: One subject CSV as `_read_cgmacros` returns it.
+            track: Which sensor's series becomes `glucose`. One of
+                `CGMACROS_TRACKS`, or `CGMACROS_MEAN_TRACK` for the opt-in
+                synthetic average.
+
+        Returns:
+            One extended-schema frame for the requested track.
+        """
+        if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+            raise ValueError(
+                f"Unknown CGMacros track {track!r}; expected one of "
+                f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
             )
 
         libre = pl.col(CGMACROS_TRACK_COLUMNS[CGMACROS_TRACKS[0]])
@@ -3084,6 +3097,8 @@ class FormatParser(CGMParser):
         cls,
         file_path: Union[str, Path],
         track: Optional[str] = None,
+        slope_tolerance: float = AGREEMENT_SLOPE_TOLERANCE,
+        min_correlation: float = AGREEMENT_MIN_CORRELATION,
     ) -> Dict[str, UnifiedFormat]:
         """Parse a multi-track file into one frame per sensor.
 
@@ -3098,14 +3113,42 @@ class FormatParser(CGMParser):
                 **only** available this way — it never appears in the default
                 result, because it is a derived view rather than a member of
                 the corpus.
+            slope_tolerance: For `track="mean"` only: warn when the fitted
+                slope between the two sensors is further than this from 1.
+            min_correlation: For `track="mean"` only: warn when their Pearson
+                correlation is below this. Neither cut-off ever refuses the
+                call or changes the frame; `track_agreement` gives the numbers.
 
         Returns:
             Track name → extended-schema frame.
 
         Raises:
             NotImplementedError: If the detected format is single-track.
+            ValueError: For an unknown track, or a cut-off out of range.
         """
-        path = Path(file_path)
+        frames, finding = cls._parse_tracks(
+            Path(file_path), track, slope_tolerance, min_correlation
+        )
+        if finding is not None:
+            logger.warning(
+                "parse_tracks(%s, track=%r): the agreement of %s is %s. %s",
+                Path(file_path).name, track, cls._MEAN_TRACK_PAIR, finding,
+                cls._MEAN_TRACK_ADVICE,
+            )
+        return frames
+
+    @classmethod
+    def _parse_tracks(
+        cls,
+        path: Path,
+        track: Optional[str],
+        slope_tolerance: float,
+        min_correlation: float,
+    ) -> Tuple[Dict[str, UnifiedFormat], Optional[str]]:
+        """`parse_tracks` without the logging: the frames, and for `track="mean"`
+        what its agreement check found (`None` when there is nothing to say), so
+        `parse_corpus` can say it once for a whole corpus instead of per subject."""
+        cls._check_agreement_cutoffs(slope_tolerance, min_correlation)
         text_data = cls.decode_raw_data(path.read_bytes())
         format_type = cls.detect_format(text_data)
 
@@ -3116,18 +3159,168 @@ class FormatParser(CGMParser):
                 "than one independent measurement of the same quantity."
             )
 
-        if track is not None:
-            if track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
-                raise ValueError(
-                    f"Unknown track {track!r}; expected one of "
-                    f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
-                )
-            return {track: cls._process_cgmacros(text_data, track=track)}
+        if track is not None and track not in CGMACROS_TRACKS and track != CGMACROS_MEAN_TRACK:
+            raise ValueError(
+                f"Unknown track {track!r}; expected one of "
+                f"{CGMACROS_TRACKS} or {CGMACROS_MEAN_TRACK!r}"
+            )
 
-        return {
-            name: cls._process_cgmacros(text_data, track=name)
-            for name in CGMACROS_TRACKS
-        }
+        raw = cls._read_cgmacros(text_data)
+        if track is None:
+            return {name: cls._process_cgmacros(raw, track=name) for name in CGMACROS_TRACKS}, None
+
+        finding: Optional[str] = None
+        if track == CGMACROS_MEAN_TRACK:
+            finding = cls._mean_track_finding(raw, slope_tolerance, min_correlation)
+        return {track: cls._process_cgmacros(raw, track=track)}, finding
+
+    #: The fit `track="mean"` checks, comparand against reference.
+    _MEAN_TRACK_PAIR: ClassVar[str] = f"{CGMACROS_TRACKS[0]} against {CGMACROS_TRACKS[1]}"
+
+    #: Said once after any agreement finding on `track="mean"`.
+    _MEAN_TRACK_ADVICE: ClassVar[str] = (
+        "The mean is returned unchanged; FormatParser.track_agreement() gives the full "
+        "measure, and slope_tolerance= / min_correlation= set the cut-offs"
+    )
+
+    @staticmethod
+    def _check_agreement_cutoffs(slope_tolerance: float, min_correlation: float) -> None:
+        """Refuse a cut-off no measurement could be compared against."""
+        if not slope_tolerance >= 0:
+            raise ValueError(f"slope_tolerance must be 0 or more, got {slope_tolerance!r}")
+        if not -1 <= min_correlation <= 1:
+            raise ValueError(f"min_correlation must lie in [-1, 1], got {min_correlation!r}")
+
+    @classmethod
+    def _mean_track_finding(
+        cls,
+        raw: pl.DataFrame,
+        slope_tolerance: float,
+        min_correlation: float,
+    ) -> Optional[str]:
+        """What `track="mean"` must say about the two sensors it averages, or `None`.
+
+        Nothing when no timestamp carries both sensors: the mean then averages
+        nothing and every row is one sensor's own reading. Otherwise the fit
+        `libre = slope * dexcom + intercept`, compared with the cut-offs; an
+        overlap too small to fit is said as a check that could not run, never
+        passed over as agreement.
+        """
+        agreement = cls._cgmacros_agreement(raw, CGMACROS_TRACKS[1], CGMACROS_TRACKS[0])
+        if agreement is None:
+            return None
+        if agreement.slope is None or agreement.correlation is None:
+            return (
+                f"not measurable: {agreement.overlap} paired reading(s), too few or one "
+                "sensor constant"
+            )
+        shortfalls = []
+        if abs(agreement.slope - 1) > slope_tolerance:
+            shortfalls.append(f"slope {agreement.slope:.2f} (not within 1 ± {slope_tolerance:g})")
+        if agreement.correlation < min_correlation:
+            shortfalls.append(f"r {agreement.correlation:.2f} (under {min_correlation:g})")
+        if not shortfalls:
+            return None
+        return (
+            f"outside the cut-offs: {', '.join(shortfalls)}, {agreement.overlap} paired readings"
+        )
+
+    @classmethod
+    def _cgmacros_agreement(
+        cls,
+        raw: pl.DataFrame,
+        reference: str,
+        comparand: str,
+    ) -> Optional[TrackAgreement]:
+        """Fit `comparand = slope * reference + intercept` over the rows where both
+        sensors hold a reading; `None` when no row does."""
+        x = pl.col(CGMACROS_TRACK_COLUMNS[reference]).cast(pl.Float64)
+        y = pl.col(CGMACROS_TRACK_COLUMNS[comparand]).cast(pl.Float64)
+        both = raw.filter(x.is_not_null() & y.is_not_null())
+        if len(both) == 0:
+            return None
+        s = both.select(
+            mx=x.mean(),
+            my=y.mean(),
+            vx=x.var(ddof=1),
+            vy=y.var(ddof=1),
+            cxy=pl.cov(x, y, ddof=1),
+            bias=(y - x).mean(),
+            mad=(y - x).abs().mean(),
+        ).row(0, named=True)
+        slope: Optional[float] = None
+        intercept: Optional[float] = None
+        correlation: Optional[float] = None
+        # var is null for a single row and 0 for a constant series; either way the
+        # fit is undefined, and a NaN compared with a cut-off would pass silently.
+        if s["vx"] is not None and s["vx"] > 0:
+            slope = s["cxy"] / s["vx"]
+            intercept = s["my"] - slope * s["mx"]
+            if s["vy"] is not None and s["vy"] > 0:
+                correlation = s["cxy"] / math.sqrt(s["vx"] * s["vy"])
+        return TrackAgreement(
+            reference=reference,
+            comparand=comparand,
+            overlap=len(both),
+            slope=slope,
+            intercept=intercept,
+            correlation=correlation,
+            bias=s["bias"],
+            mean_abs_difference=s["mad"],
+        )
+
+    @classmethod
+    def track_agreement(
+        cls,
+        file_path: Union[str, Path],
+        reference: Optional[str] = None,
+        comparand: Optional[str] = None,
+    ) -> TrackAgreement:
+        """Measure how closely two tracks of a multi-track file follow each other.
+
+        Answers the question `parse_tracks(path, track="mean")` leaves open:
+        `Quality.TRACK_MERGE` says which rows were averaged, not whether the two
+        sensors measure the same thing closely enough to average. The answer is
+        per subject, and on the published CGMacros corpus it is mostly no. This
+        reports the numbers and leaves the decision to the caller.
+
+        Args:
+            file_path: A multi-track source file.
+            reference: The track on the x axis; `"dexcom"` by default.
+            comparand: The track fitted against it; `"libre"` by default.
+
+        Returns:
+            The fit over the readings both tracks hold at the same timestamp.
+
+        Raises:
+            NotImplementedError: If the detected format is single-track.
+            ValueError: For an unknown track, or one track given as both.
+            ZeroValidInputError: If the two tracks never read at the same time.
+        """
+        reference = CGMACROS_TRACKS[1] if reference is None else reference
+        comparand = CGMACROS_TRACKS[0] if comparand is None else comparand
+        for name in (reference, comparand):
+            if name not in CGMACROS_TRACKS:
+                raise ValueError(f"Unknown track {name!r}; expected one of {CGMACROS_TRACKS}")
+        if reference == comparand:
+            raise ValueError(f"reference and comparand are both {reference!r}; name two tracks")
+
+        path = Path(file_path)
+        text_data = cls.decode_raw_data(path.read_bytes())
+        format_type = cls.detect_format(text_data)
+        if format_type != SupportedCGMFormat.CGMACROS:
+            raise NotImplementedError(
+                f"{format_type.value} is a single-track format: there is no second "
+                "track to compare against."
+            )
+
+        agreement = cls._cgmacros_agreement(cls._read_cgmacros(text_data), reference, comparand)
+        if agreement is None:
+            raise ZeroValidInputError(
+                f"{path.name}: {reference} and {comparand} never read at the same timestamp, "
+                "so there is no overlap to measure"
+            )
+        return agreement
 
     @classmethod
     def _select_subject_dirs(
@@ -3241,6 +3434,8 @@ class FormatParser(CGMParser):
         root: Union[str, Path],
         track: Optional[str] = None,
         subjects: Optional[Sequence[str]] = None,
+        slope_tolerance: float = AGREEMENT_SLOPE_TOLERANCE,
+        min_correlation: float = AGREEMENT_MIN_CORRELATION,
     ) -> Dict[str, UnifiedFormat]:
         """Parse a many-subject corpus into one frame per subject per track.
 
@@ -3260,6 +3455,9 @@ class FormatParser(CGMParser):
                 id costs one subject's work, not the whole corpus's. Ids come
                 from `list_subjects(root)`; pass them bare, without any
                 `/track` suffix.
+            slope_tolerance: For `track="mean"`, the cut-offs `parse_tracks`
+            min_correlation: takes. Subjects whose sensors fall outside them
+                are named in one warning for the whole corpus, with a count.
 
         Returns:
             Subject (or `subject/track`) → frame, ordered by subject id so the
@@ -3316,22 +3514,42 @@ class FormatParser(CGMParser):
             root_path,
         )
 
+        cls._check_agreement_cutoffs(slope_tolerance, min_correlation)
         results: Dict[str, UnifiedFormat] = {}
         failures: Dict[str, str] = {}
+        findings: Dict[str, str] = {}
         for subject_dir in subject_dirs:
             subject_csv = subject_dir / f"{subject_dir.name}.csv"
             if not subject_csv.exists():
                 failures[subject_dir.name] = "no subject CSV"
                 continue
             try:
-                tracks = cls.parse_tracks(subject_csv, track=track)
+                tracks, finding = cls._parse_tracks(
+                    subject_csv, track, slope_tolerance, min_correlation
+                )
             except (MalformedDataError, ZeroValidInputError) as e:
                 # Collected and reported once with a count rather than one
                 # warning per subject, and never silently skipped.
                 failures[subject_dir.name] = str(e)[:200]
                 continue
+            if finding is not None:
+                findings[subject_dir.name] = finding
             for track_name, frame in tracks.items():
                 results[f"{subject_dir.name}/{track_name}"] = frame
+
+        if findings:
+            # One line for the corpus, not one per subject: on the published
+            # CGMacros corpus most subjects fall outside the default cut-offs.
+            logger.warning(
+                "parse_corpus(track=%r): the agreement of %s, the sensors averaged, is "
+                "flagged for %d of %d subject(s): %s. %s",
+                track,
+                cls._MEAN_TRACK_PAIR,
+                len(findings),
+                len(subject_dirs),
+                "; ".join(f"{k}: {v}" for k, v in sorted(findings.items())),
+                cls._MEAN_TRACK_ADVICE,
+            )
 
         if failures:
             logger.warning(

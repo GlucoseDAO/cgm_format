@@ -735,8 +735,33 @@ subjects, 629,605 overlapping samples, measured through `parse_tracks` on 2026-0
 slope of 0.70 with a range of 0.10–1.16 and a median Pearson r of 0.82 — 31 subjects under slope 0.8,
 15 under r 0.7, and only two inside slope 0.9–1.1 with r > 0.9. For the rest, `mean` is not two reads
 of one truth averaged; it is two different estimators blended into a third matching neither, and the
-frame looks exactly as clean as any other. Compare the tracks yourself before opting in — an API for
-asking is filed as RM14 in [ROADMAP.md](ROADMAP.md), and until it lands the check is yours to run.
+frame looks exactly as clean as any other.
+
+Ask before opting in. `track_agreement` fits `libre = slope · dexcom + intercept` over the readings
+both sensors hold at the same timestamp and reports the numbers, with no verdict:
+
+```python
+from cgm_format import FormatParser
+
+a = FormatParser.track_agreement(path)    # reference="dexcom", comparand="libre" by default
+a.overlap, a.slope, a.intercept, a.correlation, a.bias, a.mean_abs_difference
+```
+
+`slope`, `intercept` and `correlation` are `None` when the overlap cannot define them (one paired
+reading, or a sensor that never varies): the measure could not be taken, which is not agreement.
+Two tracks that never read at the same time raise `ZeroValidInputError`.
+
+`track="mean"` runs the same fit and logs a warning when the sensors fall outside two cut-offs: the
+slope further than `AGREEMENT_SLOPE_TOLERANCE` (0.10) from 1, or `r` under
+`AGREEMENT_MIN_CORRELATION` (0.9). Both are defaults; pass your own:
+
+```python
+FormatParser.parse_tracks(path, track="mean", slope_tolerance=0.2, min_correlation=0.8)
+```
+
+The warning never refuses the call and never changes the frame. On the published corpus the defaults
+flag 43 of 45 subjects, so `parse_corpus(root, track="mean")` says it once for the whole corpus, with
+a count and each subject's numbers, rather than once per subject.
 
 ### Native cadence
 

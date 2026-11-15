@@ -159,6 +159,62 @@ class TrackCoverage:
     last: Union[datetime, None] = None
 
 
+#: Default cut-offs for the warning `parse_tracks(path, track="mean")` gives when the two
+#: sensors it averages disagree (RM14; the maintainer chose cut-offs as settings, desk #108).
+#: Each call may pass its own as `slope_tolerance=` / `min_correlation=`; these are only the
+#: defaults. The slope cut-off is a distance from 1: the comparand tracks the reference
+#: within 10 % of one-to-one.
+AGREEMENT_SLOPE_TOLERANCE = 0.10
+#: The Pearson correlation below which `track="mean"` warns, by default.
+AGREEMENT_MIN_CORRELATION = 0.9
+
+
+@dataclass(frozen=True)
+class TrackAgreement:
+    """How closely two tracks of one multi-track source follow each other.
+
+    Returned by `FormatParser.track_agreement`. It measures and does not decide:
+    there is no yes/no field, because whether two sensors agree well enough to
+    average depends on what the caller does with the result. `parse_tracks(path,
+    track="mean")` compares these numbers against cut-offs the caller may set
+    (`AGREEMENT_SLOPE_TOLERANCE`, `AGREEMENT_MIN_CORRELATION` by default) and
+    warns when they fall outside; it never refuses.
+
+    Computed over the readings where both tracks hold a value at the same
+    timestamp, fitting `comparand = slope * reference + intercept` by least
+    squares. In mg/dL, the unit the source records.
+
+    Three-valued like everything else here: `slope`, `intercept` and
+    `correlation` are `None` when the overlap cannot define them (a single
+    paired reading, or a track that never varies over the overlap). `None` means
+    the measure could not be taken, never that the tracks agree.
+    """
+
+    #: The track on the x axis of the fit, as `parse_tracks` names it.
+    reference: str
+
+    #: The track fitted against the reference.
+    comparand: str
+
+    #: Readings where both tracks hold a value at the same timestamp.
+    overlap: int
+
+    #: Least-squares slope of comparand on reference; 1 means one-to-one.
+    slope: Union[float, None]
+
+    #: Least-squares intercept, in mg/dL.
+    intercept: Union[float, None]
+
+    #: Pearson correlation over the overlap.
+    correlation: Union[float, None]
+
+    #: Mean of `comparand - reference` over the overlap, in mg/dL.
+    bias: float
+
+    #: Mean of `|comparand - reference|` over the overlap, in mg/dL.
+    mean_abs_difference: float
+
+
 @dataclass(frozen=True)
 class SubjectEntry:
     """One member of a corpus, described without parsing it.

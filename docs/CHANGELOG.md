@@ -11,6 +11,23 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
+## Unreleased
+
+### Ask whether two sensors agree before averaging them (RM14)
+
+- `FormatParser.track_agreement(path, reference=None, comparand=None)` returns a `TrackAgreement`:
+  the overlap, least-squares slope and intercept, Pearson r, mean difference and mean absolute
+  difference of two tracks of a multi-track source (CGMacros: `libre` against `dexcom` by default).
+  It measures and does not decide; a fit the overlap cannot define is `None`, never a number.
+- `parse_tracks(path, track="mean")` logs a warning when the two sensors it averages fall outside
+  `AGREEMENT_SLOPE_TOLERANCE` (slope within 0.10 of 1) or `AGREEMENT_MIN_CORRELATION` (r of at
+  least 0.9). Both are defaults that `slope_tolerance=` and `min_correlation=` override, on
+  `parse_corpus` too, which reports a whole corpus in one warning. The frame is unchanged and the
+  call never refuses (desk #108: cut-offs as settings, no yes/no field).
+- A CGMacros file is now read once per `parse_tracks` call rather than once per track, so its
+  column warnings are logged once.
+- Additive throughout: a new class, a new method, two constants, two keyword arguments. A minor.
+
 ## 0.14.2 — 2026-11-15
 
 **Patch.** The CLI reads `.env`, and `download-nightscout` takes its URL and keys from the
