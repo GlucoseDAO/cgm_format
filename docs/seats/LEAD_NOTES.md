@@ -7,8 +7,8 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 0.14.2 (desk #106: patch) carries RM4 and RM3.
 
 **RM14 built** (`51e4b89`, unreleased): `track_agreement()` and the warning on `track="mean"`. Its release is
-0.15.0, a minor: desk #324 (asked 2026-11-15; recommended 0.15.0 once RM15 is built; default no release).
-**RM15 built** (`f64c72b`, unreleased; rides #324). **RM7 blocked: desk #325** (asked 2026-11-15; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
+0.15.0, a minor: desk #343 (asked 2026-11-16, superseding #324 under the kit's "only a real fork" rule, #510: may the lead cut a minor the compatibility rule sizes, or keep confirming each; recommended 1, the lead cuts it; default nothing changes, no release).
+**RM15 built** (`f64c72b`, unreleased; rides #343). **RM7 blocked: desk #325** (asked 2026-11-15; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
 Nightscout pull timing out; fixed in `66e940d` (fall back to fixtures with a warning), green on 3.10-3.14.
 
 **Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
@@ -20,7 +20,7 @@ The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its
 (`repro/`, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output names
 match the person's uploaded names is unconfirmed.
 
-**The plan's order** (`docs/ROADMAP.md`): RM14 and RM15 (built, desk #324), RM7 (desk #325), RM11 (after
+**The plan's order** (`docs/ROADMAP.md`): RM14 and RM15 (built, desk #343), RM7 (desk #325), RM11 (after
 RM7), RM20 (next major only), RM6 (waits until 2027-01-21). Desk answers of 2026-11-15: #107 option 1 (RM7
 returns a `LazyFrame`, no Parquet helper), #108 option 2 (RM14), #109 option 1 (RM15: `NightscoutError` kinds
 that also subclass the httpx errors, a minor).
