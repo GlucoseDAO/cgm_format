@@ -5,6 +5,8 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 **As of 2026-11-15, unattended.** 0.14.0, 0.14.1 and 0.14.2 are tagged and on GitHub with their dists;
 `dist/` holds all three. **Open: the person's PyPI publish** (`uv publish dist/*`; PyPI is at 0.13.0).
 0.14.2 (desk #106: patch) carries RM4 and RM3.
+The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad, and is
+removed once `dist/` holds the dists (base, kit #536, from v0.1.236).
 
 **RM14 built** (`51e4b89`, unreleased): `track_agreement()` and the warning on `track="mean"`. Its release is
 0.15.0, a minor: desk #343 (asked 2026-11-16, superseding #324 under the kit's "only a real fork" rule, #510: may the lead cut a minor the compatibility rule sizes, or keep confirming each; recommended 1, the lead cuts it; default nothing changes, no release).
