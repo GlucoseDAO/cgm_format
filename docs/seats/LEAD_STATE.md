@@ -7,4 +7,4 @@
 **Next**
 1. ⏳ A measure of how well two sensors agree, and a warning when averaging two that disagree, RM14: built on `main`, unreleased (its release, 0.15.0, waits on desk #343, which asks who sizes a minor release).
 2. ⏳ Network errors as the library's own exception types, RM15: built on `main`, unreleased (rides 0.15.0 with RM14, desk #343).
-3. ❓ Lazy streaming reader for large exports, RM7 (lead; waits on desk #325: measured, the library's fixed row order keeps the whole table in memory, so should the reader keep the file's order instead).
+3. ❓ Lazy streaming reader for large exports, RM7 (lead; waits on desk #362: measured, the library's fixed row order keeps the whole table in memory, so should the reader keep the file's order instead).
