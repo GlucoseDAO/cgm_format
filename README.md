@@ -621,6 +621,9 @@ df = FormatParser.from_nightscout_exports(
 )
 ```
 
+From the shell, the same is `cgm-cli parse nightscout-data-with-treatments.csv --date-order day_first`
+(`pipeline` and `process` take it too).
+
 > **Note:** The built-in Nightscout `/api/v1/entries.csv` endpoint is defective (headerless,
 > 5 columns only) and treatments don't support CSV at all. Use the JSON API or
 > nightscout-exporter CSV instead.

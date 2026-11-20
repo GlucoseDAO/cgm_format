@@ -24,10 +24,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, ClassVar, Optional
 import polars as pl
+from typer.testing import CliRunner
 
 from cgm_format import FormatParser as FormatParserPrime
 from cgm_format import FormatProcessor
 from cgm_format import NightscoutDateOrder
+from cgm_format.cgm_cli import app as cli_app
 from cgm_format.interface.cgm_interface import (
     MalformedDataError,
     SupportedCGMFormat,
@@ -864,3 +866,63 @@ class TestExporterDateOrder:
 
         assert stated.equals(FormatParser.parse_nightscout(entries_json_text))
         assert [r for r in caplog.records if "date_order" in r.getMessage()], "the ignored order went unsaid"
+
+
+class TestExporterDateOrderCLI:
+    """Desk #70: the shell states the order too, as `cgm-cli parse --date-order`.
+
+    The command line is where people first try the library on their own file, so a day-first
+    export with no day past the 12th must be readable there without the Python API.
+    """
+
+    runner: ClassVar[CliRunner] = CliRunner()
+
+    def _parse(self, text: str, tmp_path: Path, *options: str) -> tuple[int, str, Path]:
+        source = tmp_path / "export.csv"
+        source.write_text(text)
+        out = tmp_path / "unified.csv"
+        result = self.runner.invoke(cli_app, ["parse", str(source), "-o", str(out), "--no-stats", *options])
+        return result.exit_code, result.output, out
+
+    def test_day_first_reads_the_ambiguous_export_right(self, exporter_csv_text: str, tmp_path: Path) -> None:
+        au_text, written = _relocale(exporter_csv_text, _en_au)
+        assert all(m.day <= 12 for m in written), "the fixture must stay ambiguous for this test"
+
+        code, output, out = self._parse(au_text, tmp_path, "--date-order", "day_first")
+
+        assert code == 0, output
+        assert TestExporterDateOrder._glucose_moments(FormatParser.parse_file(out)) == written
+
+    def test_unset_keeps_the_month_first_inference(self, exporter_csv_text: str, tmp_path: Path) -> None:
+        """Without the option the same file is read month first, so the option is what changed it."""
+        au_text, written = _relocale(exporter_csv_text, _en_au)
+
+        code, output, out = self._parse(au_text, tmp_path)
+
+        assert code == 0, output
+        moments = TestExporterDateOrder._glucose_moments(FormatParser.parse_file(out))
+        assert moments != written
+        assert moments == {datetime(m.year, m.day, m.month, m.hour, m.minute, m.second) for m in written}
+
+    def test_an_order_on_another_format_is_refused(self, tmp_path: Path) -> None:
+        clarity = FIXTURES_DIR / "Clarity_Export_synthetic.csv"
+        out = tmp_path / "unified.csv"
+
+        result = self.runner.invoke(
+            cli_app, ["parse", str(clarity), "-o", str(out), "--date-order", "month_first"]
+        )
+
+        assert result.exit_code == 1
+        assert "--date-order applies only to Nightscout exporter files" in result.output
+        assert not out.exists()
+
+    def test_pipeline_takes_the_order(self, exporter_csv_text: str, tmp_path: Path) -> None:
+        au_text, _ = _relocale(exporter_csv_text, _en_au)
+        source = tmp_path / "export.csv"
+        source.write_text(au_text)
+
+        result = self.runner.invoke(
+            cli_app, ["pipeline", str(source), "--date-order", "day_first", "--no-stats", "--no-warnings"]
+        )
+
+        assert result.exit_code == 0, result.output

@@ -45,6 +45,7 @@ from cgm_format.formats.unified import (
     UnifiedEventType,
     Quality,
 )
+from cgm_format.formats.nightscout import NightscoutDateOrder
 from cgm_format.formats.supported import (
     FORMAT_CATEGORY,
     SCHEMA_MAP,
@@ -115,6 +116,31 @@ def _multi_track_hint(input_file: Path, error: Exception) -> None:
     )
 
 
+DATE_ORDER_HELP = (
+    "Day/month order of a Nightscout exporter file's dates, which follow the exporting browser's "
+    "locale: month_first (en-US) or day_first (en-GB, en-AU and most others). Unset, it is "
+    "inferred, and a file with no day past the 12th is read month first with a warning."
+)
+
+
+def _parse_input(input_file: Path, date_order: Optional[NightscoutDateOrder]) -> pl.DataFrame:
+    """Parse INPUT_FILE as `FormatParser.parse_file` does, with a stated exporter date order.
+
+    The order only means something for a nightscout-exporter CSV, so a stated order on any other
+    format is refused rather than dropped: the caller asked for something this file cannot honour.
+    """
+    if date_order is None:
+        return FormatParser.parse_file(input_file)
+    raw = input_file.read_bytes()
+    detected = FormatParser.detect_format(FormatParser.decode_raw_data(raw))
+    if detected != SupportedCGMFormat.NIGHTSCOUT:
+        raise UnknownFormatError(
+            f"--date-order applies only to Nightscout exporter files; {input_file.name} "
+            f"was detected as {detected.value}. Leave the option out for this file."
+        )
+    return FormatParser.parse_nightscout(raw, date_order=date_order)
+
+
 # ===== Format Detection & Parsing Commands =====
 
 @app.command()
@@ -168,6 +194,7 @@ def parse(
     output_file: Optional[Path] = typer.Option(None, "--output", "-o", help="Output CSV file (unified format)"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
     show_preview: bool = typer.Option(False, "--preview", "-p", help="Show data preview"),
+    date_order: Optional[NightscoutDateOrder] = typer.Option(None, "--date-order", help=DATE_ORDER_HELP),
 ) -> None:
     """Parse a CGM data file to unified format."""
     try:
@@ -176,7 +203,7 @@ def parse(
             raise typer.Exit(1)
         
         with console.status(f"[bold green]Parsing {input_file.name}..."):
-            unified_df = FormatParser.parse_file(input_file)
+            unified_df = _parse_input(input_file, date_order)
         
         console.print(f"\n[green]✓[/green] Successfully parsed {len(unified_df)} rows")
         
@@ -214,6 +241,7 @@ def process(
     interval: int = typer.Option(5, "--interval", "-i", help="Expected interval in minutes"),
     max_gap: int = typer.Option(15, "--max-gap", help="Maximum gap to interpolate (minutes)"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
+    date_order: Optional[NightscoutDateOrder] = typer.Option(None, "--date-order", help=DATE_ORDER_HELP),
 ) -> None:
     """Process unified format data (interpolate gaps, synchronize timestamps)."""
     try:
@@ -223,7 +251,7 @@ def process(
         
         # Parse input file
         with console.status(f"[bold green]Loading {input_file.name}..."):
-            df = FormatParser.parse_file(input_file)
+            df = _parse_input(input_file, date_order)
         
         original_rows = len(df)
         console.print(f"[green]✓[/green] Loaded {original_rows} rows")
@@ -295,6 +323,7 @@ def pipeline(
     ml_ready: bool = typer.Option(False, "--ml-ready", help="Emit the SugarOne model input shape (display column names)"),
     show_warnings: bool = typer.Option(True, "--warnings/--no-warnings", help="Show processing warnings"),
     show_stats: bool = typer.Option(True, "--stats/--no-stats", help="Show statistics"),
+    date_order: Optional[NightscoutDateOrder] = typer.Option(None, "--date-order", help=DATE_ORDER_HELP),
 ) -> None:
     """Run the complete processing pipeline on a CGM data file.
     
@@ -315,7 +344,7 @@ def pipeline(
         
         # Stage 1: Parse
         with console.status("[bold green]Stage 1/6: Parsing..."):
-            unified_df = FormatParser.parse_file(input_file)
+            unified_df = _parse_input(input_file, date_order)
         parsed_rows = len(unified_df)
         console.print(f"[green]✓[/green] Stage 1: Parsed {parsed_rows} rows")
         

@@ -43,6 +43,15 @@ patch.
   on it already was: the profile is not used. `nightscout_profile.json` then holds `null`.
 - Additive: four new exception classes. A minor.
 
+### The shell states a Nightscout exporter file's date order (desk #70)
+
+- `cgm-cli parse`, `process` and `pipeline` take `--date-order month_first|day_first`, the shell's
+  form of 0.14.0's `date_order` (RM19). Unset, the order is inferred as before, so a day-first file
+  with no day past the 12th is still read month first with a warning.
+- Stated on a file that is not a Nightscout exporter CSV, the option is refused with exit 1 and the
+  detected format named, rather than dropped.
+- Additive: one optional option on three commands. A minor.
+
 ## 0.14.2 — 2026-11-15
 
 **Patch.** The CLI reads `.env`, and `download-nightscout` takes its URL and keys from the
