@@ -10,7 +10,7 @@ removed once `dist/` holds the dists (base, kit #536, from v0.1.236).
 
 **RM14 built** (`51e4b89`, unreleased): `track_agreement()` and the warning on `track="mean"`. Its release is
 0.15.0, a minor: desk #343 (asked 2026-11-16, superseding #324 under the kit's "only a real fork" rule, #510: may the lead cut a minor the compatibility rule sizes, or keep confirming each; recommended 1, the lead cuts it; default nothing changes, no release).
-**RM15 built** (`f64c72b`, unreleased; rides #343). **RM7 blocked: desk #362** (re-filed 2026-11-18 with each option's cost, superseding #325; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
+**RM15 built** (`f64c72b`, unreleased; rides #343). **`--date-order` on the CLI** (triage, `8eedcf8`, desk #70; additive) rides 0.15.0 too. **RM7 blocked: desk #362** (re-filed 2026-11-18 with each option's cost, superseding #325; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
 Nightscout pull timing out; fixed in `66e940d` (fall back to fixtures with a warning), green on 3.10-3.14.
 
 **Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
