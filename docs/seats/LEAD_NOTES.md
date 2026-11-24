@@ -39,7 +39,9 @@ docs/seats/LEAD_STATE.md` edits that post in place. A landed result also gets on
 **Polars 2:** 2.2.0 is out (2026-11-24) and the floor `polars>=1.39.3` has no cap, so a fresh install takes it
 while the lock holds 1.43.2. The full suite on `74ca94b` under 2.2.0 (`uv run --with 'polars==2.2.0'`, the
 lock untouched, deprecations as errors), 2026-11-24: 1757 passed, 16 skipped, no warning from the suite.
-2.1.0 on `a259264`, 2026-11-05: 1715 passed, 16 skipped. Nothing to cap or port. Polars 2 writes its version into every parquet footer, so parquet bytes differ across
+2.1.0 on `a259264`, 2026-11-05: 1715 passed, 16 skipped. Nothing to cap or port. A 2.2.0 regression another
+repository reported (a filter mask from `concat_list` + `list.any` on an all-null list column panics a grouped
+`median`) does not reach us: `src/` calls none of the three (grep, 2026-11-24). Polars 2 writes its version into every parquet footer, so parquet bytes differ across
 polars releases; no test here compares parquet bytes across runs.
 
 - The fold's default source is MERGE, by the person's word before the release.
