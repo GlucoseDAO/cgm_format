@@ -11,7 +11,7 @@ contemporaneous release notes — treat the commit as the authority where the tw
 Legality sizing (see `CLAUDE.md` §8): additive → minor, removal/retype/rename → major, legibility →
 patch.
 
-## Unreleased
+## 0.15.0 — 2026-11-25
 
 ### Ask whether two sensors agree before averaging them (RM14)
 

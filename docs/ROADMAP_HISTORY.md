@@ -8,6 +8,105 @@ changed and where, so a later reader can find the code without a git archaeology
 
 ---
 
+## RM15 — network failures escape as third-party exceptions
+
+**Severity:** medium · **Status:** shipped 2026-11-25 in 0.15.0 (`f64c72b`) · **Owner:** lead
+
+Motivated by **S5** (`docs/FEEDBACK.md`), filed on behalf of `sugar-sugar` against 0.12.0.
+
+`download_nightscout` and `from_nightscout_url` let every transport failure escape raw: connect
+errors, timeouts, `httpx.HTTPStatusError` and `json.JSONDecodeError`. So a caller must import `httpx`
+itself to catch them — which means taking a dependency the library deliberately keeps behind the
+`cli` extra, in order to handle errors from a library that hides it. `sugar-sugar` does exactly this
+and reports having to match on `type(exc).__name__` substrings to classify a failure, which is what
+an absent contract looks like from the outside.
+
+Everything else in the interface raises a typed error from `interface/cgm_interface.py`
+(`MalformedDataError`, `UnknownFormatError`, `ZeroValidInputError`, `MultiTrackSourceError`). The
+network path is the one surface that does not, and it is the surface most likely to fail in normal
+use.
+
+**Surfaced rather than repaired**, because the shape is a design decision:
+
+- A new `NightscoutNetworkError` hierarchy is additive and would be the obvious answer, but it has to
+  decide whether it wraps *transport* failures only or also HTTP status failures, and whether the
+  original exception is chained or swallowed. Chaining keeps `httpx` in the traceback, which is most
+  of what the wrapper was meant to spare the caller.
+- Reusing `MalformedDataError` is wrong: a 502 is not malformed data, and collapsing the two loses
+  the distinction a caller needs to decide whether retrying makes sense.
+- A generic `CGMDownloadError` covering every future downloader is the most useful shape and the one
+  hardest to get right before a second downloader exists. Nightscout is the only one today.
+
+The token-redaction half of this shipped already (`_raise_for_status_without_token`), because a
+credential in a log line is a defect rather than a design question. That fix deliberately preserves
+`httpx.HTTPStatusError` as the type, so whatever this item decides is not constrained by it.
+
+**Legality:** additive — new exception types beside the existing ones, nothing removed or retyped. So
+**minor**. Changing what an existing call already raises would be major, and that is the version to
+avoid.
+
+---
+
+## RM14 — no way to ask whether `track="mean"` is defensible for a subject
+
+**Severity:** medium · **Status:** shipped 2026-11-25 in 0.15.0 (`51e4b89`) · **Owner:** lead
+
+Motivated by **S1** (`docs/FEEDBACK_HISTORY.md`), filed on behalf of `sugar-sugar` against 0.10.0.
+
+`parse_tracks(path, track="mean")` averages a subject's two sensor series and flags every synthesized
+row `Quality.TRACK_MERGE`. That flag, and the docstrings around it, describe the mean's
+**composition** — which rows came from two sensors and which from one — and for that they are
+correct. Neither describes its **validity**: whether the two series are estimates of the same
+quantity at all, which is a per-subject property and the thing that decides whether averaging them is
+honest. The call returns the same clean frame either way, and nothing in the API lets a caller ask
+first.
+
+Reproduced on 2026-08-21 against 0.12.0 through `parse_tracks` itself (not the raw CSV), fitting
+`libre = slope · dexcom + intercept` per subject over the inner join of the two frames on `datetime`,
+45 subjects, 629,605 overlapping samples:
+
+| statistic | median | range |
+|---|---|---|
+| slope | 0.70 | 0.10 – 1.16 |
+| intercept | 5.4 mg/dL | −16.6 – +110.8 |
+| Pearson r | 0.82 | 0.10 – 0.97 |
+
+31 of 45 subjects sit under slope 0.8 and 15 under r 0.7, so the compression is subject-specific and
+a third of the corpus differs in shape rather than only in level. Against a slope 0.9–1.1 and r > 0.9
+bar exactly two subjects qualify (`CGMacros-033`, `CGMacros-035`). On the worst of them
+(`CGMacros-013`: slope 0.10, r 0.10) `track="mean"` emits **no warning** and returns 15,918 rows with
+14,275 flagged `TRACK_MERGE` — composition reported, validity not.
+
+The shape the reporter proposes, and the one to start from:
+
+- `TrackAgreement(reference, comparand, overlap, slope, intercept, correlation, bias,
+  mean_abs_difference)` as a frozen dataclass — a measurement that computes and does not decide.
+- `FormatParser.track_agreement(file_path, reference=None, comparand=None)`, mirroring
+  `list_subjects`; `MultiTrackSourceError` for a single-track format, `ZeroValidInputError` when the
+  tracks never read at the same time.
+- An `is_interchangeable` property over two module constants (`AGREEMENT_SLOPE_TOLERANCE`,
+  `AGREEMENT_MIN_CORRELATION`) — constants rather than registry entries, because the registries hold
+  data only and a threshold is policy.
+- On `track="mean"`, a warning through the existing channel when the tracks do not agree, naming
+  slope and r and pointing at `track_agreement()` — never refusing the call.
+
+Rejected repairs, all on charter grounds rather than cost: auto-selecting a "best" track (domain
+policy, and it depends on what the caller does with the frame); gating `mean` behind a flag or
+exception (breaks callers a compressed trace is legitimately fine for); and a
+`Quality.TRACK_DISAGREEMENT` row bit, since disagreement is a per-subject property and every row
+would carry the same value — misusing the mechanism `TRACK_MERGE` established.
+
+Open questions for whoever builds it: whether the two threshold constants belong in the library at
+all rather than in the caller's policy, and what requesting `mean` should cost when it has to parse
+both tracks to fit them (`check_agreement=False`, or a per-path cache).
+
+**Legality:** additive — a new dataclass, a new classmethod, two new module constants, a new warning
+on a path that already behaved this way. Nothing removed, renamed or retyped; `CGM_SCHEMA` and
+`CGM_SCHEMA_EXTENDED` untouched; no existing flag changes meaning; emitted frames stay byte-identical.
+So **minor**. The warning alone would be a patch, but it rides the additive API.
+
+---
+
 ## RM4 — the CLI does not load `.env`
 
 **Severity:** low · **Status:** shipped 2026-11-15 in 0.14.2 (`b58faf1`) · **Owner:** lead
