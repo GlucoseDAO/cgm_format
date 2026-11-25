@@ -118,6 +118,12 @@ its own branches deleted with `git branch -d`, and on `origin` once `-d` succeed
 removed after the merge; pushes to a contributor's pull request when the person asks. These stand over
 `CLAUDE.md` §2's "Never run tree operations". Use it without asking.
 
+**The release's size is the library's compatibility rule's** (desk #343, answered 2026-11-25: option 1, "the
+library's compatibility rule sizes the release; the lead cuts a minor on its own"): a patch or a minor, as the rule
+in `CLAUDE.md` §8 sizes it, is tagged and released without asking; this stands over the global "confirm a minor or
+major with the user" for this seat. A major still goes to the person, and so does a release whose size the rule
+leaves in doubt. Agreed: nothing checks the sizing.
+
 Not covered, so the person's: a publish to PyPI; merging a contributor's pull request ("side PRs merge
 on my approval only"); a force push, rewriting pushed history, `git branch -D`, deleting or moving a
 pushed tag; another seat's branch or worktree; a push to any remote but `origin` and a pull request's
