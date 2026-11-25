@@ -2,17 +2,20 @@
 
 State, not rules: rewritten to the present before a reset (`README.md` here, "Notes files").
 
-**As of 2026-11-15, unattended.** 0.14.0, 0.14.1 and 0.14.2 are tagged and on GitHub with their dists;
-`dist/` holds all three. **Open: the person's PyPI publish** (`uv publish dist/*`; PyPI is at 0.13.0).
-0.14.2 (desk #106: patch) carries RM4 and RM3.
+**As of 2026-11-25, unattended.** 0.14.0 through 0.15.0 are tagged and on GitHub; `dist/` holds all four.
+**Open: the person's PyPI publish** (`uv publish dist/*.whl dist/*.tar.gz`; PyPI is at 0.13.0; `dist/` also holds
+`notes-0.15.0.md`, the release notes, which is not a dist).
+**0.15.0** (2026-11-25, `a268364`, tag `v0.15.0`) carries RM14, RM15 and `--date-order`. Desk #343 answered 1: the
+compatibility rule sizes a release and the lead cuts a minor (now in `LEAD.md`'s grant, `3e26d54`). Its GitHub
+release has the wheel only: the forge gate refused the sdist twice, matching its gzip bytes against the leak list
+(kit #644, filed 2026-11-25); upload `dist/cgm_format-0.15.0.tar.gz` once that is fixed.
 The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad (base, kit
-#536, from v0.1.236). Once `dist/` holds the dists it is unlocked, not removed (the person's global rule keeps
-removal theirs), and the report gives them `unlocked: to delete git -C /data/sources/glucosedao/cgm_format worktree
-remove .worktrees/NAME` (base, from v0.1.259). After each pin move, `bin/automode.py --check` (clean at v0.1.259).
+#536, from v0.1.236). The grant covers removing it, but the auto-mode classifier refused `git worktree remove`
+(2026-11-25), so it is unlocked and handed over: `unlocked: to delete git -C /data/sources/glucosedao/cgm_format
+worktree remove .worktrees/build-0.15.0 && git -C /data/sources/glucosedao/cgm_format branch -d build-0.15.0`. After
+each pin move, `bin/automode.py --check`.
 
-**RM14 built** (`51e4b89`, unreleased): `track_agreement()` and the warning on `track="mean"`. Its release is
-0.15.0, a minor: desk #343 (asked 2026-11-16, superseding #324 under the kit's "only a real fork" rule, #510: may the lead cut a minor the compatibility rule sizes, or keep confirming each; recommended 1, the lead cuts it; default nothing changes, no release).
-**RM15 built** (`f64c72b`, unreleased; rides #343). **`--date-order` on the CLI** (triage, `8eedcf8`, desk #70; additive) rides 0.15.0 too. **RM7 blocked: desk #362** (re-filed 2026-11-18 with each option's cost, superseding #325; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
+**RM7 blocked: desk #362** (re-filed 2026-11-18 with each option's cost, superseding #325; no default): the total-order sort cannot stream (OOM under a 1 GB cap on a 1.95 GB file; unsorted fits), so #107's `LazyFrame` saves only ~25 % unless the reader keeps file order. Measurements in the roadmap item. CI was red from 2026-10-21 to 2026-11-15 on the collection-time
 Nightscout pull timing out; fixed in `66e940d` (fall back to fixtures with a warning), green on 3.10-3.14.
 
 **Withdrawn 2026-11-14, default applied** (the secretary's nightly sweep): #63 (the drift fixes built as RM22 and
@@ -24,8 +27,7 @@ The joint Dexcom G6 + 720G dataset is on a private Hugging Face dataset with its
 (`repro/`, cgm-format pinned to `5ba26a8`, rebuild byte-identical). Whether `build.sh`'s output names
 match the person's uploaded names is unconfirmed.
 
-**The plan's order** (`docs/ROADMAP.md`): RM14 and RM15 (built, desk #343), RM7 (desk #362), RM11 (after
-RM7), RM20 (next major only), RM6 (waits until 2027-01-21). Desk answers of 2026-11-15: #107 option 1 (RM7
+**The plan's order** (`docs/ROADMAP.md`): RM7 (desk #362), RM11 (after RM7), RM20 (next major only), RM6 (waits until 2027-01-21). Desk answers of 2026-11-15: #107 option 1 (RM7
 returns a `LazyFrame`, no Parquet helper), #108 option 2 (RM14), #109 option 1 (RM15: `NightscoutError` kinds
 that also subclass the httpx errors, a minor).
 
