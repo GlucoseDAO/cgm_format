@@ -8,8 +8,9 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 **0.15.0** (2026-11-25, `a268364`, tag `v0.15.0`) carries RM14, RM15 and `--date-order`. Desk #343 answered 1: the
 compatibility rule sizes a release and the lead cuts a minor (now in `LEAD.md`'s grant, `3e26d54`). Its GitHub
 release has the wheel only: the forge gate refused the sdist twice, matching its gzip bytes against the leak list
-(kit #644, filed 2026-11-25), fixed in v0.1.279 (pin moved 2026-11-26); the upload still met the old hook,
-so it waits only on `/reload-plugins` in this session: then `gh release upload v0.15.0` with the sdist's full path.
+(kit #644, filed 2026-11-25). v0.1.279 fixed that, and the gate now reads the archive's text, but it refused again
+(2026-11-26) on absolute-path-shaped lines already pushed at the tag (URL paths, test strings, a few clone paths in
+agent docs): kit #649. Upload `dist/cgm_format-0.15.0.tar.gz` once #649 is settled. Kit pin: v0.1.280.
 The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad (base, kit
 #536, from v0.1.236). The grant covers removing it, but the auto-mode classifier refused `git worktree remove`
 (2026-11-25), so it is unlocked and handed over: `unlocked: to delete git -C /data/sources/glucosedao/cgm_format
