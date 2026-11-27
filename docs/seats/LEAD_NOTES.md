@@ -10,7 +10,7 @@ compatibility rule sizes a release and the lead cuts a minor (now in `LEAD.md`'s
 release has the wheel only: the forge gate refused the sdist twice, matching its gzip bytes against the leak list
 (kit #644, filed 2026-11-25). v0.1.279 fixed that, and the gate now reads the archive's text, but it refused again
 (2026-11-26) on absolute-path-shaped lines already pushed at the tag (URL paths, test strings, a few clone paths in
-agent docs): kit #649. Upload `dist/cgm_format-0.15.0.tar.gz` once #649 is settled. Kit pin: v0.1.287.
+agent docs): kit #649. Upload `dist/cgm_format-0.15.0.tar.gz` once #649 is settled. Kit pin: v0.1.288.
 reflect after 2026-12-04: classes/base/BASE.md as of v0.1.287 (a step handed to the person carries its exact action; a wake let go counts itself).
 The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad (base, kit
 #536, from v0.1.236). The grant covers removing it, but the auto-mode classifier refused `git worktree remove`
