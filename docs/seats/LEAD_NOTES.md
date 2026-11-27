@@ -2,7 +2,7 @@
 
 State, not rules: rewritten to the present before a reset (`README.md` here, "Notes files").
 
-**As of 2026-11-25, unattended.** 0.14.0 through 0.15.0 are tagged and on GitHub; `dist/` holds all four.
+**As of 2026-11-27, unattended.** 0.14.0 through 0.15.0 are tagged and on GitHub; `dist/` holds all four.
 **Open: the person's PyPI publish** (`uv publish dist/*.whl dist/*.tar.gz`; PyPI is at 0.13.0; `dist/` also holds
 `notes-0.15.0.md`, the release notes, which is not a dist).
 **0.15.0** (2026-11-25, `a268364`, tag `v0.15.0`) carries RM14, RM15 and `--date-order`. Desk #343 answered 1: the
@@ -10,7 +10,7 @@ compatibility rule sizes a release and the lead cuts a minor (now in `LEAD.md`'s
 release has the wheel only: the forge gate refused the sdist twice, matching its gzip bytes against the leak list
 (kit #644, filed 2026-11-25). v0.1.279 fixed that, and the gate now reads the archive's text, but it refused again
 (2026-11-26) on absolute-path-shaped lines already pushed at the tag (URL paths, test strings, a few clone paths in
-agent docs): kit #649. Upload `dist/cgm_format-0.15.0.tar.gz` once #649 is settled. Kit pin: v0.1.288.
+agent docs): kit #649. Upload `dist/cgm_format-0.15.0.tar.gz` once #649 is settled. Kit pin: v0.1.290 (2026-11-27); held releases arrive at the daily Claude batch, around 12:27 CET, and the watchdog says when to `--take`.
 reflect after 2026-12-04: classes/base/BASE.md as of v0.1.287 (a step handed to the person carries its exact action; a wake let go counts itself).
 The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad (base, kit
 #536, from v0.1.236). The grant covers removing it, but the auto-mode classifier refused `git worktree remove`
