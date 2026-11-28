@@ -7,7 +7,7 @@ State, not rules: rewritten to the present before a reset (`README.md` here, "No
 `notes-0.15.0.md`, the release notes, which is not a dist).
 **0.15.0** (2026-11-25, `a268364`, tag `v0.15.0`) carries RM14, RM15 and `--date-order`. Desk #343 answered 1: the
 compatibility rule sizes a release and the lead cuts a minor (now in `LEAD.md`'s grant, `3e26d54`). Its GitHub release carries both dists: the sdist went up 2026-11-27, once kit #649 (forge gate on
-already-pushed lines) shipped in v0.1.282; #644 before it. Kit pin: v0.1.295 (2026-11-28); held releases arrive at the daily Claude batch, around 12:27 CET, and the watchdog says when to `--take`.
+already-pushed lines) shipped in v0.1.282; #644 before it. Kit pin: v0.1.296 (2026-11-28); held releases arrive at the daily Claude batch, around 12:27 CET, and the watchdog says when to `--take`.
 reflect after 2026-12-04: classes/base/BASE.md as of v0.1.287 (a step handed to the person carries its exact action; a wake let go counts itself).
 The tag's build worktree goes under `.worktrees/` by the kit's `bin/wt.sh NAME`, never the scratchpad (base, kit
 #536, from v0.1.236). The grant covers removing it, but the auto-mode classifier refused `git worktree remove`
